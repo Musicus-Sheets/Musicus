@@ -18,6 +18,7 @@ crates/
 e2e/               browser smoke test (Playwright)
 prototypes/        throw-away benchmarks behind the concept
 docs/technical/    technical documentation (Typst, git submodule)
+docs/requirements/ requirements catalogue (Markdown, git submodule)
 scripts/           fetch-pdfjs.sh
 ```
 
@@ -30,6 +31,10 @@ the submodule `docs/technical`, written in Typst:
 git submodule update --init
 typst compile docs/technical/main.typ musicus-technical.pdf
 ```
+
+The requirements (goals, features, detailed requirements and their links)
+are the submodule `docs/requirements`; start with its `index.md`. After
+editing them, run `uv run docs/requirements/tools/validate.py`.
 
 ## Build and run
 
