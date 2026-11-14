@@ -40,7 +40,7 @@ Coding agents start at `AGENTS.md`, which points to `docs/agents/`. That
 documentation must be updated in the same commit as every code change;
 `python3 docs/agents/check.py --since <base>` enforces it (also available as a
 pre-commit hook: `git config core.hooksPath .githooks`, and as a GitHub
-workflow).
+workflow that runs on pull requests and must pass before merging).
 
 ## Build and run
 

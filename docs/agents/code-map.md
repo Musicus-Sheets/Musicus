@@ -83,5 +83,5 @@ Columns: path | purpose | key symbols | requirements implemented | decisions.
 | `AGENTS.md` | Mandatory agent instructions (entry point) | — | — | — |
 | `CLAUDE.md` | Imports `AGENTS.md` for Claude Code | — | — | — |
 | `.githooks/pre-commit` | Runs `docs/agents/check.py --staged` | — | — | — |
-| `.github/workflows/agent-docs.yml` | CI: `check.py --since` on pull requests and pushes | — | — | — |
+| `.github/workflows/agent-docs.yml` | CI merge gate: `check.py --since <PR base>` on pull requests and merge queue only (required status check `check`) | — | — | — |
 | `docs/agents/check.py` | This folder's consistency checker | — | — | — |
