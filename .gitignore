@@ -28,3 +28,4 @@ rustc-ice-*.txt
 /dist/
 # Fetched by scripts/fetch-pdfjs.sh
 /crates/musicus-web/public/vendor/
+__pycache__/

@@ -19,6 +19,7 @@ e2e/               browser smoke test (Playwright)
 prototypes/        throw-away benchmarks behind the concept
 docs/technical/    technical documentation (Typst, git submodule)
 docs/requirements/ requirements catalogue (Markdown, git submodule)
+docs/agents/       technical documentation for coding agents (see AGENTS.md)
 scripts/           fetch-pdfjs.sh
 ```
 
@@ -35,6 +36,12 @@ typst compile docs/technical/main.typ musicus-technical.pdf
 The requirements (goals, features, detailed requirements and their links)
 are the submodule `docs/requirements`; start with its `index.md`. After
 editing them, run `uv run docs/requirements/tools/validate.py`.
+
+Coding agents start at `AGENTS.md`, which points to `docs/agents/`. That
+documentation must be updated in the same commit as every code change;
+`python3 docs/agents/check.py --since <base>` enforces it (also available as a
+pre-commit hook: `git config core.hooksPath .githooks`, and as a GitHub
+workflow).
 
 ## Build and run
 
