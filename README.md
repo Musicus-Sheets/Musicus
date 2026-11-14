@@ -17,7 +17,18 @@ crates/
   musicus-web/     Dioxus 0.7 web client (WebAssembly) with a pdf.js bridge
 e2e/               browser smoke test (Playwright)
 prototypes/        throw-away benchmarks behind the concept
+docs/technical/    technical documentation (Typst, git submodule)
 scripts/           fetch-pdfjs.sh
+```
+
+## Documentation
+
+The technical documentation (architecture, components, design decisions) is
+the submodule `docs/technical`, written in Typst:
+
+```sh
+git submodule update --init
+typst compile docs/technical/main.typ musicus-technical.pdf
 ```
 
 ## Build and run
