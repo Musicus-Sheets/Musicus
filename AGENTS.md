@@ -12,7 +12,9 @@ Members read group-granted PDF parts and draw private annotations.
    `docs/requirements/features/<ID>.md`, `docs/requirements/goals/<ID>.md`,
    or search `docs/requirements/requirements.json`.
    Submodules missing? `git submodule update --init`.
-3. Before changing a design decision (`d-…` in `docs/agents/decisions.md`), check which
+3. Before proposing new infrastructure or changing architecture, read `docs/agents/background.md`
+   (alternatives already evaluated and why they were rejected).
+4. Before changing a design decision (`d-…` in `docs/agents/decisions.md`), check which
    requirements it serves. Do not break a requirement silently: change the requirement
    (with the user's consent) or keep the design.
 

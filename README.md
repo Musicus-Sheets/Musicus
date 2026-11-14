@@ -6,8 +6,7 @@ librarian uploads PDF parts. Access is granted to groups (e.g. group
 member can draw private annotations on their parts, in several named sets
 (e.g. one per concert), without changing the PDF.
 
-This is the first implementation of **concept A** from the design document
-"Musicus – Conceptual Design": one Rust binary (Axum + SQLite in WAL mode + a
+Architecture: one Rust binary (Axum + SQLite in WAL mode + a
 content-addressed file store) that also serves a Dioxus web client.
 
 ```
@@ -16,7 +15,7 @@ crates/
   musicus-server/  Axum server, SQLite migrations, file store, CLI
   musicus-web/     Dioxus 0.7 web client (WebAssembly) with a pdf.js bridge
 e2e/               browser smoke test (Playwright)
-prototypes/        throw-away benchmarks behind the concept
+prototypes/        throw-away benchmarks behind the design
 docs/technical/    technical documentation (Typst, git submodule)
 docs/requirements/ requirements catalogue (Markdown, git submodule)
 docs/agents/       technical documentation for coding agents (see AGENTS.md)
@@ -208,23 +207,13 @@ node e2e/smoke.mjs <invite-url-from-the-log> some.pdf /tmp/shots
 
 ## Status of the first version
 
-Implemented from the concept: everything above, including the core metadata
-fields, concert programmes, file versions, thumbnails and page counts via
-hayro, the backup command and optional built-in TLS.
+Implemented: everything above, including the core metadata fields, concert
+programmes, file versions, thumbnails and page counts via hayro, the backup
+command, optional built-in TLS and the container setup.
 
-Not yet implemented (in the concept, marked optional or later):
-
-- optional grant kinds: per voice, per programme, with an expiry date;
-- the "later" metadata fields: difficulty, duration, publisher, rights status, archive number and similar;
-- OpenID Connect login and e-mail delivery of invite links;
-- shared (read-only) annotation sets for a section, a "conductor push" of the next piece, half-page turns;
-- per-user encryption of annotations at rest;
-- MusicXML, and the offline app with encrypted local storage
-  (the hash-addressed files and per-page revisions are already in place for it).
-
-Deviations from the concept:
-
-- pdf.js is shipped as its *legacy* build: the modern build needs JavaScript
-  APIs that older tablets lack.
-- Reading a page that has no annotations yet answers 204 (with
-  `ETag: "0"`) instead of 404, so browsers log no errors on every page turn.
+Planned features are recorded as requirements with status `proposed` in
+`docs/requirements` (see its `index.md`), e.g. finer grants, extended
+metadata, MusicXML, the encrypted offline app, OpenID Connect login, shared
+annotation sets and a conductor push. Known gaps and deviations from the
+original design are listed in `docs/agents/status.md`; the design rationale
+and all measurements in `docs/agents/background.md`.

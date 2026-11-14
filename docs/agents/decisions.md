@@ -10,7 +10,7 @@ with the user's consent.
 - Decision: one process = API + static web client + embedded SQLite + local blob store. No separate DB/object store/cache services.
 - Why: small hardware and volunteer operators; measured 11 MB idle RSS; one binary/container; backup = db file + folder.
 - Serves: G-005, F-PERF-001, F-OPS-001, R-OPS-001, R-PERF-001, R-TECH-001.
-- If you change it: adding a service (Redis, Postgres, S3) needs user consent; concept variant "A-PG" (PostgreSQL in compose) was evaluated and deferred by the user. Keep `musicus-server` self-contained.
+- If you change it: adding a service (Redis, Postgres, S3) needs user consent; the PostgreSQL variant "A-PG" (PostgreSQL in compose) was evaluated and deferred by the user — measurements and the switch plan are in `background.md` §5; alternatives B–E and why they were rejected in §4. Keep `musicus-server` self-contained.
 
 ### d-sqlite
 - Decision: SQLite in WAL mode via sqlx; `Db.write` pool has exactly 1 connection (the write queue), `Db.read` 2–8 read-only connections; `synchronous=NORMAL`, `foreign_keys=ON`, `busy_timeout=5s`.
@@ -31,8 +31,8 @@ with the user's consent.
 - If you change it: GC of unreferenced blobs is R-FILE-009 (proposed) and must respect backup consistency (grace period). Changing blob naming breaks ETags and existing data dirs.
 
 ### d-access
-- Decision: one SQL fragment `part_visible!()` = librarian flag OR instrument grant via group membership OR score grant via group membership. Embedded in every query that lists/loads parts, scores, programmes, files (via `part_files`), annotations (via `ensure_part_readable`). No permission cache. Denied ⇒ 404.
-- Why: ~25 µs per check at 200k parts; one definition so lists and point-loads agree; 404 hides library contents.
+- Decision: grants are additive only (no deny rules) and always go to groups, never to single users. One SQL fragment `part_visible!()` = librarian flag OR instrument grant via group membership OR score grant via group membership. Embedded in every query that lists/loads parts, scores, programmes, files (via `part_files`), annotations (via `ensure_part_readable`). No permission cache. Denied ⇒ 404.
+- Why: additive group grants keep access explainable ("you see it because you are in Trumpets and Trumpets has Trumpet"); ~25 µs per check at 200k parts; one definition so lists and point-loads agree; 404 hides library contents.
 - Serves: R-ACL-001, R-ACL-002, R-ACL-003, R-PERF-005, R-LIB-005, R-PROG-002, R-FILE-005, R-ANN-015.
 - If you change it: changing the rule = change R-ACL-001 first. New grant kinds (R-ACL-005/006, proposed) belong inside `part_visible!()`. Binds: `?1` user id, `?2` librarian flag (0/1); queries using it must keep these positions. Add an integration test for every new rule.
 

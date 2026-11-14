@@ -16,9 +16,25 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | R-FILE-009 | GC of unreferenced blobs | must respect backup consistency (grace period), conflicts with R-FILE-004 resolved by "unreferenced only" |
 | R-READ-007, R-READ-008 | half-page turns, conductor push | conductor push needs server push (SSE/WebSocket) — new component, ask user |
 | R-ANN-017, R-ANN-018 | shared sets, encryption at rest | shared sets conflict with F-ANN-004 (explicit, read-only) |
-| R-OFF-001..003 | encrypted offline app | depends on file hashes (d-blobs) and page revisions (d-optimistic) |
+| R-OFF-001, R-OFF-002, R-OFF-003 | encrypted offline app | depends on file hashes (d-blobs) and page revisions (d-optimistic); plan in requirement notes |
+| R-ACC-011, R-ACC-012 | OIDC login, e-mail invites | SMTP stays optional |
+| R-ACL-007 | several ensembles per server | open question; `ensemble_id` scoping every query, cheap early / expensive late |
+| R-READ-009 | swipe page turns | |
+| R-ANN-019, R-ANN-020 | shapes, JSON export | shapes need ink format version 2 |
+| R-FILE-010 | bilevel compression of scans | |
+| R-SEC-009, R-SEC-010 | watermark, download audit log | watermark must not create blobs (conflict with R-FILE-004) |
+| R-OPS-009 | continuous replication (Litestream) | |
 
-Also not implemented (no requirement yet): e-mail delivery of invites, OIDC login, user deletion, multi-ensemble tenancy (`ensemble_id`), rate limiting beyond login, metrics.
+Also not implemented (no requirement yet): user deletion, rate limiting beyond login, metrics.
+
+## Deviations from the original design (see `background.md` §7)
+
+- Annotation set migration checks page count only, not page size, and does not flag moved sets for review (R-ANN-016 notes).
+- No `getCoalescedEvents()` for full pen sampling rate (a-live-ink).
+- Renderer abstraction is the `bridge.rs` function set, not a `PageRenderer` trait.
+- Neighbouring pages (±2) are not pre-rendered; pages render on demand from in-memory bytes.
+- pdf.js legacy build instead of the modern build (d-pdf-rendering); page GET for unsaved pages returns 204 (d-204);
+  unsaved strokes flushed with keepalive on tab close (d-reader-store) — additions, not in the original design.
 
 ## Verification gaps (implemented but not covered by automated tests)
 

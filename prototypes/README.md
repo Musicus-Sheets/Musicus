@@ -2,8 +2,8 @@
 
 Throw-away experiments that test the assumptions of the Musicus concept
 (single Rust binary, SQLite, content-addressed file store, Dioxus client).
-They are **not** production code. The concept itself, with all results, is in
-the "Musicus – Conceptual Design" doc.
+They are **not** production code. The design rationale and all results are in
+`docs/agents/background.md`.
 
 | Crate / file | Assumption tested | Run |
 | --- | --- | --- |

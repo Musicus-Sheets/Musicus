@@ -1,7 +1,7 @@
 # Overview
 
-State: first implementation of concept A (crate version 0.1.0). Concept doc lives in the user's
-Claude Docs ("Musicus – Conceptual Design"); requirements in `docs/requirements` are authoritative.
+State: version 0.1.0, first implementation of architecture "A – lean monolith" (alternatives, measurements and the
+full design rationale: `background.md`). Requirements in `docs/requirements` are authoritative for behaviour.
 
 ## Purpose (goals)
 
@@ -26,7 +26,7 @@ musicus-api (lib) compiled into both: JSON DTOs + binary ink format
 | musicus-web | `crates/musicus-web` | `dx` (wasm32 only; excluded from workspace `default-members`) | UI. Talks only REST. |
 | e2e | `e2e/smoke.mjs` | node + Playwright | Browser smoke test against a running server. |
 | deployment | `Dockerfile`, `compose.yaml`, `deploy/Caddyfile`, `.env.example` | docker | Distroless image; optional Caddy HTTPS profile. |
-| prototypes | `prototypes/` | separate cargo projects | Throw-away benchmarks from the concept phase. Not product code; do not extend. |
+| prototypes | `prototypes/` | separate cargo projects | Throw-away benchmarks from the design phase (results in `background.md` §5–6). Not product code; do not extend. |
 | docs | `docs/technical` (submodule, Typst), `docs/requirements` (submodule, Markdown+YAML), `docs/agents` (this) | — | — |
 
 ## Request lifecycle (server)

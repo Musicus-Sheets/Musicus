@@ -8,6 +8,7 @@ Human-oriented docs: `docs/technical` (Typst, submodule). Requirements: `docs/re
 | File | Content | Read when |
 | --- | --- | --- |
 | `overview.md` | System, components, data flow, global invariants INV-* | always first |
+| `background.md` | Brief, assumptions, architectures considered and rejected, PostgreSQL evaluation, all measurements, risks, open questions | before design decisions or proposing new infrastructure |
 | `code-map.md` | Every source file → purpose, key symbols, requirements, decisions | before touching any file |
 | `decisions.md` | Design decisions `d-*` with reasons, requirements served, change rules | before changing structure or behaviour |
 | `server.md` | Server modules, request pipeline, full endpoint table | server work |
