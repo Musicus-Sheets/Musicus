@@ -59,4 +59,5 @@ Read the entry in `decisions.md` (Serves / If you change it). If a served requir
 - [ ] Client changes: built with `dx build` and exercised (ideally `e2e/smoke.mjs`).
 - [ ] `docs/agents/*` describe the new state; `python3 docs/agents/check.py --since <base>` passes.
 - [ ] Requirements updated and validated; submodule commits pushed before the main repo.
+- [ ] User-visible change: `docs/user-guide` text and screenshots updated (or user told).
 - [ ] Commit message explains why; mentions requirement IDs.

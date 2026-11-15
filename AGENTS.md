@@ -31,7 +31,10 @@ in the same commit:
 - update requirement files in `docs/requirements` if behaviour changed (status, `implemented_by`,
   `verified_by`, new requirements for new behaviour), then run
   `uv run docs/requirements/tools/validate.py` (commit inside the submodule, then the pointer);
-- tell the user if `docs/technical` (human docs, Typst) is now outdated, or update it.
+- tell the user if `docs/technical` (human docs, Typst) is now outdated, or update it;
+- if the change is visible to users (UI labels, workflows, installation, settings), update
+  `docs/user-guide` (Typst submodule; button names via `#ui("…")`) and regenerate its screenshots
+  with `docs/user-guide/tools/screenshots.mjs` (see its README), or tell the user it is outdated.
 
 Then run the checks below. `python3 docs/agents/check.py --since <base-ref>` fails if code changed
 without any change under `docs/agents/`. If a change truly needs no doc update (pure formatting,

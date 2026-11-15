@@ -4,3 +4,6 @@
 [submodule "docs/requirements"]
 	path = docs/requirements
 	url = git@github.com:NelDav/Musicus-requirements.git
+[submodule "docs/user-guide"]
+	path = docs/user-guide
+	url = git@github.com:NelDav/Musicus-user-guide.git

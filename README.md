@@ -19,10 +19,16 @@ prototypes/        throw-away benchmarks behind the design
 docs/technical/    technical documentation (Typst, git submodule)
 docs/requirements/ requirements catalogue (Markdown, git submodule)
 docs/agents/       technical documentation for coding agents (see AGENTS.md)
+docs/user-guide/   user guide: installation and use (Typst → HTML + PDF, git submodule)
 scripts/           fetch-pdfjs.sh
 ```
 
 ## Documentation
+
+The user guide (installation, and how admins, librarians and musicians use
+Musicus) is the submodule `docs/user-guide`; build it with
+`docs/user-guide/build.sh` (HTML and PDF).
+
 
 The technical documentation (architecture, components, design decisions) is
 the submodule `docs/technical`, written in Typst:
