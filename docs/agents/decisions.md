@@ -155,3 +155,9 @@ with the user's consent.
 - Why: discards all in-memory state of the previous session (sheets, annotations).
 - Serves: R-SEC-001, R-ACC-008.
 - If you change it: keep in-memory data from surviving a session change.
+
+### a-submodule-pins
+- Decision: the docs (requirements, technical docs, user guide) are separate repositories used as submodules with `branch = main` in `.gitmodules`. A main-repo pull request may only be merged when every submodule pointer is a commit on the first-parent history of the docs repo's `main` (`scripts/check-submodules.sh`, workflow `Submodules`, required check `pinned`). Order: merge the docs pull requests (merge commit or squash), then `./scripts/update-submodules.sh`, commit, push, then merge the main pull request.
+- Why: the main repository must reference documentation that is actually on the docs `main`, and exactly the merge commits created there (the user's rule), not the feature-branch tips (the merge commits' second parents), which only exist as long as their branches do.
+- Serves: no product requirement; documentation integrity (AGENTS.md maintenance rules).
+- If you change it: keep the check a required status check; with a new submodule add `branch = main` to `.gitmodules`.

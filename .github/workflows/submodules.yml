@@ -1,0 +1,18 @@
+name: Submodules
+# Merge gate: every docs submodule must point to a commit on the first-parent
+# history of the docs repository's main, i.e. to the merge commit of a merged
+# docs pull request, not to a feature-branch commit. Make the job "pinned" a
+# required status check. See scripts/check-submodules.sh.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+jobs:
+  pinned:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The pull request's merge result; submodules are cloned by the script.
+          submodules: false
+      - run: ./scripts/check-submodules.sh

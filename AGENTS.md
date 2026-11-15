@@ -30,7 +30,7 @@ in the same commit:
   with the requirement IDs it serves;
 - update requirement files in `docs/requirements` if behaviour changed (status, `implemented_by`,
   `verified_by`, new requirements for new behaviour), then run
-  `uv run docs/requirements/tools/validate.py` (commit inside the submodule, then the pointer);
+  `uv run docs/requirements/tools/validate.py` (commit inside the submodule on a branch, then the pointer);
 - tell the user if `docs/technical` (human docs, Typst) is now outdated, or update it;
 - if the change is visible to users (UI labels, workflows, installation, settings), update
   `docs/user-guide` (Typst submodule; button names via `#ui("…")`) and regenerate its screenshots
@@ -52,6 +52,14 @@ uv run docs/requirements/tools/validate.py                   # requirements cons
 ```
 
 Optional git hook that runs the doc check before every commit: `git config core.hooksPath .githooks`.
+
+## Submodules (docs/requirements, docs/technical, docs/user-guide)
+
+Docs changes go to a branch in the submodule repository and get their own pull request there.
+The main repository's pull request is merged LAST: after the docs pull requests are merged into
+their `main`, run `./scripts/update-submodules.sh`, commit, and push, so that the pointers name the
+merge commits on the docs `main` (never the feature-branch commits). The required check
+`scripts/check-submodules.sh` (workflow `Submodules`) fails otherwise. Details: `docs/agents/workflows.md`.
 
 ## Hard rules (details and reasons in docs/agents/)
 

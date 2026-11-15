@@ -13,6 +13,8 @@ Columns: path | purpose | key symbols | requirements implemented | decisions.
 | `crates/musicus-server/Cargo.toml` | Deps: axum 0.8, axum-server (rustls, ring), sqlx 0.9 sqlite, tower-http, argon2, hayro, zstd, clap, tracing | — | R-TECH-001 | d-sqlite |
 | `crates/musicus-web/Cargo.toml` | Deps: dioxus 0.7.10 (web, router), gloo-net, gloo-timers, wasm-bindgen, web-sys | — | R-TECH-002 | — |
 | `crates/musicus-web/Dioxus.toml` | `dx` app name/title | — | — | — |
+| `scripts/check-submodules.sh` | Merge gate: every submodule pointer must be on the first-parent history of the submodule's `branch` (main) — i.e. a merge commit on docs `main`, not a feature-branch commit. Clones each docs repo (blobless; HTTPS in CI) | — | — | a-submodule-pins |
+| `scripts/update-submodules.sh` | Moves all submodule pointers to the newest commit of their `main` and stages them | — | — | a-submodule-pins |
 | `scripts/fetch-pdfjs.sh` | Downloads pinned pdfjs-dist 6.5.438 (sha512-checked), copies **legacy** build to `crates/musicus-web/public/vendor/pdfjs/` (gitignored) | `VERSION`, `INTEGRITY` | R-READ-006 | d-pdf-rendering |
 
 ## musicus-api (`crates/musicus-api/src`)
@@ -88,5 +90,6 @@ Columns: path | purpose | key symbols | requirements implemented | decisions.
 | `AGENTS.md` | Mandatory agent instructions (entry point) | — | — | — |
 | `CLAUDE.md` | Imports `AGENTS.md` for Claude Code | — | — | — |
 | `.githooks/pre-commit` | Runs `docs/agents/check.py --staged` | — | — | — |
+| `.github/workflows/submodules.yml` | Merge gate (pull requests, merge queue): runs `scripts/check-submodules.sh`; required status check `pinned` | — | — | a-submodule-pins |
 | `.github/workflows/agent-docs.yml` | CI merge gate: `check.py --since <PR base>` on pull requests and merge queue only (required status check `check`) | — | — | — |
 | `docs/agents/check.py` | This folder's consistency checker | — | — | — |
