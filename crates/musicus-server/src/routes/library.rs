@@ -6,7 +6,7 @@ use crate::{
     blobs::UploadError,
     db::{json_ids, now},
     error::{ApiResult, AppError, optional, required},
-    part_visible,
+    part_index, part_visible,
     processors::{self, Processed},
     state::{App, AppState},
 };
@@ -16,7 +16,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use musicus_api::{FileVersion, Id, Part, PartInput, Score, ScoreInput};
+use musicus_api::{FileVersion, Id, Part, PartInput, Score, ScoreInput, naming};
 use serde::Deserialize;
 use std::collections::HashMap;
 use tokio::io::AsyncReadExt;
@@ -37,11 +37,12 @@ pub struct ScoreRow {
 struct PartRow {
     id: Id,
     score_id: Id,
-    label: String,
-    voice: Option<i64>,
+    label: Option<String>,
+    voice: Option<String>,
     transposition: Option<String>,
     notes: Option<String>,
     instruments: String,
+    instrument_names: String,
     version: Option<i64>,
     sha256: Option<String>,
     mime: Option<String>,
@@ -67,10 +68,15 @@ impl From<PartRow> for Part {
         };
         let mut instrument_ids: Vec<Id> = serde_json::from_str(&r.instruments).unwrap_or_default();
         instrument_ids.sort_unstable();
+        let names: Vec<String> = serde_json::from_str(&r.instrument_names).unwrap_or_default();
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let display_name =
+            naming::part_name(r.label.as_deref(), &names, r.transposition.as_deref(), r.voice.as_deref());
         Part {
             id: r.id,
             score_id: r.score_id,
             label: r.label,
+            display_name,
             instrument_ids,
             voice: r.voice,
             transposition: r.transposition,
@@ -90,6 +96,8 @@ pub async fn visible_parts(
     let rows: Vec<PartRow> = sqlx::query_as(concat!(
         "SELECT p.id, p.score_id, p.label, p.voice, p.transposition, p.notes,
                 (SELECT json_group_array(instrument_id) FROM part_instruments WHERE part_id = p.id) AS instruments,
+                (SELECT json_group_array(i.name) FROM part_instruments pi JOIN instruments i ON i.id = pi.instrument_id
+                 WHERE pi.part_id = p.id) AS instrument_names,
                 pf.version, f.sha256, f.mime, f.size_bytes, f.page_count,
                 f.thumbnail_sha256 IS NOT NULL AS has_thumbnail, pf.uploaded_at
          FROM parts p
@@ -99,7 +107,7 @@ pub async fn visible_parts(
          WHERE (?3 IS NULL OR p.score_id IN (SELECT value FROM json_each(?3)))
            AND (?4 IS NULL OR p.id = ?4) AND ",
         part_visible!(),
-        " ORDER BY p.score_id, p.voice IS NULL, p.voice, p.label COLLATE NOCASE"
+        " ORDER BY p.score_id, p.id"
     ))
     .bind(user.id)
     .bind(librarian_flag(user))
@@ -107,7 +115,12 @@ pub async fn visible_parts(
     .bind(part_id)
     .fetch_all(&app.db.read)
     .await?;
-    Ok(rows.into_iter().map(Part::from).collect())
+    let mut parts: Vec<Part> = rows.into_iter().map(Part::from).collect();
+    // Within a score by shown name, numbers by value ("Trumpet in B♭ 2" before "… 10").
+    parts.sort_by(|a, b| {
+        a.score_id.cmp(&b.score_id).then_with(|| naming::natural_cmp(&a.display_name, &b.display_name))
+    });
+    Ok(parts)
 }
 
 /// Attaches the user's visible parts to score rows.
@@ -153,16 +166,20 @@ pub async fn scores_by_ids(app: &App, user: &AuthUser, ids: &[Id]) -> ApiResult<
     Ok(ids.iter().filter_map(|id| scores.get(id).cloned()).collect())
 }
 
-/// Turns user input into an FTS5 query: every word must match as a prefix.
-fn fts_query(q: &str) -> Option<String> {
-    let terms: Vec<String> = q
-        .split_whitespace()
-        .map(|w| w.chars().filter(|c| c.is_alphanumeric()).collect::<String>())
-        .filter(|w| !w.is_empty())
-        .take(10)
-        .map(|w| format!("\"{w}\"*"))
-        .collect();
-    (!terms.is_empty()).then(|| terms.join(" "))
+/// Turns user input into FTS5 prefix queries, one per word, as a JSON
+/// array (bound as one parameter, expanded with `json_each`). Every word
+/// must match the score's metadata or the shown name of one of the user's
+/// parts of it.
+fn fts_terms(q: &str) -> Option<String> {
+    let mut terms: Vec<String> = Vec::new();
+    for w in q.split_whitespace().take(10) {
+        let w: String = w.chars().filter(|c| c.is_alphanumeric()).collect();
+        let term = format!("\"{w}\"*");
+        if !w.is_empty() && !terms.contains(&term) {
+            terms.push(term);
+        }
+    }
+    (!terms.is_empty()).then(|| serde_json::to_string(&terms).expect("terms serialise"))
 }
 
 #[derive(Deserialize)]
@@ -182,7 +199,15 @@ pub async fn list_scores(
 ) -> ApiResult<Json<Vec<Score>>> {
     let rows: Vec<ScoreRow> = sqlx::query_as(concat!(
         "SELECT s.id, s.title, s.subtitle, s.composer, s.arranger, s.genre, s.tags, s.notes FROM scores s
-         WHERE (?3 IS NULL OR s.id IN (SELECT rowid FROM score_fts WHERE score_fts MATCH ?3))
+         WHERE (?3 IS NULL OR s.id IN (
+                  SELECT sid FROM (
+                      SELECT t.value AS term, score_fts.rowid AS sid FROM json_each(?3) t CROSS JOIN score_fts
+                      WHERE score_fts MATCH t.value
+                      UNION
+                      SELECT t.value, p.score_id FROM json_each(?3) t CROSS JOIN part_fts JOIN parts p ON p.id = part_fts.rowid
+                      WHERE part_fts MATCH t.value AND ",
+        part_visible!(),
+        ") GROUP BY sid HAVING COUNT(*) = json_array_length(?3)))
            AND (?4 IS NULL OR s.genre = ?4 COLLATE NOCASE)
            AND (?5 IS NULL OR EXISTS (SELECT 1 FROM json_each(s.tags) WHERE value = ?5 COLLATE NOCASE))
            AND (?2 = 1 OR EXISTS (SELECT 1 FROM parts p WHERE p.score_id = s.id AND ",
@@ -191,7 +216,7 @@ pub async fn list_scores(
     ))
     .bind(user.id)
     .bind(librarian_flag(&user))
-    .bind(query.q.as_deref().and_then(fts_query))
+    .bind(query.q.as_deref().and_then(fts_terms))
     .bind(query.genre.filter(|g| !g.trim().is_empty()))
     .bind(query.tag.filter(|t| !t.trim().is_empty()))
     .fetch_all(&app.db.read)
@@ -301,24 +326,35 @@ pub async fn delete_score(State(app): State<AppState>, user: AuthUser, Path(id):
 }
 
 struct CleanPart {
-    label: String,
-    voice: Option<i64>,
+    label: Option<String>,
+    voice: Option<String>,
     transposition: Option<String>,
     notes: Option<String>,
     instruments: String,
 }
 
-fn clean_part(input: &PartInput) -> ApiResult<CleanPart> {
-    if input.voice.is_some_and(|v| !(0..=99).contains(&v)) {
-        return Err(AppError::BadRequest("the voice must be between 0 and 99".into()));
-    }
+/// Validates a part. The key must be one of `naming::KEYS` (common
+/// spellings are normalised); `stored_key` is the part's current key, which
+/// may be kept even if it is an older free-text value (a-part-names).
+fn clean_part(input: &PartInput, stored_key: Option<&str>) -> ApiResult<CleanPart> {
     if input.instrument_ids.len() > 20 {
         return Err(AppError::BadRequest("at most 20 instruments per part".into()));
     }
+    let transposition = match input.transposition.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
+        None => None,
+        Some(k) if Some(k) == stored_key => Some(k.to_owned()),
+        Some(k) => match naming::normalize_key(k) {
+            Some(code) => Some(code.to_owned()),
+            None => {
+                let known: Vec<&str> = naming::KEYS.iter().map(|k| k.code).collect();
+                return Err(AppError::BadRequest(format!("unknown key \"{k}\"; use one of {}", known.join(", "))));
+            }
+        },
+    };
     Ok(CleanPart {
-        label: required("label", &input.label, 120)?,
-        voice: input.voice,
-        transposition: optional("transposition", input.transposition.as_deref(), 12)?,
+        label: optional("label", input.label.as_deref(), 120)?,
+        voice: optional("voice", input.voice.as_deref(), 20)?,
+        transposition,
         notes: optional("notes", input.notes.as_deref(), 2000)?,
         instruments: json_ids(&input.instrument_ids),
     })
@@ -339,7 +375,7 @@ pub async fn create_part(
     Json(input): Json<PartInput>,
 ) -> ApiResult<Json<Part>> {
     user.require_librarian()?;
-    let p = clean_part(&input)?;
+    let p = clean_part(&input, None)?;
     let mut tx = app.db.write.begin().await?;
     let exists: Option<i64> =
         sqlx::query_scalar("SELECT 1 FROM scores WHERE id = ?1").bind(score_id).fetch_optional(&mut *tx).await?;
@@ -362,6 +398,7 @@ pub async fn create_part(
         .bind(p.instruments)
         .execute(&mut *tx)
         .await?;
+    part_index::reindex(&mut tx, Some(&[id])).await?;
     tx.commit().await?;
     one_part(&app, &user, id).await
 }
@@ -373,8 +410,11 @@ pub async fn update_part(
     Json(input): Json<PartInput>,
 ) -> ApiResult<Json<Part>> {
     user.require_librarian()?;
-    let p = clean_part(&input)?;
     let mut tx = app.db.write.begin().await?;
+    let stored: Option<Option<String>> =
+        sqlx::query_scalar("SELECT transposition FROM parts WHERE id = ?1").bind(id).fetch_optional(&mut *tx).await?;
+    let Some(stored_key) = stored else { return Err(AppError::NotFound) };
+    let p = clean_part(&input, stored_key.as_deref())?;
     let done = sqlx::query("UPDATE parts SET label = ?2, voice = ?3, transposition = ?4, notes = ?5 WHERE id = ?1")
         .bind(id)
         .bind(p.label)
@@ -392,6 +432,7 @@ pub async fn update_part(
         .bind(p.instruments)
         .execute(&mut *tx)
         .await?;
+    part_index::reindex(&mut tx, Some(&[id])).await?;
     tx.commit().await?;
     one_part(&app, &user, id).await
 }
@@ -528,12 +569,13 @@ pub async fn list_versions(
 
 #[cfg(test)]
 mod tests {
-    use super::fts_query;
+    use super::fts_terms;
 
     #[test]
-    fn fts_query_quotes_words_and_drops_operators() {
-        assert_eq!(fts_query("Fučík  march"), Some("\"Fučík\"* \"march\"*".into()));
-        assert_eq!(fts_query("\" OR NEAR("), Some("\"OR\"* \"NEAR\"*".into()));
-        assert_eq!(fts_query("  ()  "), None);
+    fn fts_terms_quote_words_and_drop_operators() {
+        assert_eq!(fts_terms("Fučík  march"), Some(r#"["\"Fučík\"*","\"march\"*"]"#.into()));
+        assert_eq!(fts_terms("\" OR NEAR( or"), Some(r#"["\"OR\"*","\"NEAR\"*","\"or\"*"]"#.into()));
+        assert_eq!(fts_terms("march march"), Some(r#"["\"march\"*"]"#.into()));
+        assert_eq!(fts_terms("  ()  "), None);
     }
 }

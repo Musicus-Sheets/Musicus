@@ -219,6 +219,10 @@ input.picker-search { margin: 0.6rem 0.6rem 0.3rem; width: auto; }
 .part-fields { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .part-fields label.grow { flex: 1 1 14rem; }
 .part-fields label.short { width: 7rem; }
+.part-fields label.key { width: 12rem; }
+.part-fields label select { width: 100%; }
+h3.part-title { margin: 0; font-size: 1.05rem; }
+.part-name-preview { margin: 0; }
 .part-fields label input { width: 100%; }
 .part-editor:first-of-type { border-top: none; padding-top: 0; }
 .field-label { font-size: 0.9rem; color: var(--muted); margin-top: 0.3rem; }

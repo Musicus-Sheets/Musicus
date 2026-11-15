@@ -50,15 +50,23 @@ pub async fn update_instrument(
     user.require_librarian()?;
     let name = required("name", &req.name, 80)?;
     let family = optional("family", req.family.as_deref(), 80)?;
+    let mut tx = app.db.write.begin().await?;
     let done = sqlx::query("UPDATE instruments SET name = ?2, family = ?3 WHERE id = ?1")
         .bind(id)
         .bind(&name)
         .bind(&family)
-        .execute(&app.db.write)
+        .execute(&mut *tx)
         .await?;
     if done.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
+    // Derived part names contain the instrument name.
+    let parts: Vec<Id> = sqlx::query_scalar("SELECT part_id FROM part_instruments WHERE instrument_id = ?1")
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await?;
+    crate::part_index::reindex(&mut tx, Some(&parts)).await?;
+    tx.commit().await?;
     Ok(Json(Instrument { id, name, family }))
 }
 

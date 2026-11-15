@@ -171,15 +171,20 @@ fn PartTile(part: Part, names: HashMap<i64, String>, programme: Option<i64>, man
     }
 }
 
-/// The tile itself: thumbnail and label, opening the reader.
+/// The tile itself: thumbnail and part name, opening the reader.
 #[component]
 fn PartLink(part: Part, names: HashMap<i64, String>, programme: Option<i64>) -> Element {
-    let instruments: Vec<String> = part.instrument_ids.iter().filter_map(|i| names.get(i).cloned()).collect();
+    // A derived name already contains the instruments; list them only under a custom name.
+    let instruments: Vec<String> = if part.label.is_some() {
+        part.instrument_ids.iter().filter_map(|i| names.get(i).cloned()).collect()
+    } else {
+        Vec::new()
+    };
     let Some(file) = part.file.clone() else {
         return rsx! {
             div { class: "part disabled", title: "No file uploaded yet",
                 div { class: "thumb empty", "—" }
-                span { class: "part-label", "{part.label}" }
+                span { class: "part-label", "{part.display_name}" }
                 if !instruments.is_empty() {
                     span { class: "muted small", "{instruments.join(\", \")}" }
                 }
@@ -193,7 +198,7 @@ fn PartLink(part: Part, names: HashMap<i64, String>, programme: Option<i64>) -> 
             } else {
                 div { class: "thumb empty", "PDF" }
             }
-            span { class: "part-label", "{part.label}" }
+            span { class: "part-label", "{part.display_name}" }
             if !instruments.is_empty() {
                 span { class: "muted small", "{instruments.join(\", \")}" }
             }

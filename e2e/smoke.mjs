@@ -114,9 +114,11 @@ await a.getByLabel('Genre').fill('Concert');
 await a.getByRole('button', { name: 'Next: parts' }).click();
 await a.getByRole('heading', { name: 'Parts of “Florentiner Marsch”' }).waitFor();
 const newPart = a.locator('form.new-part');
-await newPart.getByLabel('Label').fill('2nd Trumpet in Bb');
+// No custom name: the name comes from instrument, key and voice.
+check(await newPart.getByLabel('Key').evaluate((e) => e.tagName) === 'SELECT'
+  && (await newPart.getByLabel('Key').locator('option').allInnerTexts()).includes('B♭'), 'the key is chosen from a list (with ♭ glyphs)');
+await newPart.getByLabel('Key').selectOption('Bb');
 await newPart.getByLabel('Voice').fill('2');
-await newPart.getByLabel('Key').fill('Bb');
 // Keyboard: the search field has the focus, Enter ticks the first match, Escape applies.
 await newPart.getByRole('button', { name: '+ Add instruments' }).click();
 check(await a.evaluate(() => document.activeElement?.classList.contains('picker-search')), 'the picker focuses its search field on open');
@@ -126,21 +128,29 @@ check((await a.locator('.picker-foot').innerText()).includes('1 selected'), 'Ent
 await a.keyboard.press('Escape');
 await a.locator('.picker-panel').waitFor({ state: 'detached' });
 check((await chips(newPart)).some((c) => c.startsWith('Trumpet')), 'Escape closes the picker and applies the ticked entry');
+check((await newPart.locator('.part-name-preview').innerText()).includes('Trumpet in B♭ 2')
+  && await newPart.getByLabel('Custom name (optional)').getAttribute('placeholder') === 'Trumpet in B♭ 2',
+  'the derived name is previewed live (instrument, key, voice)');
 await newPart.locator('input[type=file]').setInputFiles(pdfPath);
 await newPart.getByRole('button', { name: '+ Add part' }).click();
-await a.locator('.added-parts li', { hasText: '2nd Trumpet in Bb' }).getByText(/Version 1/).waitFor({ timeout: 30000 });
-// A second part right away, this time without a PDF.
-await newPart.getByLabel('Label').fill('Flute');
-check((await chips(newPart)).length === 0, 'the instruments of the next part start empty');
+await a.locator('.added-parts li', { hasText: 'Trumpet in B♭ 2' }).getByText(/Version 1/).waitFor({ timeout: 30000 });
+check(true, 'a part without custom name is listed with its derived name');
+// A second part right away, this time without a PDF and with a custom name.
+check((await chips(newPart)).length === 0 && await newPart.getByLabel('Key').inputValue() === ''
+  && await newPart.getByLabel('Voice').inputValue() === '', 'the next part starts empty (instruments, key, voice)');
+await newPart.getByLabel('Custom name (optional)').fill('Solo Flute');
 await pick(a, newPart, '+ Add instruments', ['Flute'], 'outside');
 check((await chips(newPart)).some((c) => c.startsWith('Flute')), 'a click outside the picker applies the selection');
 await newPart.getByRole('button', { name: '+ Add part' }).click();
-await a.locator('.added-parts li', { hasText: 'Flute' }).getByText('No PDF yet').waitFor();
+await a.locator('.added-parts li', { hasText: 'Solo Flute' }).getByText('No PDF yet').waitFor();
+check(true, 'a custom name overrides the derived name');
 await shot(a, 'add-piece-parts');
 check(true, 'guided flow created the piece with two parts and uploaded a PDF');
 await a.getByRole('button', { name: 'Finish' }).click();
 await a.locator('.score.focus', { hasText: 'Florentiner Marsch' }).waitFor();
 check(await a.locator('.score.focus .part-cell').count() === 2, 'the new piece is highlighted in the library with both parts');
+check(JSON.stringify(await a.locator('.score.focus .part-label').allInnerTexts()) === '["Solo Flute","Trumpet in B♭ 2"]',
+  'library tiles show the part names (voice included), sorted');
 
 // Edit a single part from its tile: upload, then replace the PDF.
 await a.locator('.part-cell', { hasText: 'Flute' }).getByRole('link', { name: 'Edit' }).click();
@@ -156,19 +166,30 @@ await shot(a, 'edit-part');
 check(true, 'part edited from its tile: PDF uploaded and replaced, versions listed');
 // Instruments of an existing part are saved at once, the typed label is not.
 const editor = a.locator('.part-editor');
-await editor.getByLabel('Label').fill('Flute (unsaved)');
+await editor.getByLabel('Custom name (optional)').fill('Flute (unsaved)');
 await pick(a, editor, '+ Add instruments', [{ search: 'tru', name: 'Trumpet' }]);
 await saved(editor);
 await a.reload();
 await a.locator('.part-editor .chip').first().waitFor();
 check(JSON.stringify((await chips(a.locator('.part-editor'))).map((c) => c.split(' ')[0]).sort()) === '["Flute","Trumpet"]'
-  && await a.locator('.part-editor').getByLabel('Label').inputValue() === 'Flute',
-  'part instruments are saved immediately with the stored label (not the unsaved one)');
+  && await a.locator('.part-editor').getByLabel('Custom name (optional)').inputValue() === 'Solo Flute',
+  'part instruments are saved immediately with the stored name (not the unsaved one)');
 await a.locator('.part-editor').getByRole('button', { name: 'Remove Trumpet' }).click();
 await saved(a.locator('.part-editor'));
 await a.reload();
 await a.locator('.part-editor .chip').first().waitFor();
 check((await chips(a.locator('.part-editor'))).length === 1, 'removing a part instrument is saved immediately');
+// Clearing the custom name brings the derived name back; key and voice are saved with "Save part".
+await a.locator('.part-editor').getByLabel('Custom name (optional)').fill('');
+await a.locator('.part-editor').getByLabel('Key').selectOption('C');
+await a.locator('.part-editor').getByLabel('Voice').fill('1a');
+check(await a.locator('.part-editor h3.part-title').innerText() === 'Flute in C 1a', 'the part editor previews the name live');
+await a.locator('.part-editor').getByRole('button', { name: 'Save part' }).click();
+await a.locator('.part-editor .ok', { hasText: 'Saved' }).waitFor();
+await a.reload();
+await a.getByText('Flute in C 1a · Florentiner Marsch').waitFor();
+check(await a.locator('.part-editor').getByLabel('Key').inputValue() === 'C'
+  && await a.locator('.part-editor').getByLabel('Voice').inputValue() === '1a', 'key and free-text voice are stored');
 
 // Edit the piece from its card.
 await a.getByRole('button', { name: 'Done' }).click();
@@ -177,7 +198,8 @@ await a.getByRole('heading', { name: 'Edit piece' }).waitFor();
 await a.getByLabel('Genre').fill('March');
 await a.getByRole('button', { name: 'Save details' }).click();
 await a.locator('.ok', { hasText: 'Saved' }).waitFor();
-check(await a.locator('.part-editor').count() === 2, 'edit view lists both parts');
+check(JSON.stringify(await a.locator('.part-editor h3.part-title').allInnerTexts()) === '["Flute in C 1a","Trumpet in B♭ 2"]',
+  'edit view lists both parts by name');
 await shot(a, 'edit-piece');
 await a.getByRole('button', { name: 'Done' }).click();
 await a.locator('.score.focus .tag.genre', { hasText: 'March' }).waitFor();
@@ -345,6 +367,12 @@ await mnav.getByRole('link', { name: 'Library' }).click();
 await m.getByPlaceholder('Search title, composer, tag…').fill('fucik');
 await m.waitForTimeout(600);
 check(await m.getByText('Florentiner Marsch').count() === 1, 'search without diacritics finds Fučík');
+await m.getByPlaceholder('Search title, composer, tag…').fill('trumpet 2');
+await m.waitForTimeout(600);
+check(await m.getByText('Florentiner Marsch').count() === 1, 'search finds a piece by the derived name of the own part');
+await m.getByPlaceholder('Search title, composer, tag…').fill('flute');
+await m.waitForTimeout(600);
+check(await m.getByText('Florentiner Marsch').count() === 0, 'search ignores parts the member cannot read');
 
 await m.getByRole('link', { name: 'Programmes' }).click();
 check(await m.getByRole('link', { name: 'New programme' }).count() === 0, 'member cannot create programmes');
@@ -365,6 +393,7 @@ await m.locator('.page-no', { hasText: /\d+ \/ \d+/ }).waitFor();
 await shot(m, 'reader');
 const pages = await m.locator('.page-no').innerText();
 check(/^1 \/ \d+$/.test(pages.trim()), `reader shows page counter "${pages.trim()}"`);
+check((await m.locator('.reader-title').innerText()).includes('Trumpet in B♭ 2'), 'the reader title shows the part name with key and voice');
 const total = Number(pages.split('/')[1]);
 
 // Draw a stroke with the mouse.

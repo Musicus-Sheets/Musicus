@@ -851,7 +851,7 @@ fn Reader(data: Loaded) -> Element {
 
     // --- View ------------------------------------------------------------
 
-    let title = format!("{} — {}", data.score.title, part.label);
+    let title = format!("{} — {}", data.score.title, part.display_name);
     let back = match programme_id {
         Some(id) => Route::ProgrammeView { id },
         None => Route::Library {},

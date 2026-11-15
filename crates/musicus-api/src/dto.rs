@@ -249,14 +249,19 @@ pub struct Score {
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct PartInput {
-    /// e.g. "2nd Trumpet in Bb".
-    pub label: String,
+    /// Custom name, e.g. "Solo Cornet". Empty or missing: the name is
+    /// derived from instruments, key and voice (`naming::part_name`).
+    #[serde(default, deserialize_with = "blank_is_none")]
+    pub label: Option<String>,
     pub instrument_ids: Vec<Id>,
-    /// Voice / chair number: 2 for "2nd Trumpet".
-    #[serde(default)]
-    pub voice: Option<i64>,
-    /// Key of a transposing instrument, e.g. "Bb", "Eb", "F".
-    #[serde(default)]
+    /// Voice / chair, free text: "2" for "2nd Trumpet", also "1a", "Solo".
+    /// A JSON number is accepted too.
+    #[serde(default, deserialize_with = "text_or_number")]
+    pub voice: Option<String>,
+    /// Key of a transposing instrument: a code of `naming::KEYS` ("Bb",
+    /// "Eb", "F", …); common spellings ("B-flat", "in Es") are normalised.
+    /// `None` = concert pitch.
+    #[serde(default, deserialize_with = "blank_is_none")]
     pub transposition: Option<String>,
     #[serde(default)]
     pub notes: Option<String>,
@@ -266,13 +271,37 @@ pub struct PartInput {
 pub struct Part {
     pub id: Id,
     pub score_id: Id,
-    pub label: String,
+    /// Custom name, `None` when the name is derived.
+    pub label: Option<String>,
+    /// The name to show everywhere: `label` or the derived name.
+    pub display_name: String,
     pub instrument_ids: Vec<Id>,
-    pub voice: Option<i64>,
+    pub voice: Option<String>,
+    /// Key code (see `naming::KEYS`); older data may hold other text.
     pub transposition: Option<String>,
     pub notes: Option<String>,
     /// The current file version, `None` until a file is uploaded.
     pub file: Option<FileVersion>,
+}
+
+fn blank_is_none<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    let v: Option<String> = Option::deserialize(d)?;
+    Ok(v.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()))
+}
+
+fn text_or_number<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum TextOrNumber {
+        Text(String),
+        Number(i64),
+    }
+    let v: Option<TextOrNumber> = Option::deserialize(d)?;
+    Ok(match v {
+        Some(TextOrNumber::Text(s)) => Some(s.trim().to_owned()).filter(|s| !s.is_empty()),
+        Some(TextOrNumber::Number(n)) => Some(n.to_string()),
+        None => None,
+    })
 }
 
 /// One uploaded file version of a part. Files are immutable and addressed
@@ -412,6 +441,15 @@ mod tests {
         let set: UpdateAnnotationSet = serde_json::from_str(r#"{"programme_id":7}"#).unwrap();
         assert_eq!(set.programme_id, Some(Some(7)));
         assert_eq!(serde_json::to_string(&null).unwrap(), r#"{"programme_id":null}"#);
+    }
+
+    #[test]
+    fn part_input_accepts_blank_label_and_numeric_voice() {
+        let p: PartInput =
+            serde_json::from_str(r#"{"label":"  ","instrument_ids":[1],"voice":2,"transposition":""}"#).unwrap();
+        assert_eq!((p.label, p.voice, p.transposition), (None, Some("2".into()), None));
+        let p: PartInput = serde_json::from_str(r#"{"instrument_ids":[],"voice":" 1a "}"#).unwrap();
+        assert_eq!((p.label, p.voice), (None, Some("1a".into())));
     }
 
     #[test]

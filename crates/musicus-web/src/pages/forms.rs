@@ -1,5 +1,5 @@
 //! Form pieces shared by the editing views of the library: score details,
-//! the instrument picker, the editor of an existing part and the form that
+//! the instrument picker, the key / voice / custom name fields of a part, the editor of an existing part and the form that
 //! adds a part together with its PDF.
 
 use crate::{
@@ -9,7 +9,7 @@ use crate::{
 };
 use dioxus::prelude::*;
 use gloo_net::http::Method;
-use musicus_api::{FileVersion, Instrument, Part, PartInput, Score, ScoreInput};
+use musicus_api::{FileVersion, Instrument, Part, PartInput, Score, ScoreInput, naming};
 
 /// Score details as typed into the form (tags as comma separated text).
 #[derive(Clone, PartialEq, Default)]
@@ -128,6 +128,53 @@ pub fn InstrumentPicker(
     }
 }
 
+/// Live name of a part being edited: the custom name, or the name derived
+/// from the chosen instruments, key and voice (the server's rule,
+/// `musicus_api::naming`, a-part-names).
+pub fn preview_name(instruments: &[Instrument], selected: &[i64], label: &str, key: &str, voice: &str) -> String {
+    let names: Vec<&str> = instruments.iter().filter(|i| selected.contains(&i.id)).map(|i| i.name.as_str()).collect();
+    naming::part_name(Some(label), &names, Some(key), Some(voice))
+}
+
+/// Key, voice and custom name of a part. The key is chosen from
+/// `naming::KEYS`; an older free-text key of an existing part (`legacy`)
+/// is offered as "Other: …" so saving keeps it. The custom name's
+/// placeholder shows the derived name.
+#[component]
+pub fn PartFields(
+    label: Signal<String>,
+    voice: Signal<String>,
+    transposition: Signal<String>,
+    /// Derived name for the placeholder of the custom name.
+    derived: String,
+    #[props(default)] legacy: Option<String>,
+) -> Element {
+    let (mut label, mut voice, mut key) = (label, voice, transposition);
+    let current = key();
+    // Nothing chosen yet: an example instead of "Unnamed part".
+    let placeholder =
+        if derived == naming::derived_name(&[], None, None) { "e.g. Solo Cornet".to_owned() } else { derived };
+    rsx! {
+        div { class: "part-fields",
+            label { class: "key", "Key"
+                select { value: "{current}", onchange: move |e| key.set(e.value()),
+                    option { value: "", selected: current.is_empty(), "— (concert pitch)" }
+                    for k in naming::KEYS {
+                        option { key: "{k.code}", value: "{k.code}", selected: current == k.code, "{k.option}" }
+                    }
+                    if let Some(l) = legacy {
+                        option { value: "{l}", selected: current == l, "Other: {l}" }
+                    }
+                }
+            }
+            label { class: "short", "Voice"
+                input { placeholder: "e.g. 2, 1a", value: "{voice}", maxlength: 20, oninput: move |e| voice.set(e.value()) } }
+            label { class: "grow", "Custom name (optional)"
+                input { placeholder: "{placeholder}", value: "{label}", maxlength: 120, oninput: move |e| label.set(e.value()) } }
+        }
+    }
+}
+
 /// Uploads a PDF as the new version of a part.
 pub async fn upload_pdf(part_id: i64, file: dioxus::html::FileData) -> Result<Part, String> {
     match file.read_bytes().await {
@@ -163,16 +210,18 @@ pub fn PartEditor(
     #[props(default)] versions_open: bool,
 ) -> Element {
     let id = part.id;
-    let mut label = use_signal(|| part.label.clone());
-    let mut voice = use_signal(|| part.voice.map(|v| v.to_string()).unwrap_or_default());
-    let mut transposition = use_signal(|| part.transposition.clone().unwrap_or_default());
+    let label = use_signal(|| part.label.clone().unwrap_or_default());
+    let voice = use_signal(|| part.voice.clone().unwrap_or_default());
+    let transposition = use_signal(|| part.transposition.clone().unwrap_or_default());
+    // A key stored before the key list existed, kept selectable.
+    let legacy = part.transposition.clone().filter(|k| naming::key(k).is_none());
     let mut selected = use_signal(|| part.instrument_ids.clone());
     // What the server has: an immediate instrument save sends these values
     // for the other fields, so unsaved typing in them is not stored by it.
     let mut saved = use_signal(|| PartInput {
         label: part.label.clone(),
         instrument_ids: part.instrument_ids.clone(),
-        voice: part.voice,
+        voice: part.voice.clone(),
         transposition: part.transposition.clone(),
         notes: part.notes.clone(),
     });
@@ -187,9 +236,9 @@ pub fn PartEditor(
     let save = move |e: FormEvent| async move {
         e.prevent_default();
         let input = PartInput {
-            label: label().trim().to_owned(),
+            label: none_if_empty(label()),
             instrument_ids: selected(),
-            voice: voice().trim().parse().ok(),
+            voice: none_if_empty(voice()),
             transposition: none_if_empty(transposition()),
             notes: saved().notes,
         };
@@ -261,19 +310,15 @@ pub fn PartEditor(
         Some(Ok(list)) => list.clone(),
         _ => Vec::new(),
     };
+    let name = preview_name(&instruments, &selected.read(), &label.read(), &transposition.read(), &voice.read());
+    let derived = preview_name(&instruments, &selected.read(), "", &transposition.read(), &voice.read());
     rsx! {
         form { class: "part-editor", onsubmit: save, oninput: move |_| status.set(None),
-            div { class: "part-fields",
-                label { class: "grow", "Label"
-                    input { required: true, value: "{label}", oninput: move |e| label.set(e.value()) } }
-                label { class: "short", "Voice"
-                    input { inputmode: "numeric", placeholder: "1", value: "{voice}", oninput: move |e| voice.set(e.value()) } }
-                label { class: "short", "Key"
-                    input { placeholder: "Bb", value: "{transposition}", oninput: move |e| transposition.set(e.value()) } }
-            }
+            h3 { class: "part-title", "{name}" }
             div { class: "field-label", "Instruments (saved right away)" }
             InstrumentPicker { instruments: instruments.clone(), selected, onsave: save_instruments,
                 busy: instrument_busy(), status: instrument_status() }
+            PartFields { label, voice, transposition, derived, legacy }
             div { class: "part-file",
                 match &part.file {
                     Some(f) => rsx! {
@@ -352,9 +397,9 @@ pub fn NewPartForm(score_id: i64, instruments: Vec<Instrument>, onstate: EventHa
         }
         busy.set(true);
         let input = PartInput {
-            label: label().trim().to_owned(),
+            label: none_if_empty(label()),
             instrument_ids: selected(),
-            voice: voice().trim().parse().ok(),
+            voice: none_if_empty(voice()),
             transposition: none_if_empty(transposition()),
             notes: None,
         };
@@ -391,19 +436,17 @@ pub fn NewPartForm(score_id: i64, instruments: Vec<Instrument>, onstate: EventHa
         }
     };
     let file_name = file.read().as_ref().map(|f| f.name());
+    let name = preview_name(&instruments, &selected.read(), &label.read(), &transposition.read(), &voice.read());
+    let derived = preview_name(&instruments, &selected.read(), "", &transposition.read(), &voice.read());
     rsx! {
         form { class: "new-part", onsubmit: add,
-            div { class: "part-fields",
-                label { class: "grow", "Label"
-                    input { required: true, placeholder: "e.g. 2nd Trumpet in Bb", value: "{label}",
-                        oninput: move |e| label.set(e.value()) } }
-                label { class: "short", "Voice"
-                    input { inputmode: "numeric", placeholder: "2", value: "{voice}", oninput: move |e| voice.set(e.value()) } }
-                label { class: "short", "Key"
-                    input { placeholder: "Bb", value: "{transposition}", oninput: move |e| transposition.set(e.value()) } }
-            }
             div { class: "field-label", "Instruments" }
             InstrumentPicker { instruments: instruments.clone(), selected }
+            PartFields { label, voice, transposition, derived: derived.clone() }
+            p { class: "part-name-preview", "aria-live": "polite",
+                span { class: "muted", "Shown as: " }
+                strong { "{name}" }
+            }
             div { class: "part-file",
                 label { class: "button",
                     if file_name.is_some() { "Choose another PDF…" } else { "Choose PDF…" }
@@ -431,10 +474,13 @@ pub fn AddedParts(rows: Vec<(Part, Upload)>, names: std::collections::HashMap<i6
             for (part, state) in rows.iter() {
                 li { key: "{part.id}",
                     div { class: "grow",
-                        strong { "{part.label}" }
-                        span { class: "muted small",
-                            " "
-                            {part.instrument_ids.iter().filter_map(|i| names.get(i).cloned()).collect::<Vec<_>>().join(", ")}
+                        strong { "{part.display_name}" }
+                        // A custom name may hide the instruments; show them then.
+                        if part.label.is_some() {
+                            span { class: "muted small",
+                                " "
+                                {part.instrument_ids.iter().filter_map(|i| names.get(i).cloned()).collect::<Vec<_>>().join(", ")}
+                            }
                         }
                     }
                     match state {
