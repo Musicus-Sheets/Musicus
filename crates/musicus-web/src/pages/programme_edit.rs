@@ -3,6 +3,7 @@
 
 use crate::{
     Route, api,
+    picker::{Choice, Picker},
     ui::{ErrorBox, Loading, NoAccess, can_manage, confirm, none_if_empty},
 };
 use dioxus::prelude::*;
@@ -35,7 +36,6 @@ fn ProgrammeEditor(id: Option<i64>) -> Element {
     let mut date = use_signal(String::new);
     let mut notes = use_signal(String::new);
     let mut items = use_signal(Vec::<(i64, String)>::new);
-    let mut pick = use_signal(String::new);
     let mut error = use_signal(|| None::<String>);
     let mut saving = use_signal(|| false);
     // Set once a new programme was created, so a retry after a failed
@@ -103,6 +103,24 @@ fn ProgrammeEditor(id: Option<i64>) -> Element {
         Some(Ok(list)) => list.clone(),
         _ => Vec::new(),
     };
+    let in_programme: Vec<i64> = items.read().iter().map(|i| i.0).collect();
+    // Every piece stays choosable (encores); the ones already in the programme say so.
+    let piece_choices: Vec<Choice> = all_scores
+        .iter()
+        .map(|s| {
+            let mut detail = s.composer.clone().unwrap_or_default();
+            if in_programme.contains(&s.id) {
+                detail = if detail.is_empty() {
+                    "already in the programme".into()
+                } else {
+                    format!("{detail} · already in the programme")
+                };
+            }
+            let extra =
+                [s.subtitle.as_deref(), s.arranger.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" ");
+            Choice::new(s.id, s.title.clone(), detail, &extra)
+        })
+        .collect();
     let count = items.read().len();
     let back = match id {
         Some(id) => Route::ProgrammeView { id },
@@ -132,7 +150,7 @@ fn ProgrammeEditor(id: Option<i64>) -> Element {
                         }
                         section { class: "card",
                             h2 { "Pieces in concert order" }
-                            if count == 0 { p { class: "muted", "No pieces yet. Add them below in playing order." } }
+                            if count == 0 { p { class: "muted", "No pieces yet. Add them with “+ Add pieces”, then put them in playing order with ↑ ↓." } }
                             ol { class: "items",
                                 for (index, (score_id, name)) in items.read().iter().cloned().enumerate() {
                                     li { key: "{index}-{score_id}",
@@ -147,31 +165,22 @@ fn ProgrammeEditor(id: Option<i64>) -> Element {
                                     }
                                 }
                             }
-                            div { class: "inline",
-                                select { class: "grow", value: "{pick}", onchange: move |e| pick.set(e.value()), "aria-label": "Piece to add",
-                                    option { value: "", "Add a piece…" }
-                                    for s in all_scores.iter() {
-                                        option { key: "{s.id}", value: "{s.id}",
-                                            "{s.title}"
-                                            if let Some(c) = &s.composer { " – {c}" }
+                            Picker {
+                                options: piece_choices,
+                                label: "+ Add pieces",
+                                placeholder: "Search title or composer…",
+                                none_left: "The library has no pieces yet.",
+                                onapply: move |chosen: Vec<i64>| {
+                                    let mut list = items.write();
+                                    for sid in chosen {
+                                        if let Some(s) = all_scores.iter().find(|s| s.id == sid) {
+                                            list.push((s.id, s.title.clone()));
                                         }
                                     }
-                                }
-                                button {
-                                    r#type: "button",
-                                    disabled: pick().is_empty(),
-                                    onclick: move |_| {
-                                        if let Ok(sid) = pick().parse::<i64>()
-                                            && let Some(s) = all_scores.iter().find(|s| s.id == sid)
-                                        {
-                                            items.write().push((s.id, s.title.clone()));
-                                            pick.set(String::new());
-                                        }
-                                    },
-                                    "+ Add"
-                                }
+                                },
                             }
-                            p { class: "muted small", "A piece may appear more than once, e.g. as an encore." }
+                            p { class: "muted small", "Tick several pieces at once; they are added in the order you tick them. "
+                                "A piece may appear more than once, e.g. as an encore." }
                         }
                         div { class: "actions",
                             Link { class: "button", to: back, "Cancel" }

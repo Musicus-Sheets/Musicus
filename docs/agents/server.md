@@ -9,7 +9,7 @@
 ## Start-up (`main.rs::serve`)
 
 1. `ServeArgs` → `Settings {cookie_secure = !insecure_cookies, client_cache, session_ttl_secs = days*86400, invite_ttl_secs = 7d, max_upload_bytes, trust_proxy}`.
-2. `open_state(data_dir, ram_cache_mb*MiB, settings)`: mkdir, `Db::open` (readers = cores clamped 2..8, runs `sqlx::migrate!("./migrations")`), `BlobStore::open` (mkdir `blobs/`, `tmp/`, empties `tmp/`), `App::new` (semaphore permits = cores).
+2. `open_state(data_dir, ram_cache_mb*MiB, settings)`: mkdir, `Db::open` (readers = cores clamped 2..8, runs `sqlx::migrate!("./migrations")`), `part_index::rebuild_if_needed` (rebuilds `part_fts` when its row count differs from `parts`, i.e. after migration 0002), `BlobStore::open` (mkdir `blobs/`, `tmp/`, empties `tmp/`), `App::new` (semaphore permits = cores).
 3. `bootstrap_admin`: if `users` empty → insert `admin` (role admin, no password) + invite; log `<public_url>/invite/<token>` (R-ACC-003).
 4. `--web-dir` must contain `index.html` else exit error.
 5. TLS if `--tls-cert` and `--tls-key` (rustls with `ring` provider installed explicitly) else plain TCP. `into_make_service_with_connect_info::<SocketAddr>()` (needed by `ClientIp`).
@@ -65,20 +65,20 @@ Auth column: `—` none, `U` any logged-in user, `L` librarian/admin, `A` admin.
 | POST | `/users/{id}/invite` | A | `users::reinvite` | disabled ⇒ 409; replaces invites | R-ACC-010 |
 | GET | `/instruments` | U | `groups::list_instruments` | all | — |
 | POST | `/instruments` | L | `groups::create_instrument` | name ≤80 unique (NOCASE) ⇒ 409 | R-LIB-003 |
-| PUT/DELETE | `/instruments/{id}` | L | `groups::update_instrument` / `delete_instrument` | delete in use ⇒ 409 (FK RESTRICT, see Errors) | R-LIB-003 |
+| PUT/DELETE | `/instruments/{id}` | L | `groups::update_instrument` / `delete_instrument` | rename re-indexes the instrument's parts (`part_fts`, derived names); delete in use ⇒ 409 (FK RESTRICT, see Errors) | R-LIB-003, R-LIB-010 |
 | GET | `/groups` | L | `groups::list_groups` | `Vec<Group>` with member/instrument/score ids | R-ACL-004 |
 | POST | `/groups` | A | `groups::create_group` | | R-ACL-004 |
 | PUT/DELETE | `/groups/{id}` | A | `groups::rename_group` / `delete_group` | | R-ACL-004 |
 | PUT | `/groups/{id}/members` | A | `groups::set_members` | `IdList`, replaces; unknown id ⇒ 409 (FK) | R-ACL-004 |
 | PUT | `/groups/{id}/instrument-grants` | L | `groups::set_instrument_grants` | replaces | R-ACL-001, R-ACL-004 |
 | PUT | `/groups/{id}/score-grants` | L | `groups::set_score_grants` | replaces | R-ACL-001, R-ACL-004 |
-| GET | `/scores?q=&genre=&tag=` | U, ACL | `library::list_scores` | FTS prefix query (`fts_query` quotes words, max 10), genre/tag NOCASE; members: scores with ≥1 visible part, parts filtered; limit 1000 | R-LIB-004, R-LIB-005 |
+| GET | `/scores?q=&genre=&tag=` | U, ACL | `library::list_scores` | `fts_terms`: one quoted prefix term per word (max 10, deduped) as JSON array; every term must match `score_fts` or the `part_fts` name of a part the user may read (`json_each` CROSS JOIN fts, UNION, `GROUP BY` score `HAVING COUNT = terms`); genre/tag NOCASE; members: scores with ≥1 visible part, parts filtered; limit 1000 | R-LIB-004, R-LIB-005 |
 | POST | `/scores` | L | `library::create_score` | `ScoreInput` validated (title ≤200, ≤30 tags ≤40 chars, dedupe NOCASE) | R-LIB-001 |
 | GET | `/scores/{id}` | U, ACL | `library::get_score` | 404 if no visible part (members) | R-LIB-005 |
 | PUT/DELETE | `/scores/{id}` | L | `library::update_score` / `delete_score` | delete cascades parts, versions, annotation sets (blobs stay) | R-LIB-001 |
-| POST | `/scores/{id}/parts` | L | `library::create_part` | `PartInput` (label ≤120, voice 0..99, ≤20 instruments) | R-LIB-002 |
-| GET | `/parts/{id}` | U, ACL | `library::get_part` | `Part` with current `FileVersion` | R-LIB-005 |
-| PUT/DELETE | `/parts/{id}` | L | `library::update_part` / `delete_part` | instruments replaced | R-LIB-002 |
+| POST | `/scores/{id}/parts` | L | `library::create_part` | `PartInput` (label optional ≤120, voice optional text ≤20, key `naming::normalize_key` else 400, ≤20 instruments); re-indexes `part_fts` | R-LIB-002, R-LIB-010, R-LIB-011 |
+| GET | `/parts/{id}` | U, ACL | `library::get_part` | `Part` with `display_name` (custom or derived) and current `FileVersion` | R-LIB-005, R-LIB-010 |
+| PUT/DELETE | `/parts/{id}` | L | `library::update_part` / `delete_part` | all fields + instruments replaced; key as on POST, except the part's stored (legacy) key may be sent unchanged; re-indexes `part_fts` (delete: trigger) | R-LIB-002, R-LIB-011 |
 | PUT | `/parts/{id}/file` | L | `library::upload_file` | raw body; no body limit layer (blob store enforces `max_upload_bytes` ⇒ 413); non-PDF ⇒ 415; dedupe; new version unless same file as latest | R-FILE-001, R-FILE-002, R-FILE-003 |
 | GET | `/parts/{id}/versions` | U, ACL | `library::list_versions` | newest first | R-FILE-002 |
 | GET | `/files/{sha256}` | U, ACL(any part) | `files::get_file` | invalid hash ⇒ 404; If-None-Match ⇒ 304; Range ⇒ 206 via ServeFile; else RAM cache; ETag `"sha"`; Cache-Control per setting; Last-Modified removed | R-FILE-005, R-FILE-006, R-FILE-007 |
@@ -115,4 +115,4 @@ part exists? (404) → `blobs.receive(body, limit)` → read first 1 KiB → `sn
 
 ## Tests (`tests/api.rs`)
 
-`Server::start()` = temp dir + `open_state` + `bootstrap_admin` + `routes::app(state, None)`; `cookie_secure=false`. Helpers: `send`, `json`, `ok::<T>`, `login` (bearer), `accept_invite` (returns cookie), `admin()`, `member()`, `upload()`; `library()` fixture = instruments Trumpet/Flute, group Trumpets with anna, score with trumpet part (4 pages) + flute part (2 pages), both uploaded. `tiny_pdf(pages, tag)` builds valid PDFs. Tests: `login_sessions_and_csrf`, `members_only_reach_granted_parts`, `uploads_are_versioned_and_validated`, `annotations_are_private_versioned_and_conflict_checked`, `programmes_and_search`, `user_administration`, `instruments_are_listed_for_everyone_and_kept_while_in_use`.
+`Server::start()` = temp dir + `open_state` + `bootstrap_admin` + `routes::app(state, None)`; `cookie_secure=false`. Helpers: `send`, `json`, `ok::<T>`, `login` (bearer), `accept_invite` (returns cookie), `admin()`, `member()`, `upload()`; `hits(q, token)` (number of search results); `library()` fixture = instruments Trumpet/Flute, group Trumpets with anna, score with trumpet part (no label, key Bb, voice "2" ⇒ "Trumpet in B♭ 2", 4 pages) + flute part (custom name "Solo Flute", 2 pages), both uploaded. `tiny_pdf(pages, tag)` builds valid PDFs. Tests: `login_sessions_and_csrf`, `members_only_reach_granted_parts`, `uploads_are_versioned_and_validated`, `annotations_are_private_versioned_and_conflict_checked`, `programmes_and_search`, `user_administration`, `instruments_are_listed_for_everyone_and_kept_while_in_use`, `part_names_keys_and_part_search`, `migration_0002_keeps_old_parts` (applies only 0001 from a temp copy, writes old-style rows, then `open_state`).

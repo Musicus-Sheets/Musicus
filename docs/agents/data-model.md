@@ -1,4 +1,4 @@
-# Data model (SQLite, `crates/musicus-server/migrations/0001_init.sql`)
+# Data model (SQLite, `crates/musicus-server/migrations/0001_init.sql`, `0002_part_names.sql`)
 
 Times = Unix seconds (`db::now()`); dates = `YYYY-MM-DD` text; booleans = INTEGER 0/1; JSON arrays as TEXT.
 Migrations: applied at start by `sqlx::migrate!` (R-OPS-004). NEVER edit an applied migration (checksum mismatch aborts start-up); add `000N_<name>.sql`. Update this file in the same commit.
@@ -16,7 +16,8 @@ Migrations: applied at start by `sqlx::migrate!` (R-OPS-004). NEVER edit an appl
 | `files` | `id`, `sha256` UNIQUE, `mime`, `size_bytes`, `page_count` NULL if unknown, `thumbnail_sha256` NULL, `created_at` | one row per blob (thumbnails are blobs without own row) | R-FILE-004 |
 | `scores` | `id`, `title`, `subtitle`, `composer`, `arranger`, `genre`, `tags` JSON array TEXT default `'[]'`, `notes`, `created_at`, `updated_at` | | R-LIB-001 |
 | `score_fts` | FTS5 external content (`content='scores'`), cols title, subtitle, composer, arranger, genre, tags; `tokenize='unicode61 remove_diacritics 2'` | kept in sync by triggers `scores_fts_insert/delete/update` | R-LIB-004 |
-| `parts` | `id`, `score_id` FK cascade, `label`, `voice`, `transposition`, `notes`, `created_at` | idx score | R-LIB-002 |
+| `parts` | `id`, `score_id` FK cascade, `label` TEXT NULL = custom name (NULL ⇒ derived name, a-part-names), `voice` TEXT NULL (free text ≤20), `transposition` TEXT NULL = key code of `musicus_api::naming::KEYS` (Bb, Eb, F, C, A, D, G, E, Ab, Db, Gb, H) or an older free-text value, `notes`, `created_at` | idx score; 0002 rebuilt `label`/`voice` with ADD/DROP/RENAME COLUMN (column order: id, score_id, transposition, notes, created_at, label, voice) | R-LIB-002, R-LIB-010, R-LIB-011 |
+| `part_fts` | FTS5 standalone, col `name` = `part_index::index_text` (shown name + derived name if custom + key code), rowid = part id; `unicode61 remove_diacritics 2` | written by the server (`part_index::reindex`) on part create/update and instrument rename; trigger `parts_fts_delete` removes rows; rebuilt on start if row count ≠ parts | R-LIB-004, R-LIB-010 |
 | `part_instruments` | PK (`instrument_id`, `part_id`) | WITHOUT ROWID; idx part; instrument FK RESTRICT (in use ⇒ 409) | R-LIB-002, R-LIB-003 |
 | `part_files` | PK (`part_id`, `version`), `file_id` FK, `uploaded_at` | WITHOUT ROWID; idx file; current = MAX(version) | R-FILE-002 |
 | `group_instrument_grants` | PK (`group_id`, `instrument_id`) | WITHOUT ROWID; idx instrument | R-ACL-001 |
@@ -39,6 +40,10 @@ Migrations: applied at start by `sqlx::migrate!` (R-OPS-004). NEVER edit an appl
             WHERE acl_s.score_id = p.score_id AND acl_m2.user_id = ?1))
 ```
 Bind `?1` = user id, `?2` = `access::librarian_flag(user)`; further params start at `?3`. Resolves via PK lookups (PK orders chosen for this) — R-PERF-005.
+
+## Migration 0002 (part names)
+
+Existing `label` ⇒ custom name (blank ⇒ NULL); numeric `voice` ⇒ text; `transposition`: blank ⇒ NULL, unambiguous spellings (case-insensitive, optional `in ` prefix: bb/b♭/b-flat/b flat/bflat, eb/…/es, ab/…/as, db/…/des, gb/…/ges, f, c, a, d, g, e, h/b♮/b natural) ⇒ code; everything else (e.g. `B`, ambiguous German/English, or `Es/F`) unchanged and kept on update. Mirrors `naming::parse_key`; test `migration_0002_keeps_old_parts` (R-LIB-012).
 
 ## Deletion semantics
 

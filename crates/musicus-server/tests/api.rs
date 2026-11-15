@@ -43,6 +43,7 @@ enum Auth<'a> {
 
 impl Server {
     async fn start() -> Self {
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
         let dir = tempfile::tempdir().unwrap();
         let settings = Settings { cookie_secure: false, ..Settings::default() };
         let state = open_state(dir.path(), 64 * 1024 * 1024, settings).await.unwrap();
@@ -123,6 +124,11 @@ impl Server {
         let cookie = r.headers[header::SET_COOKIE].to_str().unwrap();
         assert!(cookie.contains("HttpOnly") && cookie.contains("SameSite=Lax"));
         cookie.split(';').next().unwrap().trim_start_matches("musicus_session=").to_owned()
+    }
+
+    /// Number of library hits for a URL-encoded search.
+    async fn hits(&self, q: &str, token: &str) -> usize {
+        self.get(&format!("/api/scores?q={q}"), token).await.json::<Vec<Score>>().len()
     }
 
     async fn admin(&self) -> String {
@@ -229,7 +235,7 @@ async fn library(s: &Server) -> Library {
             Method::POST,
             &format!("/api/scores/{}/parts", score.id),
             &admin,
-            json!({"label": "2nd Trumpet in Bb", "instrument_ids": [trumpet.id], "voice": 2, "transposition": "Bb"}),
+            json!({"instrument_ids": [trumpet.id], "voice": "2", "transposition": "Bb"}),
         )
         .await;
     let fp: Part = s
@@ -237,12 +243,14 @@ async fn library(s: &Server) -> Library {
             Method::POST,
             &format!("/api/scores/{}/parts", score.id),
             &admin,
-            json!({"label": "Flute", "instrument_ids": [flute.id]}),
+            json!({"label": "Solo Flute", "instrument_ids": [flute.id]}),
         )
         .await;
     let tp: Part = s.upload(&admin, tp.id, tiny_pdf(4, "trumpet")).await.json();
     let fp: Part = s.upload(&admin, fp.id, tiny_pdf(2, "flute")).await.json();
     assert_eq!(tp.file.as_ref().unwrap().page_count, Some(4));
+    assert_eq!((tp.label.as_deref(), tp.display_name.as_str()), (None, "Trumpet in B♭ 2"));
+    assert_eq!(fp.display_name, "Solo Flute");
     Library { admin, anna, anna_id, trumpets: group.id, score: score.id, trumpet_part: tp, flute_part: fp }
 }
 
@@ -596,4 +604,186 @@ async fn instruments_are_listed_for_everyone_and_kept_while_in_use() {
     assert_eq!(reply.status, StatusCode::NO_CONTENT);
     let list: Vec<Instrument> = s.get("/api/instruments", &lib.anna).await.json();
     assert_eq!(list.len(), 2);
+}
+
+#[tokio::test]
+async fn part_names_keys_and_part_search() {
+    let s = Server::start().await;
+    let lib = library(&s).await;
+    let part = |id: Id| format!("/api/parts/{id}");
+    let trumpet = lib.trumpet_part.instrument_ids.clone();
+
+    // Voice is free text; common key spellings are normalised; unknown keys are refused.
+    let p: Part = s
+        .ok(
+            Method::PUT,
+            &part(lib.trumpet_part.id),
+            &lib.admin,
+            json!({"instrument_ids": trumpet, "voice": "1a", "transposition": "in B-flat"}),
+        )
+        .await;
+    assert_eq!(
+        (p.voice.as_deref(), p.transposition.as_deref(), p.display_name.as_str()),
+        (Some("1a"), Some("Bb"), "Trumpet in B♭ 1a")
+    );
+    let bad = s
+        .json(
+            Method::PUT,
+            &part(lib.trumpet_part.id),
+            &lib.admin,
+            json!({"instrument_ids": trumpet, "transposition": "Q"}),
+        )
+        .await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    let bad = s
+        .json(
+            Method::POST,
+            &format!("/api/scores/{}/parts", lib.score),
+            &lib.admin,
+            json!({"instrument_ids": [], "transposition": "B"}),
+        )
+        .await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST, "B is ambiguous (German B = B-flat)");
+    let unnamed: Part = s
+        .ok(
+            Method::POST,
+            &format!("/api/scores/{}/parts", lib.score),
+            &lib.admin,
+            json!({"instrument_ids": [], "transposition": "H"}),
+        )
+        .await;
+    assert_eq!(unnamed.display_name, "Part in B♮");
+
+    // A custom name overrides; clearing it brings the derived name back.
+    let p: Part = s
+        .ok(
+            Method::PUT,
+            &part(lib.trumpet_part.id),
+            &lib.admin,
+            json!({"label": "Solo Cornet", "instrument_ids": trumpet, "voice": "1", "transposition": "Bb"}),
+        )
+        .await;
+    assert_eq!((p.label.as_deref(), p.display_name.as_str()), (Some("Solo Cornet"), "Solo Cornet"));
+    let p: Part = s
+        .ok(
+            Method::PUT,
+            &part(lib.trumpet_part.id),
+            &lib.admin,
+            json!({"label": "", "instrument_ids": trumpet, "voice": "1", "transposition": "Bb"}),
+        )
+        .await;
+    assert_eq!((p.label, p.display_name.as_str()), (None, "Trumpet in B♭ 1"));
+
+    // Parts of a score are ordered by name, numbers by value.
+    for v in ["10", "2"] {
+        s.ok::<Part>(
+            Method::POST,
+            &format!("/api/scores/{}/parts", lib.score),
+            &lib.admin,
+            json!({"instrument_ids": trumpet, "voice": v, "transposition": "Bb"}),
+        )
+        .await;
+    }
+    let score: Score = s.get(&format!("/api/scores/{}", lib.score), &lib.anna).await.json();
+    let names: Vec<&str> = score.parts.iter().map(|p| p.display_name.as_str()).collect();
+    assert_eq!(names, ["Trumpet in B♭ 1", "Trumpet in B♭ 2", "Trumpet in B♭ 10"]);
+
+    // The library search finds pieces by the names of the user's own parts,
+    // also mixed with score words, but not by parts the user cannot read.
+    let (anna, admin) = (lib.anna.as_str(), lib.admin.as_str());
+    assert_eq!(s.hits("trumpet", anna).await, 1);
+    assert_eq!(s.hits("fucik%20trump", anna).await, 1);
+    assert_eq!(s.hits("bb", anna).await, 1, "key code is searchable");
+    assert_eq!(s.hits("solo%20flute", anna).await, 0, "anna cannot read the flute part");
+    assert_eq!(s.hits("solo%20flute", admin).await, 1);
+    assert_eq!(s.hits("trumpet%20concerto", anna).await, 0, "every word must match");
+
+    // Renaming an instrument renames derived part names and re-indexes them.
+    let trumpet_id = trumpet[0];
+    s.ok::<Instrument>(
+        Method::PUT,
+        &format!("/api/instruments/{trumpet_id}"),
+        &lib.admin,
+        json!({"name": "Cornet", "family": "Brass"}),
+    )
+    .await;
+    let p: Part = s.get(&part(lib.trumpet_part.id), &lib.anna).await.json();
+    assert_eq!(p.display_name, "Cornet in B♭ 1");
+    assert_eq!(s.hits("cornet", anna).await, 1);
+    assert_eq!(s.hits("trumpet", anna).await, 0);
+
+    // Deleting a part removes it from the index.
+    s.send(Method::DELETE, &part(lib.trumpet_part.id), Auth::Bearer(&lib.admin), &[], Body::empty()).await;
+    s.send(Method::DELETE, &part(unnamed.id), Auth::Bearer(&lib.admin), &[], Body::empty()).await;
+}
+
+/// Data written before migration 0002: labels become custom names, numeric
+/// voices text, known key spellings codes; unknown keys stay and can be kept
+/// on update; the part search index is built on the first start.
+#[tokio::test]
+async fn migration_0002_keeps_old_parts() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = tempfile::tempdir().unwrap();
+    std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations/0001_init.sql"), old.path().join("0001_init.sql"))
+        .unwrap();
+    {
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(dir.path().join("musicus.sqlite"))
+            .create_if_missing(true);
+        let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
+        sqlx::migrate::Migrator::new(old.path()).await.unwrap().run(&pool).await.unwrap();
+        sqlx::raw_sql(
+            "INSERT INTO instruments (id, name) VALUES (1, 'Clarinet'), (2, 'Horn');
+             INSERT INTO scores (id, title, tags, created_at, updated_at) VALUES (1, 'Old March', '[]', 0, 0);
+             INSERT INTO parts (id, score_id, label, voice, transposition, created_at) VALUES
+               (1, 1, '2nd Clarinet in Bb', 2, 'in Bb', 0),
+               (2, 1, 'Horn', NULL, 'Es', 0),
+               (3, 1, '  ', NULL, 'B', 0),
+               (4, 1, 'Horn 2', 2, 'Es/F', 0),
+               (5, 1, 'Horn 3', 3, '', 0);
+             INSERT INTO part_instruments (part_id, instrument_id) VALUES (1, 1), (2, 2), (3, 1), (4, 2), (5, 2);",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+    }
+    let settings = Settings { cookie_secure: false, ..Settings::default() };
+    let state = open_state(dir.path(), 1 << 20, settings).await.unwrap();
+    let invite = bootstrap_admin(&state).await.unwrap().unwrap();
+    let s = Server { router: routes::app(state, None), _dir: dir, admin_invite: invite };
+    let admin = s.admin().await;
+    let score: Score = s.get("/api/scores/1", &admin).await.json();
+    type Row<'a> = (Option<&'a str>, Option<&'a str>, Option<&'a str>, &'a str);
+    let got: Vec<Row> = score
+        .parts
+        .iter()
+        .map(|p| (p.label.as_deref(), p.voice.as_deref(), p.transposition.as_deref(), p.display_name.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (Some("2nd Clarinet in Bb"), Some("2"), Some("Bb"), "2nd Clarinet in Bb"),
+            (None, None, Some("B"), "Clarinet in B"),
+            (Some("Horn"), None, Some("Eb"), "Horn"),
+            (Some("Horn 2"), Some("2"), Some("Es/F"), "Horn 2"),
+            (Some("Horn 3"), Some("3"), None, "Horn 3"),
+        ]
+    );
+    // The unknown key can be kept, but not set anew.
+    let keep = s
+        .json(
+            Method::PUT,
+            "/api/parts/4",
+            &admin,
+            json!({"label": "Horn 2", "instrument_ids": [2], "voice": "2", "transposition": "Es/F"}),
+        )
+        .await;
+    assert_eq!(keep.status, StatusCode::OK);
+    let set =
+        s.json(Method::PUT, "/api/parts/5", &admin, json!({"instrument_ids": [2], "transposition": "Es/F"})).await;
+    assert_eq!(set.status, StatusCode::BAD_REQUEST);
+    // Index built on start: old parts are found by their (derived) names.
+    assert_eq!(s.get("/api/scores?q=clarinet", &admin).await.json::<Vec<Score>>().len(), 1);
+    assert_eq!(s.get("/api/scores?q=horn%203", &admin).await.json::<Vec<Score>>().len(), 1);
 }

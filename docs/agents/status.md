@@ -51,7 +51,11 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 - `LoginLimiter` is in-memory: resets on restart, per process.
 - Pages whose PDF page count is unknown accept annotation pages 0..1999.
 - Client uses `window.prompt`/`confirm` for dialogs (no custom modal).
+- Keys stored before migration 0002 that were ambiguous ("B") or free text stay as they are; they are shown verbatim in names and as "Other: …" in the key list until a librarian picks a listed key (a-part-names).
+- `part_fts` is rebuilt on start only when its row count differs from `parts`; a change of the name format needs an explicit rebuild.
+- Immediate instrument save in the part editor sends the last saved label/voice/key; unsaved typing in those fields still needs `Save part` (a-assign-picker).
 - Uploads in the guided flow run in a task of the `NewPartForm` component; leaving the page via the navigation bar while one runs abandons waiting for it (`Finish` is disabled meanwhile). The browser usually completes the request anyway.
-- The programme editor adds pieces through a plain `<select>` of all scores (no search); fine for hundreds of pieces, clumsy for thousands.
+- Assignment picker lists every candidate in the DOM (no virtualisation); fine for a few thousand entries. Score grants and the programme picker load all scores (`GET /api/scores`, full objects with parts).
+- A tap outside an open picker only closes it (backdrop); the tapped control needs a second tap (a-assign-picker). Leaving the page with the browser's back button while a picker is open drops the ticks.
 - `programmes.rs::futures_join` awaits sequentially (works only because prefetch is eager, a-eager-prefetch).
 - Thumbnails are blobs without a `files` row; never served except via their PDF's hash.

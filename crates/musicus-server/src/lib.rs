@@ -12,6 +12,7 @@ pub mod cache;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod part_index;
 pub mod processors;
 pub mod routes;
 pub mod state;
@@ -27,6 +28,9 @@ pub async fn open_state(
     std::fs::create_dir_all(data_dir)?;
     let readers = std::thread::available_parallelism().map(|n| n.get() as u32).unwrap_or(2).clamp(2, 8);
     let db = db::Db::open(&data_dir.join("musicus.sqlite"), readers).await?;
+    if part_index::rebuild_if_needed(&db).await? {
+        tracing::info!("rebuilt the search index of part names");
+    }
     let blobs = blobs::BlobStore::open(data_dir)?;
     Ok(state::App::new(db, blobs, cache_bytes, settings))
 }

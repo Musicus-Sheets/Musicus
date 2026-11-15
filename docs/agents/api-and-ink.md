@@ -10,11 +10,20 @@ Crate `crates/musicus-api`: deps serde + postcard only, no I/O, compiles for nat
 - 409 on page save: body `PageConflict {current_revision}` (not ApiError).
 - Whole-list replacement uses `IdList {ids}` with PUT (idempotent).
 - `UpdateUser`, `UpdateAnnotationSet`: absent fields = unchanged. `UpdateAnnotationSet.programme_id: Option<Option<Id>>` via `double_option`: absent = unchanged, `null` = unlink, number = link (unit test `programme_link_distinguishes_absent_and_null`).
-- `Score.parts` contains only parts readable by the requester; `Part.file` = current `FileVersion` or None.
+- `Score.parts` contains only parts readable by the requester, sorted by `naming::natural_cmp` of `display_name`; `Part.file` = current `FileVersion` or None.
+- `Part {label: Option (custom name), display_name (always set: custom or derived), voice: Option<String>, transposition: Option<String> (key code or legacy text)}`. `PartInput.label`/`transposition`: blank ⇒ None (`blank_is_none`); `voice` accepts a JSON string or number (`text_or_number`), blank ⇒ None (test `part_input_accepts_blank_label_and_numeric_voice`).
 - `AnnotationSet.file_sha256/file_version` = the version the set is bound to (compare with `Part.file.version` to detect outdated sets); `pages` = saved pages with revisions.
 - Constants: `CSRF_HEADER = "x-musicus-csrf"`, `SESSION_COOKIE = "musicus_session"`.
 
 Adding an endpoint: request/response structs here → handler in server → client helper call. Keep field names stable (future app).
+
+## Part names and keys (`naming.rs`, a-part-names, R-LIB-010, R-LIB-011)
+
+- `part_name(custom, instrument_names, key, voice)`: trimmed custom name if non-empty, else `derived_name`: instrument names sorted by `natural_cmp`, case-insensitively deduped, joined `" / "` (none ⇒ `Part`), `+ " in " + key_name(key)`, `+ " " + voice`; nothing at all ⇒ `Unnamed part`. Examples: `Trumpet in B♭ 1`, `Flute / Piccolo`, `Horn in F 3a`, `Part 2`.
+- `KEYS: &[Key {code, name, option}]` in selection order: Bb B♭, Eb E♭, F, C, A, D, G, E, Ab A♭, Db D♭, Gb G♭, H B♮ (option "B♮ (H)"). None = concert pitch. `key(code)`, `key_name(code)` (unknown ⇒ unchanged).
+- `parse_key(text)`: unambiguous spellings ⇒ code (mirrors migration 0002); "B" ⇒ None (B♭ in German). `normalize_key` = exact code or `parse_key` (server input).
+- `natural_cmp`: case-insensitive, digit runs by value.
+- The server computes `display_name` (it has the instrument names); the client calls `part_name` only for the live preview in forms.
 
 ## Ink format (`ink.rs`) — d-ink-format, R-ANN-005..007
 

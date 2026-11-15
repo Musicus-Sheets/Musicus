@@ -109,8 +109,8 @@ pub fn NewScore() -> Element {
                 section { class: "card",
                     h2 { "Parts of “{s.title}”" }
                     p { class: "muted small",
-                        "Add one part per sheet, e.g. “1st Trumpet in Bb”. Tick the instruments it is for: "
-                        "groups get access by instrument."
+                        "Add one part per sheet: its instruments, key and voice give its name, e.g. “Trumpet in B♭ 1”; "
+                        "a custom name is optional. Groups get access by instrument."
                     }
                     if rows.read().is_empty() {
                         p { class: "muted", "No parts yet." }
@@ -279,7 +279,7 @@ pub fn EditPart(id: i64) -> Element {
                         div { class: "page-head",
                             div {
                                 h1 { "Edit part" }
-                                p { class: "muted", "{part.label} · {score.title}" }
+                                p { class: "muted", "{part.display_name} · {score.title}" }
                             }
                             button { class: "primary", onclick: move |_| back_to_library(nav, Some(score_id)), "Done" }
                         }
