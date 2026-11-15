@@ -7,8 +7,14 @@
 // the guided flow for a new piece, editing parts and pieces from the
 // library, invites, groups and grants, programmes, a librarian's and a
 // member's view (no management controls), a member reading and annotating.
+// The assignment picker (assigned chips + searchable multi-select dropdown)
+// is checked on group members and grants, part instruments and programme
+// pieces: search, several entries in one go, the three ways of closing
+// (outside, Escape, button), removal, persistence after a reload.
+//
+// BROWSER=firefox runs it in Firefox instead of Chromium.
 
-import { chromium } from 'playwright';
+import { chromium, firefox } from 'playwright';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -20,7 +26,9 @@ if (!inviteUrl || !pdfPath || !outDir) {
 mkdirSync(outDir, { recursive: true });
 const base = new URL(inviteUrl).origin;
 
-const browser = await chromium.launch(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {});
+const engine = process.env.BROWSER === 'firefox' ? firefox : chromium;
+const browser = await engine.launch(process.env.CHROMIUM && engine === chromium ? { executablePath: process.env.CHROMIUM } : {});
+console.log(`browser: ${engine.name()}`);
 let step = 0;
 async function shot(page, name) {
   step += 1;
@@ -32,6 +40,27 @@ function check(condition, message) {
   }
   console.log(`ok - ${message}`);
 }
+
+// Opens the picker `button` inside `scope`, ticks `entries` (strings, or
+// {search, name}) and closes it with `close`: 'outside' (click next to the
+// panel), 'escape' or 'button' (the "Add n" button).
+async function pick(page, scope, button, entries, close = 'button') {
+  await scope.getByRole('button', { name: button }).click();
+  const panel = page.locator('.picker-panel');
+  await panel.waitFor();
+  for (const e of entries) {
+    const { search, name } = typeof e === 'string' ? { search: undefined, name: e } : e;
+    if (search !== undefined) await panel.getByRole('combobox').fill(search);
+    await panel.getByRole('option', { name }).click();
+  }
+  if (close === 'outside') await page.locator('.picker-backdrop').click({ position: { x: 4, y: 4 } });
+  else if (close === 'escape') await page.keyboard.press('Escape');
+  else await panel.getByRole('button', { name: /^Add \d+$/ }).click();
+  await panel.waitFor({ state: 'detached' });
+}
+const chips = (scope) => scope.locator('.chip .chip-text').allInnerTexts();
+// "Saved" of the picker inside `scope`.
+const saved = (scope) => scope.locator('.assign-actions .ok', { hasText: 'Saved' }).waitFor();
 
 const errors = [];
 function watch(page) {
@@ -88,13 +117,23 @@ const newPart = a.locator('form.new-part');
 await newPart.getByLabel('Label').fill('2nd Trumpet in Bb');
 await newPart.getByLabel('Voice').fill('2');
 await newPart.getByLabel('Key').fill('Bb');
-await newPart.locator('label.check', { hasText: 'Trumpet' }).locator('input').check();
+// Keyboard: the search field has the focus, Enter ticks the first match, Escape applies.
+await newPart.getByRole('button', { name: '+ Add instruments' }).click();
+check(await a.evaluate(() => document.activeElement?.classList.contains('picker-search')), 'the picker focuses its search field on open');
+await a.keyboard.type('trum');
+await a.keyboard.press('Enter');
+check((await a.locator('.picker-foot').innerText()).includes('1 selected'), 'Enter ticks the first match');
+await a.keyboard.press('Escape');
+await a.locator('.picker-panel').waitFor({ state: 'detached' });
+check((await chips(newPart)).some((c) => c.startsWith('Trumpet')), 'Escape closes the picker and applies the ticked entry');
 await newPart.locator('input[type=file]').setInputFiles(pdfPath);
 await newPart.getByRole('button', { name: '+ Add part' }).click();
 await a.locator('.added-parts li', { hasText: '2nd Trumpet in Bb' }).getByText(/Version 1/).waitFor({ timeout: 30000 });
 // A second part right away, this time without a PDF.
 await newPart.getByLabel('Label').fill('Flute');
-await newPart.locator('label.check', { hasText: 'Flute' }).locator('input').check();
+check((await chips(newPart)).length === 0, 'the instruments of the next part start empty');
+await pick(a, newPart, '+ Add instruments', ['Flute'], 'outside');
+check((await chips(newPart)).some((c) => c.startsWith('Flute')), 'a click outside the picker applies the selection');
 await newPart.getByRole('button', { name: '+ Add part' }).click();
 await a.locator('.added-parts li', { hasText: 'Flute' }).getByText('No PDF yet').waitFor();
 await shot(a, 'add-piece-parts');
@@ -115,6 +154,21 @@ await a.locator('.part-editor').getByText('Uploaded as version 2').waitFor({ tim
 await a.getByText('All versions (2)').waitFor();
 await shot(a, 'edit-part');
 check(true, 'part edited from its tile: PDF uploaded and replaced, versions listed');
+// Instruments of an existing part are saved at once, the typed label is not.
+const editor = a.locator('.part-editor');
+await editor.getByLabel('Label').fill('Flute (unsaved)');
+await pick(a, editor, '+ Add instruments', [{ search: 'tru', name: 'Trumpet' }]);
+await saved(editor);
+await a.reload();
+await a.locator('.part-editor .chip').first().waitFor();
+check(JSON.stringify((await chips(a.locator('.part-editor'))).map((c) => c.split(' ')[0]).sort()) === '["Flute","Trumpet"]'
+  && await a.locator('.part-editor').getByLabel('Label').inputValue() === 'Flute',
+  'part instruments are saved immediately with the stored label (not the unsaved one)');
+await a.locator('.part-editor').getByRole('button', { name: 'Remove Trumpet' }).click();
+await saved(a.locator('.part-editor'));
+await a.reload();
+await a.locator('.part-editor .chip').first().waitFor();
+check((await chips(a.locator('.part-editor'))).length === 1, 'removing a part instrument is saved immediately');
 
 // Edit the piece from its card.
 await a.getByRole('button', { name: 'Done' }).click();
@@ -138,7 +192,8 @@ check(true, 'deleting an instrument in use shows the conflict');
 // A member, a librarian and a group granting the trumpet parts.
 await nav.getByRole('link', { name: 'Users' }).click();
 const invites = {};
-for (const [username, display, role] of [['anna', 'Anna', 'member'], ['carla', 'Carla', 'librarian']]) {
+for (const [username, display, role] of [['anna', 'Anna', 'member'], ['carla', 'Carla', 'librarian'],
+  ['zoe', 'Zoë Brandt', 'member'], ['ben', 'Ben', 'member']]) {
   await a.getByPlaceholder('Username').fill(username);
   await a.getByPlaceholder('Display name').fill(display);
   await a.locator('form select').selectOption(role);
@@ -152,25 +207,79 @@ await nav.getByRole('link', { name: 'Groups' }).click();
 await a.getByPlaceholder('New group, e.g. Trumpets').fill('Trumpets');
 await a.getByRole('button', { name: 'Add', exact: true }).click();
 await a.getByRole('heading', { name: 'Trumpets' }).waitFor();
-await a.locator('label.check', { hasText: 'Anna' }).locator('input').check();
-await a.locator('label.check', { hasText: 'Trumpet' }).first().locator('input').check();
-await a.getByRole('button', { name: 'Save', exact: true }).click();
-await a.locator('.ok', { hasText: 'Saved' }).waitFor();
+const groupCard = a.locator('section.card', { has: a.getByRole('heading', { name: 'Trumpets' }) });
+const membersBox = groupCard.locator('.assign').first();
+check((await membersBox.innerText()).includes('No members yet.'), 'empty member list says so');
+await groupCard.getByRole('button', { name: '+ Add members' }).click();
+const panel = a.locator('.picker-panel');
+await panel.getByRole('combobox').fill('zoe');
+check(await panel.getByRole('option').count() === 1
+  && (await panel.getByRole('option').innerText()).includes('Zoë Brandt'), 'search ignores case and diacritics (zoe finds Zoë)');
+await panel.getByRole('option', { name: 'Zoë Brandt' }).click();
+await panel.getByRole('combobox').fill('ANN');
+await panel.getByRole('option', { name: 'Anna' }).click();
+await panel.getByRole('combobox').fill('');
+check(await panel.isVisible() && (await panel.locator('.picker-foot').innerText()).includes('2 selected'),
+  'ticking does not close the picker; two entries selected in one go');
+await shot(a, 'groups-picker');
+await a.locator('.picker-backdrop').click({ position: { x: 4, y: 4 } });
+await saved(membersBox);
+check(JSON.stringify((await chips(membersBox)).map((c) => c.split(' ')[0])) === '["Anna","Zoë"]',
+  'closing by clicking outside adds both members');
+await pick(a, groupCard, '+ Add instruments', ['Trumpet'], 'escape');
+await saved(groupCard.locator('.assign').nth(1));
+await a.reload();
+await a.locator('.selectable li', { hasText: 'Trumpets' }).click();
+await groupCard.locator('.chip').first().waitFor();
+check((await chips(membersBox)).length === 2 && (await chips(groupCard.locator('.assign').nth(1)))[0].startsWith('Trumpet'),
+  'members and instrument grant are stored (after a reload)');
+await membersBox.getByRole('button', { name: 'Remove Zoë Brandt' }).click();
+await saved(membersBox);
+await a.reload();
+await a.locator('.selectable li', { hasText: 'Trumpets' }).click();
+await groupCard.locator('.chip').first().waitFor();
+check(JSON.stringify((await chips(membersBox)).map((c) => c.split(' ')[0])) === '["Anna"]', 'removing a member is saved');
+check(await groupCard.getByRole('button', { name: 'Save', exact: true }).count() === 0, 'the group editor needs no Save button');
 await shot(a, 'groups');
 check(true, 'group Trumpets gets member anna and instrument Trumpet');
 
+// Two more pieces (without parts) so the programme picker has something to choose from.
+for (const [title, composer] of [['Radetzky-Marsch', 'Johann Strauss'], ['Pizzicato-Polka', 'Johann Strauss']]) {
+  await a.evaluate(async (body) => {
+    const r = await fetch('/api/scores', { method: 'POST', headers: { 'content-type': 'application/json', 'x-musicus-csrf': '1' },
+      body: JSON.stringify(body) });
+    if (!r.ok) throw new Error(`POST /api/scores: ${r.status}`);
+  }, { title, subtitle: null, composer, arranger: null, genre: null, tags: [], notes: null });
+}
 // A programme with the march.
 await nav.getByRole('link', { name: 'Programmes' }).click();
 await a.getByRole('link', { name: 'New programme' }).click();
 await a.getByRole('heading', { name: 'New programme' }).waitFor();
 await a.getByLabel('Title', { exact: true }).fill('Christmas concert');
-await a.locator('select').selectOption({ label: 'Florentiner Marsch – Julius Fučík' });
-await a.getByRole('button', { name: '+ Add' }).click();
+await a.getByRole('button', { name: '+ Add pieces' }).click();
+await a.locator('.picker-panel').getByRole('combobox').fill('strauss');
+check(await a.locator('.picker-panel').getByRole('option').count() === 2, 'programme picker searches the composer');
+await a.locator('.picker-panel').getByRole('option', { name: /Radetzky/ }).click();
+await a.locator('.picker-panel').getByRole('combobox').fill('fucik');
+await a.locator('.picker-panel').getByRole('option', { name: /Florentiner/ }).click();
+await a.locator('.picker-panel').getByRole('button', { name: 'Add 2' }).click();
+check(JSON.stringify(await a.locator('ol.items li .grow').allInnerTexts()) === '["Radetzky-Marsch","Florentiner Marsch"]',
+  'several pieces added in one go, in the order they were ticked');
+await a.locator('ol.items li').first().getByRole('button', { name: 'Move down' }).click();
+check(JSON.stringify(await a.locator('ol.items li .grow').allInnerTexts()) === '["Florentiner Marsch","Radetzky-Marsch"]',
+  'the order stays editable with the arrows');
 await a.getByRole('button', { name: 'Create programme' }).click();
 await a.getByRole('heading', { name: 'Christmas concert' }).waitFor();
 await a.getByRole('link', { name: 'Edit' }).first().click();
 await a.getByRole('heading', { name: 'Edit programme' }).waitFor();
-check(await a.locator('ol.items li').count() === 1, 'programme editor shows the piece');
+check(await a.locator('ol.items li').count() === 2, 'programme editor shows the pieces');
+await a.getByRole('button', { name: '+ Add pieces' }).click();
+await a.locator('.picker-panel').getByRole('combobox').fill('florentiner');
+check((await a.locator('.picker-panel').getByRole('option').innerText()).includes('already in the programme'),
+  'pieces already in the programme stay choosable and say so');
+await a.locator('.picker-panel').getByRole('option', { name: /Florentiner/ }).click();
+await a.keyboard.press('Escape');
+check(await a.locator('ol.items li').count() === 3, 'a piece can be added a second time (encore)');
 await a.getByLabel('Notes for the musicians').fill('Meet at 18:30.');
 await a.getByRole('button', { name: 'Save programme' }).click();
 await a.getByText('Meet at 18:30.').waitFor();
@@ -193,6 +302,20 @@ check(await l.getByRole('link', { name: 'Add piece' }).count() === 1
 await lnav.getByRole('link', { name: 'Groups' }).click();
 await l.locator('.selectable li', { hasText: 'Trumpets' }).waitFor();
 check(await l.getByPlaceholder('New group, e.g. Trumpets').count() === 0, 'only admins create groups');
+await l.locator('.selectable li', { hasText: 'Trumpets' }).click();
+const lcard = l.locator('section.card', { has: l.getByRole('heading', { name: 'Trumpets' }) });
+check(await lcard.getByRole('button', { name: '+ Add members' }).count() === 0
+  && await lcard.getByRole('button', { name: '+ Add scores' }).count() === 1, 'librarian edits grants but not members');
+const scoreBox = lcard.locator('.assign').last();
+await pick(l, lcard, '+ Add scores', [{ search: 'radetzky', name: /Radetzky/ }]);
+await saved(scoreBox);
+check((await chips(scoreBox))[0].startsWith('Radetzky-Marsch'), 'librarian grants a whole score');
+await scoreBox.getByRole('button', { name: 'Remove Radetzky-Marsch' }).click();
+await saved(scoreBox);
+await l.reload();
+await l.locator('.selectable li', { hasText: 'Trumpets' }).click();
+await lcard.getByText('No whole scores granted.').waitFor();
+check(true, 'removed score grant stays removed after a reload');
 await librarian.close();
 
 // --- Member: invite, library, reader, annotations -------------------------
@@ -309,6 +432,17 @@ const sets = await a.evaluate(async () => {
   return r.json();
 });
 check(Array.isArray(sets) && sets.length === 0, 'annotations are private (admin sees no sets of anna)');
+
+// The picker on a phone: a sheet below the top bar, inside the screen.
+await a.setViewportSize({ width: 390, height: 844 });
+await a.goto(`${base}/groups`);
+await a.locator('.selectable li', { hasText: 'Trumpets' }).click();
+await a.getByRole('button', { name: '+ Add members' }).click();
+await a.locator('.picker-panel').getByRole('combobox').fill('b');
+const pbox = await a.locator('.picker-panel').boundingBox();
+check(pbox.x >= 0 && pbox.x + pbox.width <= 390 && pbox.y >= 56, 'picker panel fits a phone screen');
+await shot(a, 'phone-picker');
+await a.keyboard.press('Escape');
 
 await m.setViewportSize({ width: 390, height: 844 });
 await m.goto(`${base}/`);

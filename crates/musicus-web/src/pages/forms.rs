@@ -1,9 +1,10 @@
 //! Form pieces shared by the editing views of the library: score details,
-//! instrument checkboxes, the editor of an existing part and the form that
+//! the instrument picker, the editor of an existing part and the form that
 //! adds a part together with its PDF.
 
 use crate::{
     Route, api,
+    picker::{AssignList, Choice},
     ui::{Status, confirm, format_size, format_time, none_if_empty, tags_from},
 };
 use dioxus::prelude::*;
@@ -77,37 +78,52 @@ pub fn ScoreFields(draft: Signal<ScoreDraft>) -> Element {
     }
 }
 
-/// Checkboxes for the instruments of a part.
+/// Instruments as picker choices: name, family as detail.
+pub fn instrument_choices(instruments: &[Instrument]) -> Vec<Choice> {
+    instruments.iter().map(|i| Choice::new(i.id, i.name.clone(), i.family.clone().unwrap_or_default(), "")).collect()
+}
+
+/// The instruments of a part: assigned list plus searchable picker. In the
+/// creation form the selection is just form state; the part editor passes
+/// `onsave` to store every change at once (a-assign-picker).
 #[component]
-pub fn InstrumentChecks(instruments: Vec<Instrument>, selected: Signal<Vec<i64>>) -> Element {
+pub fn InstrumentPicker(
+    instruments: Vec<Instrument>,
+    selected: Signal<Vec<i64>>,
+    /// Called with the new list instead of changing `selected` directly.
+    #[props(default)]
+    onsave: Option<EventHandler<Vec<i64>>>,
+    #[props(default)] busy: bool,
+    #[props(default)] status: Option<Result<String, String>>,
+) -> Element {
     let mut selected = selected;
+    if instruments.is_empty() {
+        return rsx! {
+            p { class: "muted small",
+                "No instruments yet. "
+                Link { to: Route::Instruments {}, "Add them on the Instruments page." }
+            }
+        };
+    }
+    let mut change = move |next: Vec<i64>| match onsave {
+        Some(h) => h.call(next),
+        None => selected.set(next),
+    };
     rsx! {
-        div { class: "checks",
-            if instruments.is_empty() {
-                span { class: "muted small",
-                    "No instruments yet. "
-                    Link { to: Route::Instruments {}, "Add them on the Instruments page." }
-                }
-            }
-            for i in instruments.iter() {
-                label { key: "{i.id}", class: "check",
-                    input {
-                        r#type: "checkbox",
-                        checked: selected.read().contains(&i.id),
-                        onchange: {
-                            let iid = i.id;
-                            move |e: FormEvent| {
-                                let mut s = selected.write();
-                                s.retain(|x| *x != iid);
-                                if e.checked() {
-                                    s.push(iid);
-                                }
-                            }
-                        },
-                    }
-                    "{i.name}"
-                }
-            }
+        AssignList {
+            options: instrument_choices(&instruments),
+            assigned: selected(),
+            add_label: "+ Add instruments",
+            empty: "No instruments yet: nobody gets this part through an instrument grant.",
+            placeholder: "Search instrument or family…",
+            busy,
+            status,
+            onadd: move |added: Vec<i64>| {
+                let mut next = selected();
+                next.extend(added.into_iter().filter(|a| !next.contains(a)).collect::<Vec<_>>());
+                change(next);
+            },
+            onremove: move |gone: i64| change(selected().into_iter().filter(|x| *x != gone).collect()),
         }
     }
 }
@@ -135,8 +151,9 @@ pub fn pages(n: i64) -> String {
     if n == 1 { "1 page".into() } else { format!("{n} pages") }
 }
 
-/// Editor of an existing part: label, voice, key, instruments, the PDF
-/// (upload / replace, version history) and deletion.
+/// Editor of an existing part: label, voice and key (saved with "Save
+/// part"), instruments (saved as soon as they change), the PDF (upload /
+/// replace, version history) and deletion.
 #[component]
 pub fn PartEditor(
     part: Part,
@@ -149,8 +166,20 @@ pub fn PartEditor(
     let mut label = use_signal(|| part.label.clone());
     let mut voice = use_signal(|| part.voice.map(|v| v.to_string()).unwrap_or_default());
     let mut transposition = use_signal(|| part.transposition.clone().unwrap_or_default());
-    let selected = use_signal(|| part.instrument_ids.clone());
+    let mut selected = use_signal(|| part.instrument_ids.clone());
+    // What the server has: an immediate instrument save sends these values
+    // for the other fields, so unsaved typing in them is not stored by it.
+    let mut saved = use_signal(|| PartInput {
+        label: part.label.clone(),
+        instrument_ids: part.instrument_ids.clone(),
+        voice: part.voice,
+        transposition: part.transposition.clone(),
+        notes: part.notes.clone(),
+    });
     let mut status = use_signal(|| None::<Result<String, String>>);
+    let mut instrument_status = use_signal(|| None::<Result<String, String>>);
+    let mut instrument_busy = use_signal(|| false);
+    let mut generation = use_signal(|| 0u32);
     let mut uploading = use_signal(|| false);
     let mut versions =
         use_resource(move || async move { api::get::<Vec<FileVersion>>(&format!("/api/parts/{id}/versions")).await });
@@ -162,15 +191,46 @@ pub fn PartEditor(
             instrument_ids: selected(),
             voice: voice().trim().parse().ok(),
             transposition: none_if_empty(transposition()),
-            notes: None,
+            notes: saved().notes,
         };
         match api::put::<_, Part>(&format!("/api/parts/{id}"), &input).await {
             Ok(_) => {
+                saved.set(input);
                 status.set(Some(Ok("Saved".into())));
                 onchange.call(());
             }
             Err(e) => status.set(Some(Err(e.message))),
         }
+    };
+    let save_instruments = move |next: Vec<i64>| {
+        let before = selected();
+        selected.set(next.clone());
+        instrument_busy.set(true);
+        generation.set(generation() + 1);
+        instrument_status.set(Some(Ok("Saving…".into())));
+        spawn(async move {
+            let input = PartInput { instrument_ids: next, ..saved() };
+            let result = api::put::<_, Part>(&format!("/api/parts/{id}"), &input).await;
+            instrument_busy.set(false);
+            match result {
+                Ok(_) => {
+                    saved.set(input);
+                    instrument_status.set(Some(Ok("Saved".into())));
+                    onchange.call(());
+                    let mine = generation() + 1;
+                    generation.set(mine);
+                    gloo_timers::future::TimeoutFuture::new(2500).await;
+                    if generation() == mine {
+                        instrument_status.set(None);
+                    }
+                }
+                Err(e) => {
+                    selected.set(before);
+                    generation.set(generation() + 1);
+                    instrument_status.set(Some(Err(e.message)));
+                }
+            }
+        });
     };
     let delete = move |_| async move {
         if !confirm("Delete this part? Everyone's annotations on it are deleted too.") {
@@ -211,7 +271,9 @@ pub fn PartEditor(
                 label { class: "short", "Key"
                     input { placeholder: "Bb", value: "{transposition}", oninput: move |e| transposition.set(e.value()) } }
             }
-            InstrumentChecks { instruments: instruments.clone(), selected }
+            div { class: "field-label", "Instruments (saved right away)" }
+            InstrumentPicker { instruments: instruments.clone(), selected, onsave: save_instruments,
+                busy: instrument_busy(), status: instrument_status() }
             div { class: "part-file",
                 match &part.file {
                     Some(f) => rsx! {
@@ -341,7 +403,7 @@ pub fn NewPartForm(score_id: i64, instruments: Vec<Instrument>, onstate: EventHa
                     input { placeholder: "Bb", value: "{transposition}", oninput: move |e| transposition.set(e.value()) } }
             }
             div { class: "field-label", "Instruments" }
-            InstrumentChecks { instruments: instruments.clone(), selected }
+            InstrumentPicker { instruments: instruments.clone(), selected }
             div { class: "part-file",
                 label { class: "button",
                     if file_name.is_some() { "Choose another PDF…" } else { "Choose PDF…" }

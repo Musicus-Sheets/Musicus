@@ -6,6 +6,7 @@ mod api;
 mod bridge;
 mod ink;
 mod pages;
+mod picker;
 mod ui;
 
 use dioxus::prelude::*;

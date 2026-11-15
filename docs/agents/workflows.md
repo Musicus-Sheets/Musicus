@@ -12,7 +12,7 @@ cargo clippy -p musicus-web --target wasm32-unknown-unknown
 dx build --platform web --package musicus-web            # debug → target/dx/musicus-web/debug/web/public
 dx bundle --platform web --package musicus-web --release # release (needs wasm-opt)
 cargo run -p musicus-server -- serve --data-dir /tmp/m --web-dir target/dx/musicus-web/debug/web/public --insecure-cookies
-node e2e/smoke.mjs <admin-invite-url-from-log> some.pdf /tmp/shots   # fresh data dir required
+node e2e/smoke.mjs <admin-invite-url-from-log> some.pdf /tmp/shots   # fresh data dir required; BROWSER=firefox for Firefox
 python3 docs/agents/check.py [--since <ref>]
 uv run docs/requirements/tools/validate.py
 docker compose up -d --build

@@ -1,8 +1,10 @@
 //! Groups and what they may read: admins create groups and set their
 //! members, librarians and admins set the granted instruments and scores.
+//! Each list is an assignment picker saved immediately (a-assign-picker).
 
 use crate::{
     api,
+    picker::{AssignList, Choice},
     ui::{ErrorBox, Loading, NoAccess, Status, can_manage, confirm, is_admin},
 };
 use dioxus::prelude::*;
@@ -102,28 +104,7 @@ fn GroupEditor(
     ondelete: EventHandler<()>,
 ) -> Element {
     let id = group.id;
-    let members = use_signal(|| group.member_ids.clone());
-    let granted_instruments = use_signal(|| group.instrument_ids.clone());
-    let granted_scores = use_signal(|| group.score_ids.clone());
-    let mut score_filter = use_signal(String::new);
     let mut message = use_signal(|| None::<Result<String, String>>);
-
-    let save = move |_| async move {
-        let result = async {
-            if is_admin {
-                api::put::<_, Group>(&format!("/api/groups/{id}/members"), &IdList { ids: members() }).await?;
-            }
-            api::put::<_, Group>(
-                &format!("/api/groups/{id}/instrument-grants"),
-                &IdList { ids: granted_instruments() },
-            )
-            .await?;
-            api::put::<_, Group>(&format!("/api/groups/{id}/score-grants"), &IdList { ids: granted_scores() }).await
-        }
-        .await;
-        message.set(Some(result.map(|_| "Saved".into()).map_err(|e| e.message)));
-        onchange.call(());
-    };
     let delete = move |_| async move {
         if confirm("Delete this group? Its members lose the access it granted.") {
             match api::call(Method::DELETE, &format!("/api/groups/{id}")).await {
@@ -132,60 +113,135 @@ fn GroupEditor(
             }
         }
     };
-    let toggle = |mut list: Signal<Vec<i64>>, item: i64| {
-        move |e: FormEvent| {
-            let mut l = list.write();
-            l.retain(|x| *x != item);
-            if e.checked() {
-                l.push(item);
-            }
-        }
-    };
-    let needle = score_filter().to_lowercase();
+    let people: Vec<Choice> =
+        users.iter().map(|u| Choice::new(u.id, u.display_name.clone(), u.username.clone(), "")).collect();
+    let instrument_choices: Vec<Choice> = instruments
+        .iter()
+        .map(|i| Choice::new(i.id, i.name.clone(), i.family.clone().unwrap_or_default(), ""))
+        .collect();
+    let score_choices: Vec<Choice> = scores
+        .iter()
+        .map(|s| {
+            let extra =
+                [s.subtitle.as_deref(), s.arranger.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" ");
+            Choice::new(s.id, s.title.clone(), s.composer.clone().unwrap_or_default(), &extra)
+        })
+        .collect();
     rsx! {
         section { class: "card",
             h2 { "{group.name}" }
             p { class: "muted small",
-                "Members can read every part tagged with a granted instrument, plus every part of a granted score."
+                "Members can read every part tagged with a granted instrument, plus every part of a granted score. "
+                "Changes are saved right away."
             }
             if is_admin {
                 h3 { "Members" }
-                div { class: "checks",
-                    for u in users.iter() {
-                        label { key: "{u.id}", class: "check",
-                            input { r#type: "checkbox", checked: members.read().contains(&u.id), onchange: toggle(members, u.id) }
-                            "{u.display_name}"
-                        }
-                    }
+                SavedList {
+                    path: format!("/api/groups/{id}/members"),
+                    initial: group.member_ids.clone(),
+                    options: people,
+                    add_label: "+ Add members",
+                    empty: "No members yet.",
+                    placeholder: "Search name or username…",
+                    onchange,
                 }
             }
             h3 { "Instruments" }
-            div { class: "checks",
-                for i in instruments.iter() {
-                    label { key: "{i.id}", class: "check",
-                        input { r#type: "checkbox", checked: granted_instruments.read().contains(&i.id), onchange: toggle(granted_instruments, i.id) }
-                        "{i.name}"
-                    }
-                }
+            SavedList {
+                path: format!("/api/groups/{id}/instrument-grants"),
+                initial: group.instrument_ids.clone(),
+                options: instrument_choices,
+                add_label: "+ Add instruments",
+                empty: "No instruments granted yet.",
+                placeholder: "Search instrument or family…",
+                onchange,
             }
             h3 { "Whole scores (e.g. for the conductor)" }
-            input { class: "search", r#type: "search", placeholder: "Filter scores…", value: "{score_filter}",
-                oninput: move |e| score_filter.set(e.value()) }
-            div { class: "checks scroll",
-                for s in scores.iter().filter(|s| needle.is_empty() || s.title.to_lowercase().contains(&needle) || granted_scores.read().contains(&s.id)) {
-                    label { key: "{s.id}", class: "check",
-                        input { r#type: "checkbox", checked: granted_scores.read().contains(&s.id), onchange: toggle(granted_scores, s.id) }
-                        "{s.title}"
-                    }
-                }
+            SavedList {
+                path: format!("/api/groups/{id}/score-grants"),
+                initial: group.score_ids.clone(),
+                options: score_choices,
+                add_label: "+ Add scores",
+                empty: "No whole scores granted.",
+                placeholder: "Search title or composer…",
+                onchange,
             }
-            div { class: "actions",
-                button { class: "primary", onclick: save, "Save" }
-                Status { status: message() }
-                if is_admin {
+            if is_admin {
+                div { class: "actions",
+                    Status { status: message() }
+                    span { class: "grow" }
                     button { class: "danger", onclick: delete, "Delete group" }
                 }
+            } else if message().is_some() {
+                Status { status: message() }
             }
+        }
+    }
+}
+
+/// One assignment list of a group, saved with `PUT path {ids}` as soon as
+/// the picker closes or an entry is removed; restored when saving fails.
+#[component]
+fn SavedList(
+    path: String,
+    initial: Vec<i64>,
+    options: Vec<Choice>,
+    add_label: String,
+    empty: String,
+    placeholder: String,
+    onchange: EventHandler<()>,
+) -> Element {
+    let mut ids = use_signal(|| initial.clone());
+    let mut busy = use_signal(|| false);
+    let mut status = use_signal(|| None::<Result<String, String>>);
+    let path = use_signal(|| path.clone());
+    let mut generation = use_signal(|| 0u32);
+    let store = use_callback(move |next: Vec<i64>| {
+        let before = ids();
+        ids.set(next.clone());
+        busy.set(true);
+        generation.set(generation() + 1);
+        status.set(Some(Ok("Saving…".into())));
+        spawn(async move {
+            let result = api::put::<_, Group>(&path(), &IdList { ids: next }).await;
+            busy.set(false);
+            match result {
+                Ok(_) => {
+                    status.set(Some(Ok("Saved".into())));
+                    onchange.call(());
+                    let mine = generation() + 1;
+                    generation.set(mine);
+                    gloo_timers::future::TimeoutFuture::new(2500).await;
+                    if generation() == mine {
+                        status.set(None);
+                    }
+                }
+                Err(e) => {
+                    ids.set(before);
+                    generation.set(generation() + 1);
+                    status.set(Some(Err(e.message)));
+                }
+            }
+        });
+    });
+    rsx! {
+        AssignList {
+            options,
+            assigned: ids(),
+            add_label,
+            empty,
+            placeholder,
+            busy: busy(),
+            status: status(),
+            onadd: move |added: Vec<i64>| {
+                let mut next = ids();
+                next.extend(added.into_iter().filter(|a| !next.contains(a)).collect::<Vec<_>>());
+                store.call(next);
+            },
+            onremove: move |gone: i64| {
+                let next = ids().into_iter().filter(|x| *x != gone).collect();
+                store.call(next);
+            },
         }
     }
 }

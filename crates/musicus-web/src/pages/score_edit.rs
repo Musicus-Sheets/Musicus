@@ -109,7 +109,7 @@ pub fn NewScore() -> Element {
                 section { class: "card",
                     h2 { "Parts of “{s.title}”" }
                     p { class: "muted small",
-                        "Add one part per sheet, e.g. “1st Trumpet in Bb”. Tick the instruments it is for: "
+                        "Add one part per sheet, e.g. “1st Trumpet in Bb”. Add the instruments it is for: "
                         "groups get access by instrument."
                     }
                     if rows.read().is_empty() {
