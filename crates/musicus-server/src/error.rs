@@ -87,12 +87,19 @@ impl From<sqlx::Error> for AppError {
             sqlx::Error::Database(db) if db.is_unique_violation() => {
                 AppError::Conflict("an entry with this name already exists".into())
             }
-            sqlx::Error::Database(db) if db.is_foreign_key_violation() => {
+            sqlx::Error::Database(db) if db.is_foreign_key_violation() || is_restrict_violation(db.as_ref()) => {
                 AppError::Conflict("the entry is still in use or refers to something that does not exist".into())
             }
             _ => AppError::internal(e),
         }
     }
+}
+
+/// SQLite reports a failed `ON DELETE RESTRICT` (e.g. deleting an instrument
+/// that parts still use) as `SQLITE_CONSTRAINT_TRIGGER` (extended code 1811),
+/// which sqlx does not classify as a foreign key violation.
+fn is_restrict_violation(db: &dyn sqlx::error::DatabaseError) -> bool {
+    db.code().as_deref() == Some("1811") && db.message().contains("FOREIGN KEY")
 }
 
 impl From<std::io::Error> for AppError {

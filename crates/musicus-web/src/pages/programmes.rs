@@ -1,10 +1,11 @@
 //! Concert programmes. Opening one downloads all its sheets into memory, so
-//! turning to the next piece on stage needs no network.
+//! turning to the next piece on stage needs no network. Librarians and admins
+//! also get "New programme" and "Edit" (editor in `programme_edit.rs`).
 
 use crate::{
     Route, api, bridge,
     pages::library::ScoreCard,
-    ui::{ErrorBox, Loading, format_date},
+    ui::{ErrorBox, Loading, can_manage, format_date},
 };
 use dioxus::prelude::*;
 use musicus_api::{Instrument, Programme, ProgrammeSummary};
@@ -12,14 +13,27 @@ use std::collections::HashMap;
 
 #[component]
 pub fn Programmes() -> Element {
+    let manage = can_manage();
     let list = use_resource(|| api::get::<Vec<ProgrammeSummary>>("/api/programmes"));
     rsx! {
         main {
-            div { class: "page-head", h1 { "Programmes" } }
+            div { class: "page-head",
+                h1 { "Programmes" }
+                if manage {
+                    Link { class: "button primary add", to: Route::NewProgramme {},
+                        span { class: "plus", "aria-hidden": "true", "+" }
+                        "New programme"
+                    }
+                }
+            }
             match &*list.read() {
                 None => rsx! { Loading {} },
                 Some(Err(e)) => rsx! { ErrorBox { message: e.message.clone() } },
-                Some(Ok(items)) if items.is_empty() => rsx! { p { class: "muted", "No programmes yet." } },
+                Some(Ok(items)) if items.is_empty() => rsx! {
+                    p { class: "muted",
+                        if manage { "No programmes yet. Plan the first concert with “+ New programme”." } else { "No programmes yet." }
+                    }
+                },
                 Some(Ok(items)) => rsx! {
                     ul { class: "programme-list",
                         for p in items.iter() {
@@ -58,6 +72,7 @@ pub fn programme_urls(p: &Programme) -> Vec<String> {
 
 #[component]
 pub fn ProgrammeView(id: i64) -> Element {
+    let manage = can_manage();
     let programme = use_resource(move || async move { api::get::<Programme>(&format!("/api/programmes/{id}")).await });
     let instruments = use_resource(|| api::get::<Vec<Instrument>>("/api/instruments"));
     let mut loaded = use_signal(|| 0usize);
@@ -102,21 +117,31 @@ pub fn ProgrammeView(id: i64) -> Element {
                             h1 { "{p.title}" }
                             if let Some(d) = &p.date { p { class: "muted", "{format_date(d)}" } }
                         }
-                        div { class: "prefetch",
-                            if total() == 0 {
-                                span { class: "muted", "No sheets to download." }
-                            } else if loaded() == total() {
-                                span { class: "ok", "✓ All {total()} sheets ready offline in this tab" }
-                            } else {
-                                progress { max: "{total()}", value: "{loaded()}" }
-                                span { class: "muted small", " Downloading {loaded()} / {total()}" }
+                        div { class: "head-tools",
+                            div { class: "prefetch",
+                                if total() == 0 {
+                                    span { class: "muted", "No sheets to download." }
+                                } else if loaded() == total() {
+                                    span { class: "ok", "✓ All {total()} sheets ready offline in this tab" }
+                                } else {
+                                    progress { max: "{total()}", value: "{loaded()}" }
+                                    span { class: "muted small", " Downloading {loaded()} / {total()}" }
+                                }
+                                if failed() > 0 {
+                                    span { class: "error-text", " {failed()} failed" }
+                                }
                             }
-                            if failed() > 0 {
-                                span { class: "error-text", " {failed()} failed" }
+                            if manage {
+                                Link { class: "button edit", to: Route::EditProgramme { id }, span { class: "glyph", "aria-hidden": "true", "✎" } "Edit" }
                             }
                         }
                     }
                     if let Some(n) = &p.notes { p { class: "notes", "{n}" } }
+                    if p.items.is_empty() {
+                        p { class: "muted",
+                            if manage { "No pieces yet. Add them with “Edit”." } else { "No pieces yet." }
+                        }
+                    }
                     div { class: "score-list",
                         for item in p.items.iter() {
                             div { key: "{item.position}", class: "programme-item",

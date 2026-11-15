@@ -11,7 +11,7 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | Requirement(s) | Topic | Notes for implementers |
 | --- | --- | --- |
 | R-ACL-005, R-ACL-006 | grants per voice / per programme / expiry | extend `part_visible!()` (d-access); new tables + migration |
-| R-LIB-007 | extended score metadata | migration + `ScoreInput`/`Score` + manage form + FTS columns if searchable |
+| R-LIB-007 | extended score metadata | migration + `ScoreInput`/`Score` + `pages/forms.rs::ScoreFields` + FTS columns if searchable |
 | R-FILE-008 | MusicXML | new processor in `processors.rs`; `sniff_mime`; annotations need musical anchors (not page coords) — design first |
 | R-FILE-009 | GC of unreferenced blobs | must respect backup consistency (grace period), conflicts with R-FILE-004 resolved by "unreferenced only" |
 | R-READ-007, R-READ-008 | half-page turns, conductor push | conductor push needs server push (SSE/WebSocket) — new component, ask user |
@@ -38,9 +38,9 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 
 ## Verification gaps (implemented but not covered by automated tests)
 
-- Session expiry/sliding (R-ACC-005), reinvite (R-ACC-010), instrument deletion conflict (R-LIB-003), security headers (R-SEC-005), backup command (R-OPS-005), graceful shutdown (R-OPS-008), TLS (R-OPS-006).
+- Session expiry/sliding (R-ACC-005), reinvite (R-ACC-010), security headers (R-SEC-005), backup command (R-OPS-005), graceful shutdown (R-OPS-008), TLS (R-OPS-006).
 - Performance requirements R-PERF-001/003/005/006 verified only by prototype benchmarks in `prototypes/` and a manual RSS measurement (≈11 MB idle).
-- Client features without e2e coverage: eraser/stamps/text/undo (R-ANN-002, R-ANN-003), palm rejection (R-ANN-004), sets menu actions, migration banner, wake lock, fullscreen, programme next/previous navigation (R-READ-005), manage pages beyond the smoke flow.
+- Client features without e2e coverage: eraser/stamps/text/undo (R-ANN-002, R-ANN-003), palm rejection (R-ANN-004), sets menu actions, migration banner, wake lock, fullscreen, programme next/previous navigation (R-READ-005); deleting pieces/parts/programmes/groups from the UI, user role changes and disable/enable (API-tested only).
 - arm64 (Raspberry Pi) build not tested; Caddy HTTPS profile not tested end to end; release wasm with current wasm-opt not tested in CI.
 - No CI for Rust build/tests yet (only `.github/workflows/agent-docs.yml`).
 
@@ -50,5 +50,7 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 - `LoginLimiter` is in-memory: resets on restart, per process.
 - Pages whose PDF page count is unknown accept annotation pages 0..1999.
 - Client uses `window.prompt`/`confirm` for dialogs (no custom modal).
+- Uploads in the guided flow run in a task of the `NewPartForm` component; leaving the page via the navigation bar while one runs abandons waiting for it (`Finish` is disabled meanwhile). The browser usually completes the request anyway.
+- The programme editor adds pieces through a plain `<select>` of all scores (no search); fine for hundreds of pieces, clumsy for thousands.
 - `programmes.rs::futures_join` awaits sequentially (works only because prefetch is eager, a-eager-prefetch).
 - Thumbnails are blobs without a `files` row; never served except via their PDF's hash.

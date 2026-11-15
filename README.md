@@ -42,6 +42,12 @@ The requirements (goals, features, detailed requirements and their links)
 are the submodule `docs/requirements`; start with its `index.md`. After
 editing them, run `uv run docs/requirements/tools/validate.py`.
 
+The three documentation submodules track their `main` branch. A change to
+them is merged in its own repository first; afterwards
+`./scripts/update-submodules.sh` moves the pointers to the merge commits.
+The pull-request check `scripts/check-submodules.sh` ensures the main
+repository only references commits on the docs repositories' `main`.
+
 Coding agents start at `AGENTS.md`, which points to `docs/agents/`. That
 documentation must be updated in the same commit as every code change;
 `python3 docs/agents/check.py --since <base>` enforces it (also available as a

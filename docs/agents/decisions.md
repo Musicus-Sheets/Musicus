@@ -108,6 +108,12 @@ with the user's consent.
 - Serves: R-SEC-007, R-OPS-007, R-OPS-003.
 - If you change it: anything the container must do at runtime must be in the binary.
 
+### d-inline-management
+- Decision: no separate management area. Library, Programmes and Instruments are the same components for every role; they add controls (`+ Add piece`, `Edit` on pieces and parts, `+ New programme`, `Edit` on programmes, add/edit/delete instruments) when `ui::can_manage()`; editors live on their own routes (`/scores/new`, `/scores/:id/edit`, `/parts/:id/edit`, `/programmes/new`, `/programmes/:id/edit`). Groups (librarian/admin) and Users (admin) are their own tabs. `/manage…` redirects to `/`. Hiding controls is a convenience only: the server stays the authority for every role check (`require_librarian`/`require_admin`, `part_visible!()`); management pages show `ui::NoAccess` to other roles.
+- Why: the owner wants librarians to work where the music is ("go to the piece, click Edit") instead of in a parallel "Manage" tab; members see exactly the same views without the controls, so documentation and support cover one UI.
+- Serves: R-ACC-013, R-ACC-014, R-ACC-009, R-LIB-008, R-LIB-009.
+- If you change it: never rely on hidden controls for security (R-ACC-009 is enforced server side; keep the 403 tests). A new management action belongs next to the content it changes, gated by `can_manage()`/`is_admin()`; update `e2e/smoke.mjs` (member/librarian control checks) and the user guide.
+
 ### a-workspace-members
 - Decision: `musicus-web` is a workspace member but not in `default-members`.
 - Why: it only compiles for wasm32; plain `cargo build/test/clippy` must work for server + api.
@@ -149,3 +155,9 @@ with the user's consent.
 - Why: discards all in-memory state of the previous session (sheets, annotations).
 - Serves: R-SEC-001, R-ACC-008.
 - If you change it: keep in-memory data from surviving a session change.
+
+### a-submodule-pins
+- Decision: the docs (requirements, technical docs, user guide) are separate repositories used as submodules with `branch = main` in `.gitmodules`. A main-repo pull request may only be merged when every submodule pointer is a commit on the first-parent history of the docs repo's `main` (`scripts/check-submodules.sh`, workflow `Submodules`, required check `pinned`). Order: merge the docs pull requests (merge commit or squash), then `./scripts/update-submodules.sh`, commit, push, then merge the main pull request.
+- Why: the main repository must reference documentation that is actually on the docs `main`, and exactly the merge commits created there (the user's rule), not the feature-branch tips (the merge commits' second parents), which only exist as long as their branches do.
+- Serves: no product requirement; documentation integrity (AGENTS.md maintenance rules).
+- If you change it: keep the check a required status check; with a new submodule add `branch = main` to `.gitmodules`.

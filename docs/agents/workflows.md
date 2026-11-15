@@ -4,7 +4,7 @@
 
 ```sh
 cargo build                       # api + server (web excluded from default-members)
-cargo test                        # 8 api unit, 10 server unit, 6 API integration tests
+cargo test                        # 8 api unit, 10 server unit, 7 API integration tests
 cargo clippy --all-targets        # must be warning-free
 cargo fmt --check                 # rustfmt.toml: max_width 120
 cargo clippy -p musicus-web --target wasm32-unknown-unknown
@@ -41,6 +41,13 @@ Toolchain: Rust ≥ 1.88 (edition 2024, let-chains used), target `wasm32-unknown
 5. Client call via `crates/musicus-web/src/api.rs` helpers.
 6. Docs: `server.md` endpoint table, `api-and-ink.md` if new conventions, `code-map.md`, requirement file(s) (`implemented_by`, `verified_by`, status).
 
+### Change documentation in a submodule (docs/requirements, docs/technical, docs/user-guide)
+1. In the submodule: `git switch -c <branch>`, commit, push, open a pull request in that repository.
+2. In the main repo: commit the new pointer on your branch (CI check `pinned` stays red for now; that is intended).
+3. After the docs pull requests are merged into their `main`: `./scripts/update-submodules.sh`, commit
+   ("Point submodules to merged docs"), push. `./scripts/check-submodules.sh` must now pass.
+4. Merge the main pull request last. (a-submodule-pins)
+
 ### Change the schema
 New `crates/musicus-server/migrations/000N_<desc>.sql` (never edit applied ones); update `data-model.md`; update queries; tests.
 
@@ -58,6 +65,7 @@ Read the entry in `decisions.md` (Serves / If you change it). If a served requir
 - [ ] `cargo test`, `cargo clippy --all-targets`, `cargo fmt --check` clean; web clippy clean if client touched.
 - [ ] Client changes: built with `dx build` and exercised (ideally `e2e/smoke.mjs`).
 - [ ] `docs/agents/*` describe the new state; `python3 docs/agents/check.py --since <base>` passes.
-- [ ] Requirements updated and validated; submodule commits pushed before the main repo.
+- [ ] Requirements updated and validated; docs submodule pull requests merged first, then pointers updated with
+      `./scripts/update-submodules.sh` so that `./scripts/check-submodules.sh` passes.
 - [ ] User-visible change: `docs/user-guide` text and screenshots updated (or user told).
 - [ ] Commit message explains why; mentions requirement IDs.

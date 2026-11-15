@@ -1,5 +1,6 @@
-//! Musicus web client: library, concert programmes, the sheet reader with
-//! private annotations, and the management pages for librarians and admins.
+//! Musicus web client: library, concert programmes, instruments, the sheet
+//! reader with private annotations. Librarians and admins manage the music in
+//! the same views (extra buttons), admins also groups and users.
 
 mod api;
 mod bridge;
@@ -11,10 +12,14 @@ use dioxus::prelude::*;
 use musicus_api::CurrentUser;
 use pages::{
     account::Account,
+    groups::Groups,
+    instruments::Instruments,
     library::Library,
     login::{Invite, Login},
-    manage::{Manage, ManageGroups, ManageProgramme, ManageScore, ManageUsers},
+    programme_edit::{EditProgramme, NewProgramme},
     programmes::{ProgrammeView, Programmes},
+    score_edit::{EditPart, EditScore, NewScore},
+    users::Users,
     viewer::{ProgrammeViewer, Viewer},
 };
 use ui::Shell;
@@ -35,23 +40,32 @@ pub enum Route {
     #[layout(Shell)]
         #[route("/")]
         Library {},
+        #[route("/scores/new")]
+        NewScore {},
+        #[route("/scores/:id/edit")]
+        EditScore { id: i64 },
+        #[route("/parts/:id/edit")]
+        EditPart { id: i64 },
         #[route("/programmes")]
         Programmes {},
+        #[route("/programmes/new")]
+        NewProgramme {},
         #[route("/programmes/:id")]
         ProgrammeView { id: i64 },
+        #[route("/programmes/:id/edit")]
+        EditProgramme { id: i64 },
+        #[route("/instruments")]
+        Instruments {},
+        #[route("/groups")]
+        Groups {},
+        #[route("/users")]
+        Users {},
         #[route("/account")]
         Account {},
-        #[route("/manage")]
-        Manage {},
-        #[route("/manage/scores/:id")]
-        ManageScore { id: i64 },
-        #[route("/manage/programmes/:id")]
-        ManageProgramme { id: i64 },
-        #[route("/manage/groups")]
-        ManageGroups {},
-        #[route("/manage/users")]
-        ManageUsers {},
     #[end_layout]
+    // Old bookmarks of the former management area.
+    #[redirect("/manage", || Route::Library {})]
+    #[redirect("/manage/:..segments", |segments: Vec<String>| { let _ = segments; Route::Library {} })]
     #[route("/:..segments")]
     NotFound { segments: Vec<String> },
 }
