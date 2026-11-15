@@ -1,0 +1,4 @@
+#!/bin/sh
+# Enable with: git config core.hooksPath .githooks
+# Fails the commit if code changes are staged without an update of docs/agents/.
+exec python3 docs/agents/check.py --staged

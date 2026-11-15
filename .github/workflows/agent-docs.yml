@@ -1,0 +1,21 @@
+name: Agent docs
+# Runs only for pull requests (not on every push). Make it a merge gate by
+# marking the job "check" as a required status check in the branch
+# protection rule / ruleset of the target branch.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Needs read access to the docs submodules (requirement IDs, decision labels).
+          submodules: recursive
+      - name: Check docs/agents
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: python3 docs/agents/check.py --since "$BASE"
