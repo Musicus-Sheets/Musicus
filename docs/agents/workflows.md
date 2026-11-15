@@ -48,6 +48,23 @@ Toolchain: Rust ≥ 1.88 (edition 2024, let-chains used), target `wasm32-unknown
    ("Point submodules to merged docs"), push. `./scripts/check-submodules.sh` must now pass.
 4. Merge the main pull request last. (a-submodule-pins)
 
+### Publish/test the user guide site
+Site: GitHub Pages of the main repository (`https://<owner>.github.io/Musicus/`), workflow `User guide site`
+(`.github/workflows/user-guide-pages.yml`), logic in `scripts/build-guide-site.sh` (a-guide-site).
+1. Release: publishing a GitHub release (not a prerelease, not a draft) rebuilds the whole site from all release
+   tags and deploys it; earlier test builds disappear. The guide of a release is the `docs/user-guide` commit pinned
+   in its tag, so update the guide (and its pointer) before tagging.
+2. Test build: Actions → `User guide site` → `Run workflow`, branch `main`, input `ref` = branch/tag/commit to
+   preview (empty = the selected branch). Result: all releases plus `/test-<ref>/`, marked "test build".
+3. Locally (needs `typst` 0.15.x, `python3`): `./scripts/build-guide-site.sh --out /tmp/site [--preview HEAD]`
+   builds every local tag (or `--releases FILE`, one tag per line); then `python3 -m http.server -d /tmp/site`.
+   Without tags, create temporary local ones (`git tag v0.1.0 <commit>`; delete them afterwards, do not push).
+4. One-time repository setup: Settings → Pages → Source `GitHub Actions`; Settings → Environments →
+   `github-pages` → deployment branches and tags: add the release tag pattern (e.g. `v*`) and any branch manual
+   runs start from (the default branch is allowed by default). Otherwise deploys from release tags are rejected.
+5. New Typst version: change `TYPST_VERSION`/`TYPST_SHA256` in the workflow (sha256 from the release asset) and
+   the version in `docs/user-guide/README.md`; run the script locally over all tags first.
+
 ### Change the schema
 New `crates/musicus-server/migrations/000N_<desc>.sql` (never edit applied ones); update `data-model.md`; update queries; tests.
 
