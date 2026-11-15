@@ -29,13 +29,13 @@ The user guide (installation, and how admins, librarians and musicians use
 Musicus) is the submodule `docs/user-guide`; build it with
 `docs/user-guide/build.sh` (HTML and PDF).
 
-
 The technical documentation (architecture, components, design decisions) is
-the submodule `docs/technical`, written in Typst:
+the submodule `docs/technical`, written in Typst; build it with
+`docs/technical/build.sh` (PDF, the main format, and HTML):
 
 ```sh
 git submodule update --init
-typst compile docs/technical/main.typ musicus-technical.pdf
+docs/technical/build.sh      # → docs/technical/out/musicus-technical.pdf and .html
 ```
 
 The requirements (goals, features, detailed requirements and their links)
