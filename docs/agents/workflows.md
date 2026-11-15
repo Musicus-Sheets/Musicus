@@ -4,7 +4,7 @@
 
 ```sh
 cargo build                       # api + server (web excluded from default-members)
-cargo test                        # 8 api unit, 10 server unit, 6 API integration tests
+cargo test                        # 8 api unit, 10 server unit, 7 API integration tests
 cargo clippy --all-targets        # must be warning-free
 cargo fmt --check                 # rustfmt.toml: max_width 120
 cargo clippy -p musicus-web --target wasm32-unknown-unknown

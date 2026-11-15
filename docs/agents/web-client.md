@@ -10,17 +10,30 @@ Dioxus 0.7.10, features `web` + `router`; compiled to wasm32 by `dx`; assets `as
 | `/invite/:token` | `pages::login::Invite` | none | GET info, POST password; sets `Session.user` |
 | `/parts/:id` | `pages::viewer::Viewer` | none (full screen) | reader without programme |
 | `/programmes/:pid/parts/:id` | `pages::viewer::ProgrammeViewer` | none | reader with prev/next piece |
-| `/` | `pages::library::Library` | `ui::Shell` | |
-| `/programmes`, `/programmes/:id` | `pages::programmes::{Programmes, ProgrammeView}` | Shell | ProgrammeView prefetches |
+| `/` | `pages::library::Library` | `ui::Shell` | librarian/admin: `+ Add piece`, `Edit` per piece and part |
+| `/scores/new` | `pages::score_edit::NewScore` | Shell | guided flow (L) |
+| `/scores/:id/edit` | `pages::score_edit::EditScore` | Shell | edit piece (L) |
+| `/parts/:id/edit` | `pages::score_edit::EditPart` | Shell | edit one part (L) |
+| `/programmes`, `/programmes/:id` | `pages::programmes::{Programmes, ProgrammeView}` | Shell | ProgrammeView prefetches; L: `+ New programme`, `Edit` |
+| `/programmes/new`, `/programmes/:id/edit` | `pages::programme_edit::{NewProgramme, EditProgramme}` | Shell | (L) |
+| `/instruments` | `pages::instruments::Instruments` | Shell | everyone reads; L adds/edits/deletes |
+| `/groups` | `pages::groups::Groups` | Shell | (L); members of a group only editable by admins |
+| `/users` | `pages::users::Users` | Shell | (A) |
 | `/account` | `pages::account::Account` | Shell | |
-| `/manage`, `/manage/scores/:id`, `/manage/programmes/:id`, `/manage/groups`, `/manage/users` | `pages::manage::*` | Shell | UI shown for librarian/admin; server enforces |
+| `/manage`, `/manage/:..segments` | redirect → `/` | — | old bookmarks of the removed Manage area |
 | `/:..segments` | `NotFound` | none | |
+
+(L) = page shown to librarians/admins only, (A) = admins only; others get `ui::NoAccess`. These are UI conveniences: the
+server checks every request (d-inline-management). Static segments (`new`) win over `:id` in the router.
+
+Navigation (`ui::Shell`): `Library`, `Programmes`, `Instruments` for all; `Groups` for librarian/admin; `Users` for admin;
+then the display name (account) and `Log out`. Links use `active_class: "active"`.
 
 Server serves `index.html` for any non-`/api` path, so deep links work.
 
 ## Session (`main.rs`)
 
-`Session {user: Signal<Option<CurrentUser>>, checked: Signal<bool>}` context. `App` calls `GET /api/auth/me` once. `ui::Shell` redirects to `/login` when `checked && user.is_none()`. Logout = `POST /api/auth/logout` then `user = None`. Any 401 elsewhere ⇒ `api::session_lost` ⇒ `location.href = "/login"` (a-unauthorized-reload).
+`Session {user: Signal<Option<CurrentUser>>, checked: Signal<bool>}` context. Role helpers (not hooks, usable anywhere in a component): `ui::current_role()`, `ui::can_manage()` (librarian/admin), `ui::is_admin()`. `App` calls `GET /api/auth/me` once. `ui::Shell` redirects to `/login` when `checked && user.is_none()`. Logout = `POST /api/auth/logout` then `user = None`. Any 401 elsewhere ⇒ `api::session_lost` ⇒ `location.href = "/login"` (a-unauthorized-reload).
 
 ## HTTP (`api.rs`)
 
@@ -47,10 +60,18 @@ pdf.js URLs: `/vendor/pdfjs/pdf.min.mjs` + worker `/vendor/pdfjs/pdf.worker.min.
 
 ## Pages
 
-- `library.rs`: `GET /api/scores[?q=]` (150 ms debounce via `gloo_timers`), `GET /api/instruments` for names; `ScoreCard` + `PartTile` (thumbnail if `has_thumbnail`); `part_route(part, programme)`.
-- `programmes.rs`: list; `ProgrammeView` loads programme, `programme_urls` (unique file URLs in concert order), `bridge::retain_only(urls)`, prefetch chunks of 3, progress `loaded/total/failed` (R-PROG-003, R-PROG-004).
+Management happens in the normal views (d-inline-management): the same components render for every role and add
+controls when `ui::can_manage()` / `ui::is_admin()`; members get exactly the member pages.
+
+- `library.rs`: `GET /api/scores[?q=]` (150 ms debounce via `gloo_timers`), `GET /api/instruments` for names; `ScoreCard` (id `score-<id>`; L: `Edit` link + warning tags "no parts yet" / "n parts without PDF") + `PartTile` (L: wrapped in `.part-cell` with an `Edit` link under the `PartLink` tile; tile = thumbnail if `has_thumbnail`); `part_route(part, programme)`. `FOCUS_SCORE: GlobalSignal<Option<i64>>` (memory only) is set by the editors before returning to `/`; `Library` takes it once on mount, highlights that card (`.score.focus`) and scrolls it into view via `document::eval`.
+- `programmes.rs`: list (L: `+ New programme`); `ProgrammeView` (L: `Edit`) loads programme, `programme_urls` (unique file URLs in concert order), `bridge::retain_only(urls)`, prefetch chunks of 3, progress `loaded/total/failed` (R-PROG-003, R-PROG-004).
+- `forms.rs` (shared by the editors): `ScoreDraft` (form state, `to_input` trims/empties → `None`, tags split at commas) + `ScoreFields`; `InstrumentChecks`; `upload_pdf(part, FileData)` (`read_bytes()` → `api::upload`); `PartEditor` (label/voice/key/instruments → `PUT /api/parts/{id}`; upload/replace PDF; version list from `GET /api/parts/{id}/versions` in a `<details>`, shown when >1 version or `versions_open`; delete with confirm); `NewPartForm` (creates the part, then uploads the chosen PDF in a `spawn`ed task so the next part can be typed meanwhile; reports `(Part, Upload)` via `onstate`; `Upload = NoFile | Running(name) | Done(FileVersion) | Failed(msg)`); `AddedParts` (rows with upload state).
+- `score_edit.rs`: `NewScore` (step 1 `ScoreFields` → POST score (PUT when going back and forth); step 2 `AddedParts` + `NewPartForm`; `Finish` disabled while uploads run → `FOCUS_SCORE` + `/`; step indicator `Steps`), `EditScore` (details save, `PartEditor` per part, `NewPartForm`, delete piece with confirm "everyone's annotations are deleted"), `EditPart` (loads part + score; `PartEditor` with versions open; delete → `/scores/:id/edit`).
+- `programme_edit.rs`: `ProgrammeEditor{id: Option}` behind `NewProgramme`/`EditProgramme`: title/date/notes, ordered items (↑ ↓ ×, add via select), save = POST or PUT + `PUT …/items` (a `created` signal prevents a second POST on retry) → programme view; delete → `/programmes`.
+- `instruments.rs`: list grouped by family (`by_family`, "Other" last); L: add form (family `datalist`), `InstrumentRow` inline edit (`PUT`) and delete (409 ⇒ "cannot be deleted because parts still use it").
+- `groups.rs`: `Groups` + `GroupEditor` (members only if admin; instruments; score grants with filter; create/delete group only admin).
+- `users.rs`: `Users` + `UserRow` (create → invite link shown + copy; role select; disable/enable; new invite).
 - `login.rs`, `account.rs`: forms over auth endpoints.
-- `manage.rs`: `Manage` (score list + create, programme list + create, `Instruments`), `ManageScore` (metadata form, `PartEditor` per part: label/voice/transposition/instrument checkboxes, file upload via `FormEvent::files()` → `read_bytes()` → `api::upload`), `ManageProgramme` (ordered items with ↑↓×, add via select), `ManageGroups` + `GroupEditor` (members only if admin; instruments; score grants with filter), `ManageUsers` + `UserRow` (create → invite link shown + copy; role select; disable/enable; new invite).
 
 ## Reader (`pages/viewer.rs`) — most complex unit
 

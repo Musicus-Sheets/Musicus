@@ -555,3 +555,45 @@ async fn user_administration() {
     assert_eq!(sessions.len(), 1);
     assert!(sessions[0].current);
 }
+
+#[tokio::test]
+async fn instruments_are_listed_for_everyone_and_kept_while_in_use() {
+    let s = Server::start().await;
+    let lib = library(&s).await;
+
+    // Every user sees the list with families (the Instruments page).
+    let list: Vec<Instrument> = s.get("/api/instruments", &lib.anna).await.json();
+    let names: Vec<_> = list.iter().map(|i| (i.name.as_str(), i.family.as_deref())).collect();
+    assert_eq!(names, vec![("Flute", None), ("Trumpet", Some("Brass"))]);
+    let trumpet = list.iter().find(|i| i.name == "Trumpet").unwrap().id;
+    let flute = list.iter().find(|i| i.name == "Flute").unwrap().id;
+
+    // Only librarians and admins change it.
+    let body = json!({"name": "Horn", "family": "Brass"});
+    assert_eq!(s.json(Method::POST, "/api/instruments", &lib.anna, &body).await.status, StatusCode::FORBIDDEN);
+    let uri = format!("/api/instruments/{flute}");
+    assert_eq!(s.json(Method::PUT, &uri, &lib.anna, &body).await.status, StatusCode::FORBIDDEN);
+    let reply = s.send(Method::DELETE, &uri, Auth::Bearer(&lib.anna), &[], Body::empty()).await;
+    assert_eq!(reply.status, StatusCode::FORBIDDEN);
+
+    // Names are unique ignoring case.
+    let dup = s.json(Method::POST, "/api/instruments", &lib.admin, json!({"name": "trumpet"})).await;
+    assert_eq!(dup.status, StatusCode::CONFLICT);
+
+    // Rename and set the family.
+    let renamed: Instrument =
+        s.ok(Method::PUT, &uri, &lib.admin, json!({"name": "Flute / Piccolo", "family": "Woodwind"})).await;
+    assert_eq!((renamed.name.as_str(), renamed.family.as_deref()), ("Flute / Piccolo", Some("Woodwind")));
+
+    // An instrument used by a part cannot be deleted; an unused one can.
+    let used = format!("/api/instruments/{trumpet}");
+    let reply = s.send(Method::DELETE, &used, Auth::Bearer(&lib.admin), &[], Body::empty()).await;
+    assert_eq!(reply.status, StatusCode::CONFLICT);
+    let horn: Instrument = s.ok(Method::POST, "/api/instruments", &lib.admin, &body).await;
+    let reply = s
+        .send(Method::DELETE, &format!("/api/instruments/{}", horn.id), Auth::Bearer(&lib.admin), &[], Body::empty())
+        .await;
+    assert_eq!(reply.status, StatusCode::NO_CONTENT);
+    let list: Vec<Instrument> = s.get("/api/instruments", &lib.anna).await.json();
+    assert_eq!(list.len(), 2);
+}

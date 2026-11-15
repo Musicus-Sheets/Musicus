@@ -1,8 +1,25 @@
 //! Layout and small shared components.
 
-use crate::{Route, api, session};
+use crate::{Route, Session, api, session};
 use dioxus::prelude::*;
 use gloo_net::http::Method;
+use musicus_api::Role;
+
+/// Role of the logged-in user, if any. Not a hook: may be called anywhere in
+/// a component. The UI only uses it to show or hide management controls; the
+/// server checks every request itself (d-inline-management).
+pub fn current_role() -> Option<Role> {
+    try_consume_context::<Session>().and_then(|s| s.user.read().as_ref().map(|u| u.role))
+}
+
+/// Librarians and admins see the controls to add and edit music.
+pub fn can_manage() -> bool {
+    current_role().is_some_and(Role::can_manage_library)
+}
+
+pub fn is_admin() -> bool {
+    current_role().is_some_and(Role::is_admin)
+}
 
 /// Frame of all pages except the reader: navigation bar plus content. Sends
 /// visitors without a session to the login page.
@@ -34,12 +51,16 @@ pub fn Shell() -> Element {
                 "☰"
             }
             nav { class: if menu_open() { "open" } else { "" }, onclick: move |_| menu_open.set(false),
-                Link { to: Route::Library {}, "Library" }
-                Link { to: Route::Programmes {}, "Programmes" }
+                Link { to: Route::Library {}, active_class: "active", "Library" }
+                Link { to: Route::Programmes {}, active_class: "active", "Programmes" }
+                Link { to: Route::Instruments {}, active_class: "active", "Instruments" }
                 if user.role.can_manage_library() {
-                    Link { to: Route::Manage {}, "Manage" }
+                    Link { to: Route::Groups {}, active_class: "active", "Groups" }
                 }
-                Link { to: Route::Account {}, "{user.display_name}" }
+                if user.role.is_admin() {
+                    Link { to: Route::Users {}, active_class: "active", "Users" }
+                }
+                Link { to: Route::Account {}, active_class: "active", "{user.display_name}" }
                 button { class: "link", onclick: logout, "Log out" }
             }
         }
@@ -50,6 +71,28 @@ pub fn Shell() -> Element {
 #[component]
 pub fn ErrorBox(message: String) -> Element {
     rsx! { div { class: "error", role: "alert", "{message}" } }
+}
+
+/// Result line after saving: green on success, red on failure.
+#[component]
+pub fn Status(status: Option<Result<String, String>>) -> Element {
+    match status {
+        Some(Ok(m)) => rsx! { span { class: "ok", role: "status", "{m}" } },
+        Some(Err(m)) => rsx! { span { class: "error-text", role: "alert", "{m}" } },
+        None => rsx! {},
+    }
+}
+
+/// Shown instead of a management page to users whose role does not allow it.
+#[component]
+pub fn NoAccess() -> Element {
+    rsx! {
+        main { class: "narrow",
+            h1 { "Not available" }
+            p { class: "muted", "Your role does not include this page." }
+            Link { to: Route::Library {}, "Back to the library" }
+        }
+    }
 }
 
 #[component]
@@ -85,4 +128,15 @@ pub fn prompt(message: &str, default: &str) -> Option<String> {
         .and_then(|w| w.prompt_with_message_and_default(message, default).ok().flatten())
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
+}
+
+/// Trimmed text, `None` when empty.
+pub fn none_if_empty(s: String) -> Option<String> {
+    let t = s.trim();
+    if t.is_empty() { None } else { Some(t.to_owned()) }
+}
+
+/// Comma separated tags.
+pub fn tags_from(s: &str) -> Vec<String> {
+    s.split(',').map(str::trim).filter(|t| !t.is_empty()).map(str::to_owned).collect()
 }

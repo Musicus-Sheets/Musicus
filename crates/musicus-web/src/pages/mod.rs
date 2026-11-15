@@ -1,6 +1,11 @@
 pub mod account;
+pub mod forms;
+pub mod groups;
+pub mod instruments;
 pub mod library;
 pub mod login;
-pub mod manage;
+pub mod programme_edit;
 pub mod programmes;
+pub mod score_edit;
+pub mod users;
 pub mod viewer;

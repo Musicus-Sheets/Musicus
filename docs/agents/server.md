@@ -65,7 +65,7 @@ Auth column: `—` none, `U` any logged-in user, `L` librarian/admin, `A` admin.
 | POST | `/users/{id}/invite` | A | `users::reinvite` | disabled ⇒ 409; replaces invites | R-ACC-010 |
 | GET | `/instruments` | U | `groups::list_instruments` | all | — |
 | POST | `/instruments` | L | `groups::create_instrument` | name ≤80 unique (NOCASE) ⇒ 409 | R-LIB-003 |
-| PUT/DELETE | `/instruments/{id}` | L | `groups::update_instrument` / `delete_instrument` | delete in use ⇒ 409 (FK RESTRICT) | R-LIB-003 |
+| PUT/DELETE | `/instruments/{id}` | L | `groups::update_instrument` / `delete_instrument` | delete in use ⇒ 409 (FK RESTRICT, see Errors) | R-LIB-003 |
 | GET | `/groups` | L | `groups::list_groups` | `Vec<Group>` with member/instrument/score ids | R-ACL-004 |
 | POST | `/groups` | A | `groups::create_group` | | R-ACL-004 |
 | PUT/DELETE | `/groups/{id}` | A | `groups::rename_group` / `delete_group` | | R-ACL-004 |
@@ -102,7 +102,7 @@ Auth column: `—` none, `U` any logged-in user, `L` librarian/admin, `A` admin.
 ## Errors (`error.rs`)
 
 `AppError` variants → status/code: NotFound 404 `not_found`; Unauthorized 401; Forbidden 403; BadRequest 400; Conflict/ConflictWith 409 (ConflictWith sends a custom JSON body, used for `PageConflict`); Unprocessable 422; PayloadTooLarge 413; UnsupportedMediaType 415; PreconditionRequired 428; TooManyRequests 429; Internal 500 (logged, generic message, R-SEC-008).
-`From<sqlx::Error>`: RowNotFound → 404; unique violation → 409 "already exists"; FK violation → 409 "still in use…"; else 500.
+`From<sqlx::Error>`: RowNotFound → 404; unique violation → 409 "already exists"; FK violation → 409 "still in use…" (also `ON DELETE RESTRICT`, which SQLite reports as extended code 1811 `SQLITE_CONSTRAINT_TRIGGER` and sqlx does not classify: `is_restrict_violation`); else 500.
 `From<io::Error>` → 500. Validators: `required(field, value, max_chars)` (trim, non-empty), `optional(...)` (empty → None).
 
 ## Middleware (`routes::app`)
@@ -115,4 +115,4 @@ part exists? (404) → `blobs.receive(body, limit)` → read first 1 KiB → `sn
 
 ## Tests (`tests/api.rs`)
 
-`Server::start()` = temp dir + `open_state` + `bootstrap_admin` + `routes::app(state, None)`; `cookie_secure=false`. Helpers: `send`, `json`, `ok::<T>`, `login` (bearer), `accept_invite` (returns cookie), `admin()`, `member()`, `upload()`; `library()` fixture = instruments Trumpet/Flute, group Trumpets with anna, score with trumpet part (4 pages) + flute part (2 pages), both uploaded. `tiny_pdf(pages, tag)` builds valid PDFs. Tests: `login_sessions_and_csrf`, `members_only_reach_granted_parts`, `uploads_are_versioned_and_validated`, `annotations_are_private_versioned_and_conflict_checked`, `programmes_and_search`, `user_administration`.
+`Server::start()` = temp dir + `open_state` + `bootstrap_admin` + `routes::app(state, None)`; `cookie_secure=false`. Helpers: `send`, `json`, `ok::<T>`, `login` (bearer), `accept_invite` (returns cookie), `admin()`, `member()`, `upload()`; `library()` fixture = instruments Trumpet/Flute, group Trumpets with anna, score with trumpet part (4 pages) + flute part (2 pages), both uploaded. `tiny_pdf(pages, tag)` builds valid PDFs. Tests: `login_sessions_and_csrf`, `members_only_reach_granted_parts`, `uploads_are_versioned_and_validated`, `annotations_are_private_versioned_and_conflict_checked`, `programmes_and_search`, `user_administration`, `instruments_are_listed_for_everyone_and_kept_while_in_use`.
