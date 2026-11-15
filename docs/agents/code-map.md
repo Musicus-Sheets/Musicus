@@ -15,6 +15,7 @@ Columns: path | purpose | key symbols | requirements implemented | decisions.
 | `crates/musicus-web/Dioxus.toml` | `dx` app name/title | — | — | — |
 | `scripts/check-submodules.sh` | Merge gate: every submodule pointer must be on the first-parent history of the submodule's `branch` (main) — i.e. a merge commit on docs `main`, not a feature-branch commit. Clones each docs repo (blobless; HTTPS in CI) | — | — | a-submodule-pins |
 | `scripts/update-submodules.sh` | Moves all submodule pointers to the newest commit of their `main` and stages them | — | — | a-submodule-pins |
+| `scripts/build-guide-site.sh` | Builds the user-guide website: for each release tag (CI: published, non-draft, non-prerelease releases; locally: all tags) the user-guide commit named by the tag's `docs/user-guide` pointer, built with that commit's `build.sh` → `<tag>/index.html` (+PDF), `latest/`, `index.html` version list, `versions.json`; injects a version bar (link back to the list) after `<body>`; `--preview REF` adds a labelled test build `test-<ref>/`. Skips tags without user guide or failing builds with a warning; fails if the preview or every release fails. Uses the local submodule's objects if present, else fetches (HTTPS in CI) | `build_version`, `guide_source`, `--out`, `--releases`, `--preview` | — | a-guide-site |
 | `scripts/fetch-pdfjs.sh` | Downloads pinned pdfjs-dist 6.5.438 (sha512-checked), copies **legacy** build to `crates/musicus-web/public/vendor/pdfjs/` (gitignored) | `VERSION`, `INTEGRITY` | R-READ-006 | d-pdf-rendering |
 
 ## musicus-api (`crates/musicus-api/src`)
@@ -91,5 +92,6 @@ Columns: path | purpose | key symbols | requirements implemented | decisions.
 | `CLAUDE.md` | Imports `AGENTS.md` for Claude Code | — | — | — |
 | `.githooks/pre-commit` | Runs `docs/agents/check.py --staged` | — | — | — |
 | `.github/workflows/submodules.yml` | Merge gate (pull requests, merge queue): runs `scripts/check-submodules.sh`; required status check `pinned` | — | — | a-submodule-pins |
+| `.github/workflows/user-guide-pages.yml` | GitHub Pages deploy of the user-guide site on `release: published` (not prereleases) and `workflow_dispatch` (input `ref` → test build); installs pinned Typst (sha256-checked), lists releases with `gh release list`, runs `scripts/build-guide-site.sh`, `upload-pages-artifact` + `deploy-pages`; `concurrency` group `user-guide-pages` | `TYPST_VERSION`, `TYPST_SHA256` | — | a-guide-site |
 | `.github/workflows/agent-docs.yml` | CI merge gate: `check.py --since <PR base>` on pull requests and merge queue only (required status check `check`) | — | — | — |
 | `docs/agents/check.py` | This folder's consistency checker | — | — | — |

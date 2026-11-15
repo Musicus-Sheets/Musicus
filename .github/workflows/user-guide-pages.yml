@@ -1,0 +1,71 @@
+name: User guide site
+# Publishes the user guide of every release to GitHub Pages (a-guide-site):
+#   /                 list of all versions
+#   /<tag>/           guide of each release (HTML + PDF), /latest/ = newest release
+#   /test-<ref>/      manual runs only: test build of the chosen ref
+# Every run rebuilds the whole site from the release tags (scripts/build-guide-site.sh)
+# and replaces the deployed site, so a release run drops earlier test builds.
+# One-time setup: Settings -> Pages -> Source: "GitHub Actions"; the environment
+# "github-pages" must allow deployments from release tags (see docs/agents/workflows.md).
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, tag or commit of Musicus to publish as a test build (empty = the branch this run uses)
+        required: false
+        default: ""
+permissions:
+  contents: read
+concurrency:
+  group: user-guide-pages
+  cancel-in-progress: false
+env:
+  TYPST_VERSION: v0.15.1
+  TYPST_SHA256: a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c
+jobs:
+  build:
+    # Prereleases are not listed on the site; publishing one changes nothing.
+    if: github.event_name != 'release' || !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # all tags and branches; the script reads each tag's submodule pointer
+          submodules: false # the script fetches the user-guide commits itself (HTTPS)
+      - name: Install Typst
+        run: |
+          curl -sSfL -o typst.tar.xz \
+            "https://github.com/typst/typst/releases/download/$TYPST_VERSION/typst-x86_64-unknown-linux-musl.tar.xz"
+          echo "$TYPST_SHA256  typst.tar.xz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/typst"
+          tar -xJf typst.tar.xz -C "$RUNNER_TEMP/typst" --strip-components=1
+          rm typst.tar.xz
+          echo "$RUNNER_TEMP/typst" >>"$GITHUB_PATH"
+      - name: List releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release list --exclude-drafts --exclude-pre-releases --limit 1000 \
+            --json tagName --jq '.[].tagName' >"$RUNNER_TEMP/releases.txt"
+          cat "$RUNNER_TEMP/releases.txt"
+      - name: Build site
+        env:
+          PREVIEW: ${{ github.event_name == 'workflow_dispatch' && (inputs.ref || github.ref_name) || '' }}
+        run: ./scripts/build-guide-site.sh --out _site --releases "$RUNNER_TEMP/releases.txt" ${PREVIEW:+--preview "$PREVIEW"}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
