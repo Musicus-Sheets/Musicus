@@ -5,13 +5,14 @@
 use crate::{
     Route, api,
     picker::{AssignList, Choice},
-    ui::{Status, confirm, format_size, format_time, none_if_empty, tags_from},
+    tag_input::TagInput,
+    ui::{Status, confirm, format_size, format_time, none_if_empty},
 };
 use dioxus::prelude::*;
 use gloo_net::http::Method;
 use musicus_api::{FileVersion, Instrument, Part, PartInput, Score, ScoreInput, naming};
 
-/// Score details as typed into the form (tags as comma separated text).
+/// Score details as typed into the form.
 #[derive(Clone, PartialEq, Default)]
 pub struct ScoreDraft {
     pub title: String,
@@ -19,7 +20,7 @@ pub struct ScoreDraft {
     pub composer: String,
     pub arranger: String,
     pub genre: String,
-    pub tags: String,
+    pub tags: Vec<String>,
     pub notes: String,
 }
 
@@ -32,7 +33,7 @@ impl ScoreDraft {
             composer: text(&s.composer),
             arranger: text(&s.arranger),
             genre: text(&s.genre),
-            tags: s.tags.join(", "),
+            tags: s.tags.clone(),
             notes: text(&s.notes),
         }
     }
@@ -44,7 +45,7 @@ impl ScoreDraft {
             composer: none_if_empty(self.composer.clone()),
             arranger: none_if_empty(self.arranger.clone()),
             genre: none_if_empty(self.genre.clone()),
-            tags: tags_from(&self.tags),
+            tags: self.tags.clone(),
             notes: none_if_empty(self.notes.clone()),
         }
     }
@@ -55,6 +56,13 @@ impl ScoreDraft {
 pub fn ScoreFields(draft: Signal<ScoreDraft>) -> Element {
     let mut draft = draft;
     let d = draft();
+    let tags_label = use_hook(|| format!("tags-label-{}", crate::picker::unique_id()));
+    // Tags used anywhere in the library, offered while typing.
+    let known = use_resource(|| api::get::<Vec<String>>("/api/tags"));
+    let known: Vec<String> = match &*known.read() {
+        Some(Ok(t)) => t.clone(),
+        _ => Vec::new(),
+    };
     rsx! {
         div { class: "grid",
             label { "Title"
@@ -69,9 +77,11 @@ pub fn ScoreFields(draft: Signal<ScoreDraft>) -> Element {
             label { "Genre"
                 input { placeholder: "March, polka, concert…", value: "{d.genre}",
                     oninput: move |e| draft.write().genre = e.value() } }
-            label { "Tags (comma separated)"
-                input { placeholder: "Christmas, Encore", value: "{d.tags}",
-                    oninput: move |e| draft.write().tags = e.value() } }
+            div { class: "field wide",
+                span { id: "{tags_label}", class: "field-label", "Tags" }
+                TagInput { tags: draft.map_mut(|d| &d.tags, |d| &mut d.tags), labelledby: tags_label.clone(), placeholder: "e.g. Christmas, Encore", suggestions: known }
+                span { class: "muted small", "Press comma or Enter after each tag." }
+            }
             label { class: "wide", "Notes"
                 textarea { rows: 3, value: "{d.notes}", oninput: move |e| draft.write().notes = e.value() } }
         }

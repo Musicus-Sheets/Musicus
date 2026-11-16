@@ -135,8 +135,3 @@ pub fn none_if_empty(s: String) -> Option<String> {
     let t = s.trim();
     if t.is_empty() { None } else { Some(t.to_owned()) }
 }
-
-/// Comma separated tags.
-pub fn tags_from(s: &str) -> Vec<String> {
-    s.split(',').map(str::trim).filter(|t| !t.is_empty()).map(str::to_owned).collect()
-}

@@ -66,7 +66,7 @@ thread_local! {
     static NEXT_ID: Cell<u32> = const { Cell::new(0) };
 }
 
-fn unique_id() -> u32 {
+pub(crate) fn unique_id() -> u32 {
     NEXT_ID.with(|n| {
         let v = n.get() + 1;
         n.set(v);

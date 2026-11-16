@@ -7,6 +7,8 @@ mod bridge;
 mod ink;
 mod pages;
 mod picker;
+mod suggest;
+mod tag_input;
 mod ui;
 
 use dioxus::prelude::*;
