@@ -278,11 +278,17 @@ a { color: var(--accent); }
 .badge.test { background: var(--test-bg); color: var(--test-ink); }
 .meta { color: var(--muted); font-size: 0.85rem; }
 .links { margin-left: auto; display: flex; gap: 0.8rem; font-size: 0.95rem; }
+footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem; }
 </style></head>
 <body><main>
 <h1><span>&#x1D11E;</span> Musicus user guide</h1>
 <p class="lead">Installation and use of Musicus, for every released version.</p>
 %s
+<footer>The user guide is licensed under the
+<a href="https://creativecommons.org/licenses/by-sa/4.0/">Creative Commons Attribution-ShareAlike 4.0 International License (CC BY-SA 4.0)</a>.
+Musicus itself is free software, licensed under the
+<a href="https://www.gnu.org/licenses/agpl-3.0.html">GNU Affero General Public License, version 3 (AGPL-3.0)</a>.
+Source code: <a href="https://github.com/Musicus-Sheets/Musicus">github.com/Musicus-Sheets/Musicus</a>.</footer>
 </main></body></html>
 """
 (out / "index.html").write_text(INDEX % "\n".join(parts), encoding="utf-8")
