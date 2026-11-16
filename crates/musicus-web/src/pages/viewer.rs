@@ -6,6 +6,12 @@
 //!   the programme opens.
 //! - Draw mode: pen, highlighter, eraser, stamps and text. A pen in use
 //!   disables finger drawing (palm rejection).
+//! - Page view (one page fitted to the screen) or system view: as many whole
+//!   music systems as fit at the user's minimum staff height, cropped to the
+//!   content width, continuing across page boundaries (planned by
+//!   `musicus_api::layout::plan_views` from the file's system layout). Both
+//!   draw annotations in page coordinates, so they appear in either view.
+//! - Swipe left / right turns forward / back in both views.
 //!
 //! Layers are saved per page 1.5 s after the last change and when turning
 //! the page or leaving; a conflict with another device is merged by object
@@ -14,8 +20,9 @@
 use crate::{
     Route,
     api::{self, PageBytes, SaveOutcome},
-    bridge,
+    bridge::{self, Crop},
     ink::{self, PageBox},
+    layouts,
     pages::library::part_route,
     ui::{ErrorBox, confirm, prompt},
 };
@@ -26,9 +33,12 @@ use gloo_net::http::Method;
 use musicus_api::{
     AnnotationSet, NewAnnotationSet, Part, Programme, Score, UpdateAnnotationSet,
     ink::{self as model, InkObject, PageLayer, Stamp, StampKind, Stroke, TextNote, Tool},
+    layout::{
+        self as lay, CSS_PX_PER_MM, FileLayout, Item, LayoutState, ReaderMode, ReaderSettings, Screen, StaffSize, View,
+    },
 };
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
     rc::Rc,
 };
@@ -38,6 +48,13 @@ const PAGE_CANVAS: &str = "page-canvas";
 const INK_CANVAS: &str = "ink-canvas";
 const SAVE_DELAY_MS: u32 = 1500;
 const ERASER_RADIUS: f64 = 10.0;
+/// Space around the page / the system view inside the stage, CSS px.
+const STAGE_MARGIN: f64 = 8.0;
+/// A horizontal move of at least this many CSS px (and twice the vertical
+/// move) is a swipe.
+const SWIPE_MIN_PX: f64 = 60.0;
+/// While a file's layout is still pending, ask again after this many ms.
+const LAYOUT_RETRY_MS: u32 = 10_000;
 
 const COLORS: [(u32, &str); 4] =
     [(0xd0021bff, "Red"), (0x1f5fd6ff, "Blue"), (0x111111ff, "Black"), (0x1a8f3cff, "Green")];
@@ -287,13 +304,45 @@ fn neighbours(programme: &Programme, part: &Part) -> (Option<Route>, Option<Rout
     (prev, next)
 }
 
+/// Where a pointer acts: a page shown (wholly or cropped) in an ink canvas.
+#[derive(Clone, PartialEq)]
+struct Target {
+    page: u32,
+    bx: PageBox,
+    canvas: String,
+}
+
 #[derive(Default)]
 struct Live {
     drawing: bool,
     erasing: bool,
     pointer: i32,
+    /// Page CSS coordinates (see `PageBox::canvas_to_page`) and pressure.
     points: Vec<(f64, f64, u8)>,
     pen_seen: bool,
+    target: Option<Target>,
+}
+
+/// The crops of one view: page, what to render, and the box for the ink canvas.
+fn view_crops(items: &[Item], v: &View) -> Vec<(u32, Crop, PageBox)> {
+    items[v.first..=v.last]
+        .iter()
+        .map(|it| {
+            let (w, h) = (it.page_w_mm * v.scale, it.page_h_mm * v.scale);
+            let x0 = (v.x0_mm / it.page_w_mm).clamp(0.0, 1.0);
+            let x1 = (v.x1_mm / it.page_w_mm).clamp(x0, 1.0);
+            let crop = Crop { page: it.page, x0, y0: it.y0, x1, y1: it.y1, css_width: (x1 - x0) * w };
+            (it.page, crop, PageBox::crop(w, h, x0, it.y0, x1, it.y1))
+        })
+        .collect()
+}
+
+fn crop_canvas(k: usize) -> String {
+    format!("crop-{k}")
+}
+
+fn crop_ink_canvas(k: usize) -> String {
+    format!("crop-ink-{k}")
 }
 
 #[component]
@@ -325,6 +374,17 @@ fn Reader(data: Loaded) -> Element {
     let mut version = use_signal(|| 0u64);
     let store: SharedStore = use_hook(|| Rc::new(RefCell::new(Store::default())));
     let live = use_hook(|| Rc::new(RefCell::new(Live::default())));
+    // Page last drawn on (undo/redo target in the system view).
+    let mut edit_page = use_signal(|| 0u32);
+
+    // --- System view -----------------------------------------------------
+    let mut session = crate::session();
+    let mut settings = use_signal(|| session.user.peek().as_ref().map(|u| u.reader).unwrap_or_default());
+    let mut layout = use_signal(|| None::<FileLayout>);
+    // Reading position in the system view: the first item of the current view.
+    let mut anchor = use_signal(|| None::<usize>);
+    let swipe = use_hook(|| Rc::new(Cell::new(None::<(f64, f64)>)));
+    let last_swipe = use_hook(|| Rc::new(Cell::new(0.0f64)));
 
     let current_sha = part.file.as_ref().map(|f| f.sha256.clone());
     let url = use_memo(move || {
@@ -334,6 +394,75 @@ fn Reader(data: Loaded) -> Element {
             .map(|s| s.file_sha256.clone())
             .or_else(|| current_sha.clone())
             .map(|sha| api::file_url(&sha))
+    });
+
+    // The system layout of the displayed file (asked again while pending).
+    use_effect(move || {
+        let Some(u) = url() else { return };
+        let sha = u.trim_start_matches("/api/files/").to_string();
+        layout.set(None);
+        spawn(async move {
+            for _ in 0..30 {
+                match layouts::load(&sha).await {
+                    Ok(l) => {
+                        let pending = l.state == LayoutState::Pending;
+                        layout.set(Some(l));
+                        if !pending {
+                            return;
+                        }
+                    }
+                    Err(_) => return,
+                }
+                gloo_timers::future::TimeoutFuture::new(LAYOUT_RETRY_MS).await;
+            }
+        });
+    });
+    // Reading sequence and views; empty if the system view is off or unavailable.
+    let items = use_memo(move || match &*layout.read() {
+        Some(l) if l.state == LayoutState::Done && page_total() > 0 && l.pages.len() == page_total() as usize => {
+            lay::reading_items(&l.pages)
+        }
+        _ => Vec::new(),
+    });
+    let views = use_memo(move || {
+        let s = settings();
+        let (w, h) = stage();
+        if s.mode != ReaderMode::Systems || items.read().is_empty() {
+            return Vec::new();
+        }
+        let screen = Screen { width: w - STAGE_MARGIN, height: h - STAGE_MARGIN, px_per_mm: CSS_PX_PER_MM };
+        lay::plan_views(&items.read(), screen, s.staff_size.min_staff_mm())
+    });
+    let systems_on = move || !views.read().is_empty();
+    let view_idx = use_memo(move || {
+        let v = views.read();
+        match anchor() {
+            Some(a) if !v.is_empty() => lay::view_for_item(&v, a),
+            _ => 0,
+        }
+    });
+    let crops = use_memo(move || {
+        let v = views.read();
+        match v.get(view_idx()) {
+            Some(view) => view_crops(&items.read(), view),
+            None => Vec::new(),
+        }
+    });
+    // Entering the system view starts at the current page; the current page
+    // follows the view (page number, annotation loading, back to page view).
+    use_effect(move || {
+        if !systems_on() {
+            return;
+        }
+        if anchor().is_none() {
+            anchor.set(Some(lay::first_item_of_page(&items.read(), *page.peek())));
+            return;
+        }
+        if let Some((p, _, _)) = crops.read().first()
+            && *page.peek() != *p
+        {
+            page.set(*p);
+        }
     });
 
     // Keep the screen on and prefetch the next piece.
@@ -390,46 +519,82 @@ fn Reader(data: Loaded) -> Element {
     // Render the PDF page whenever file, page or available space change.
     use_effect(move || {
         let (Some(u), (w, h), p) = (url(), stage(), page()) else { return };
-        if w < 20.0 || h < 20.0 {
+        if w < 20.0 || h < 20.0 || systems_on() {
             return;
         }
         spawn(async move {
-            match bridge::render_page(&u, p, PAGE_CANVAS, w - 8.0, h - 8.0).await {
-                Ok(Some((width, height))) => page_box.set(Some(PageBox { width, height })),
+            match bridge::render_page(&u, p, PAGE_CANVAS, w - STAGE_MARGIN, h - STAGE_MARGIN).await {
+                Ok(Some((width, height))) => page_box.set(Some(PageBox::page(width, height))),
                 Ok(None) => {}
                 Err(e) => error.set(Some(format!("Could not render the page: {e}"))),
             }
         });
     });
 
-    // Load the annotation layer of the current page.
+    // Render the crops of the current view; then the next view into memory.
+    use_effect(move || {
+        let Some(u) = url() else { return };
+        let current = crops();
+        if current.is_empty() {
+            return;
+        }
+        let next = views.read().get(view_idx() + 1).map(|v| view_crops(&items.read(), v)).unwrap_or_default();
+        spawn(async move {
+            for (k, (_, crop, _)) in current.iter().enumerate() {
+                if let Err(e) = bridge::render_crop(&u, &crop_canvas(k), *crop).await {
+                    error.set(Some(format!("Could not render the page: {e}")));
+                    return;
+                }
+            }
+            for (_, crop, _) in next {
+                bridge::prerender_crop(&u, crop);
+            }
+        });
+    });
+
+    // Load the annotation layers of the shown pages.
     use_effect({
         let store = store.clone();
         move || {
-            let (Some(set), p) = (active(), page()) else { return };
-            let store = store.clone();
-            spawn(async move {
-                match load_page(store, (set, p)).await {
-                    Ok(()) => version += 1,
-                    Err(e) => error.set(Some(format!("Could not load annotations: {e}"))),
-                }
-            });
+            let Some(set) = active() else { return };
+            let mut pages: Vec<u32> = crops().iter().map(|(p, _, _)| *p).collect();
+            if pages.is_empty() {
+                pages.push(page());
+            }
+            pages.dedup();
+            for p in pages {
+                let store = store.clone();
+                spawn(async move {
+                    match load_page(store, (set, p)).await {
+                        Ok(()) => version += 1,
+                        Err(e) => error.set(Some(format!("Could not load annotations: {e}"))),
+                    }
+                });
+            }
         }
     });
 
-    // Redraw the annotation layer.
+    // Redraw the annotation layers (one canvas per page, or per crop).
     use_effect({
         let store = store.clone();
         move || {
             let _ = version();
-            let Some(b) = page_box() else { return };
             let empty = PageLayer::default();
             let s = store.borrow();
-            let layer = match (show_ink(), active()) {
-                (true, Some(set)) => s.pages.get(&(set, page())).map(|p| &p.layer).unwrap_or(&empty),
+            let layer = |p: u32| match (show_ink(), active()) {
+                (true, Some(set)) => s.pages.get(&(set, p)).map(|st| &st.layer).unwrap_or(&empty),
                 _ => &empty,
             };
-            ink::draw_layer(INK_CANVAS, b, layer);
+            let shown = crops();
+            if shown.is_empty() {
+                if let Some(b) = page_box() {
+                    ink::draw_layer(INK_CANVAS, b, layer(page()));
+                }
+            } else {
+                for (k, (p, _, b)) in shown.iter().enumerate() {
+                    ink::draw_layer(&crop_ink_canvas(k), *b, layer(*p));
+                }
+            }
         }
     });
 
@@ -490,8 +655,8 @@ fn Reader(data: Loaded) -> Element {
         let store = store.clone();
         let programme_title = data.programme.as_ref().map(|p| p.title.clone());
         let part_id = part.id;
-        move |object: InkObject| {
-            let p = page();
+        move |p: u32, object: InkObject| {
+            edit_page.set(p);
             if let Some(set) = active() {
                 change((set, p), &|st| {
                     st.layer.objects.push(object.clone());
@@ -524,10 +689,11 @@ fn Reader(data: Loaded) -> Element {
     let erase_at = {
         let mut change = change.clone();
         let store = store.clone();
-        move |x: f64, y: f64| {
-            let (Some(set), Some(b)) = (active(), page_box()) else { return };
-            let key = (set, page());
-            let hits = store.borrow().pages.get(&key).map(|st| ink::hit(b, &st.layer, (x, y), ERASER_RADIUS));
+        move |t: &Target, x: f64, y: f64| {
+            let Some(set) = active() else { return };
+            let key = (set, t.page);
+            edit_page.set(t.page);
+            let hits = store.borrow().pages.get(&key).map(|st| ink::hit(t.bx, &st.layer, (x, y), ERASER_RADIUS));
             let Some(hits) = hits.filter(|h| !h.is_empty()) else { return };
             change(key, &|st| {
                 let mut removed = Vec::new();
@@ -550,7 +716,7 @@ fn Reader(data: Loaded) -> Element {
         let mut save = save.clone();
         move |redo: bool| {
             let Some(set) = active() else { return };
-            let key = (set, page());
+            let key = (set, if systems_on() { edit_page() } else { page() });
             {
                 let mut s = store.borrow_mut();
                 let Some(st) = s.pages.get_mut(&key) else { return };
@@ -601,10 +767,26 @@ fn Reader(data: Loaded) -> Element {
         let store = store.clone();
         let mut save = save.clone();
         move |delta: i32| {
-            let target = page() as i32 + delta;
             for key in dirty_keys(&store) {
                 save(key, false);
             }
+            if systems_on() {
+                let v = views();
+                let target = view_idx() as i32 + delta;
+                if target < 0 {
+                    if let Some(r) = prev_piece() {
+                        nav.push(r);
+                    }
+                } else if target as usize >= v.len() {
+                    if let Some(r) = next_piece() {
+                        nav.push(r);
+                    }
+                } else {
+                    anchor.set(Some(v[target as usize].first));
+                }
+                return;
+            }
+            let target = page() as i32 + delta;
             if target < 0 {
                 if let Some(r) = prev_piece() {
                     nav.push(r);
@@ -661,7 +843,7 @@ fn Reader(data: Loaded) -> Element {
         let live = live.clone();
         let mut add_object = add_object.clone();
         let mut erase_at = erase_at.clone();
-        move |e: PointerEvent| {
+        move |t: Target, e: PointerEvent| {
             let kind = e.pointer_type();
             let mut l = live.borrow_mut();
             if kind == "pen" {
@@ -675,8 +857,10 @@ fn Reader(data: Loaded) -> Element {
             }
             web.prevent_default();
             let p = e.element_coordinates();
-            let (x, y) = (p.x, p.y);
-            let Some(b) = page_box() else { return };
+            let (x, y) = t.bx.canvas_to_page(p.x, p.y);
+            let b = t.bx;
+            let page_index = t.page;
+            l.target = Some(t.clone());
             match tool() {
                 ToolKind::Pen | ToolKind::Highlighter => {
                     let pressure =
@@ -689,30 +873,36 @@ fn Reader(data: Loaded) -> Element {
                     l.erasing = true;
                     l.pointer = e.pointer_id();
                     drop(l);
-                    erase_at(x, y);
+                    erase_at(&t, x, y);
                 }
                 ToolKind::Stamp(kind) => {
                     drop(l);
                     let at = b.to_page(x, y);
-                    add_object(InkObject::Stamp(Stamp {
-                        id: ink::new_id(),
-                        kind,
-                        at: [at.0, at.1],
-                        size: STAMP_SIZE,
-                        color: color(),
-                    }));
+                    add_object(
+                        page_index,
+                        InkObject::Stamp(Stamp {
+                            id: ink::new_id(),
+                            kind,
+                            at: [at.0, at.1],
+                            size: STAMP_SIZE,
+                            color: color(),
+                        }),
+                    );
                 }
                 ToolKind::Text => {
                     drop(l);
                     if let Some(text) = prompt("Text", "") {
                         let at = b.to_page(x, y);
-                        add_object(InkObject::Text(TextNote {
-                            id: ink::new_id(),
-                            at: [at.0, at.1],
-                            size: TEXT_SIZE,
-                            color: color(),
-                            text: text.chars().take(model::MAX_TEXT_CHARS).collect(),
-                        }));
+                        add_object(
+                            page_index,
+                            InkObject::Text(TextNote {
+                                id: ink::new_id(),
+                                at: [at.0, at.1],
+                                size: TEXT_SIZE,
+                                color: color(),
+                                text: text.chars().take(model::MAX_TEXT_CHARS).collect(),
+                            }),
+                        );
                     }
                 }
             }
@@ -727,30 +917,32 @@ fn Reader(data: Loaded) -> Element {
             if e.pointer_id() != l.pointer || !(l.drawing || l.erasing) {
                 return;
             }
+            let Some(t) = l.target.clone() else { return };
             let p = e.element_coordinates();
+            let (x, y) = t.bx.canvas_to_page(p.x, p.y);
             if l.erasing {
                 drop(l);
-                erase_at(p.x, p.y);
+                erase_at(&t, x, y);
                 return;
             }
-            let Some(b) = page_box() else { return };
+            let b = t.bx;
             let kind = e.pointer_type();
             let pressure = if kind == "mouse" { 0 } else { (e.pressure() * 255.0).round().clamp(1.0, 255.0) as u8 };
             let last = *l.points.last().expect("stroke has a first point");
-            if (last.0 - p.x).abs() < 0.5 && (last.1 - p.y).abs() < 0.5 {
+            if (last.0 - x).abs() < 0.5 && (last.1 - y).abs() < 0.5 {
                 return;
             }
-            l.points.push((p.x, p.y, pressure));
-            if let Some(ctx) = ink::context(INK_CANVAS) {
+            l.points.push((x, y, pressure));
+            if let Some(ctx) = ink::context(&t.canvas) {
                 ctx.set_line_cap("round");
                 if tool() == ToolKind::Highlighter {
                     ctx.set_global_alpha(0.35);
                     ctx.set_stroke_style_str(&ink::css_color(highlight(), 1.0));
-                    ink::segment(&ctx, (last.0, last.1), (p.x, p.y), b.len_css(HIGHLIGHT_WIDTH));
+                    ink::segment(&ctx, (last.0, last.1), (x, y), b.len_css(HIGHLIGHT_WIDTH));
                     ctx.set_global_alpha(1.0);
                 } else {
                     ctx.set_stroke_style_str(&ink::css_color(color(), 1.0));
-                    ink::segment(&ctx, (last.0, last.1), (p.x, p.y), ink::pen_width_css(b, pen_width(), pressure));
+                    ink::segment(&ctx, (last.0, last.1), (x, y), ink::pen_width_css(b, pen_width(), pressure));
                 }
             }
         }
@@ -770,8 +962,9 @@ fn Reader(data: Loaded) -> Element {
             }
             l.drawing = false;
             let points = std::mem::take(&mut l.points);
+            let Some(t) = l.target.clone() else { return };
             drop(l);
-            let Some(b) = page_box() else { return };
+            let b = t.bx;
             let mut page_points: Vec<(u16, u16, u8)> = Vec::with_capacity(points.len());
             for (x, y, pr) in points.into_iter().take(model::MAX_POINTS_PER_STROKE) {
                 let (px, py) = b.to_page(x, y);
@@ -783,7 +976,7 @@ fn Reader(data: Loaded) -> Element {
                 ToolKind::Highlighter => (Tool::Highlighter, highlight(), HIGHLIGHT_WIDTH),
                 _ => (Tool::Pen, color(), pen_width()),
             };
-            add_object(InkObject::Stroke(Stroke::from_points(ink::new_id(), stroke_tool, c, w, &page_points)));
+            add_object(t.page, InkObject::Stroke(Stroke::from_points(ink::new_id(), stroke_tool, c, w, &page_points)));
         }
     };
 
@@ -856,7 +1049,36 @@ fn Reader(data: Loaded) -> Element {
         Some(id) => Route::ProgrammeView { id },
         None => Route::Library {},
     };
-    let at_end = page_total() > 0 && page() + 1 >= page_total();
+    let at_end = if systems_on() {
+        view_idx() + 1 >= views.read().len()
+    } else {
+        page_total() > 0 && page() + 1 >= page_total()
+    };
+    let reader = settings();
+    let systems_wanted = reader.mode == ReaderMode::Systems;
+    let layout_note = match (&*layout.read(), systems_wanted && !systems_on()) {
+        (_, false) => None,
+        (Some(l), true) if l.state == LayoutState::Failed => {
+            Some("The system view is not available for this sheet; showing whole pages.")
+        }
+        (Some(l), true) if l.state == LayoutState::Done => None,
+        _ => Some("The systems of this sheet are still being detected; showing whole pages for now."),
+    };
+    // Changes the reader settings here and on the server (R-SEC-001: not on the device).
+    let mut change_settings = move |new: ReaderSettings| {
+        if new.mode != settings.peek().mode {
+            anchor.set(None);
+        }
+        settings.set(new);
+        if let Some(u) = session.user.write().as_mut() {
+            u.reader = new;
+        }
+        spawn(async move {
+            if let Err(e) = api::put::<_, ReaderSettings>("/api/auth/reader-settings", &new).await {
+                error.set(Some(format!("Could not save the view setting: {}", e.message)));
+            }
+        });
+    };
     let status_text = match status() {
         SaveStatus::Idle => String::new(),
         SaveStatus::Pending => "Unsaved".into(),
@@ -873,6 +1095,31 @@ fn Reader(data: Loaded) -> Element {
                 Link { class: "icon", to: back, title: "Back", "‹" }
                 span { class: "reader-title", title: "{title}", "{title}" }
                 span { class: "page-no", if page_total() > 0 { "{page() + 1} / {page_total()}" } }
+                button {
+                    class: if systems_wanted { "toggle on" } else { "toggle" },
+                    title: "System view: whole systems at a minimum staff size, across pages",
+                    "aria-pressed": "{systems_wanted}",
+                    onclick: move |_| change_settings(ReaderSettings {
+                        mode: if systems_wanted { ReaderMode::Page } else { ReaderMode::Systems },
+                        ..reader
+                    }),
+                    "☰ Systems"
+                }
+                if systems_wanted {
+                    select {
+                        class: "staff-size",
+                        title: "Staff size",
+                        "aria-label": "Staff size",
+                        onchange: move |e| {
+                            if let Some(z) = StaffSize::parse(&e.value()) {
+                                change_settings(ReaderSettings { staff_size: z, ..reader });
+                            }
+                        },
+                        for z in StaffSize::ALL {
+                            option { value: z.as_str(), selected: z == reader.staff_size, "{z.as_str()}" }
+                        }
+                    }
+                }
                 button {
                     class: if drawing { "toggle on" } else { "toggle" },
                     title: "Draw (annotations are private)",
@@ -986,6 +1233,9 @@ fn Reader(data: Loaded) -> Element {
                     button { onclick: migrate_set, "Move them to the current version" }
                 }
             }
+            if let Some(note) = layout_note {
+                div { class: "banner info", "{note}" }
+            }
             if let Some(e) = error() {
                 div { class: "banner error", "{e} " button { class: "link", onclick: move |_| error.set(None), "Dismiss" } }
             }
@@ -996,9 +1246,37 @@ fn Reader(data: Loaded) -> Element {
                         stage.set((size.width, size.height));
                     }
                 },
+                onpointerdown: {
+                    let swipe = swipe.clone();
+                    move |e: PointerEvent| {
+                        if mode() == Mode::Read {
+                            let p = e.client_coordinates();
+                            swipe.set(Some((p.x, p.y)));
+                        }
+                    }
+                },
+                onpointerup: {
+                    let swipe = swipe.clone();
+                    let last_swipe = last_swipe.clone();
+                    let mut turn = turn.clone();
+                    move |e: PointerEvent| {
+                        let Some((x0, y0)) = swipe.take() else { return };
+                        let p = e.client_coordinates();
+                        let (dx, dy) = (p.x - x0, p.y - y0);
+                        if mode() == Mode::Read && dx.abs() >= SWIPE_MIN_PX && dx.abs() > 2.0 * dy.abs() {
+                            last_swipe.set(js_sys::Date::now());
+                            turn(if dx < 0.0 { 1 } else { -1 });
+                        }
+                    }
+                },
                 onclick: {
                     let mut turn = turn.clone();
+                    let last_swipe = last_swipe.clone();
                     move |e: MouseEvent| {
+                        // The click that ends a swipe is not a tap.
+                        if js_sys::Date::now() - last_swipe.get() < 400.0 {
+                            return;
+                        }
                         if mode() == Mode::Read {
                             let x = e.client_coordinates().x;
                             let w = stage().0.max(1.0);
@@ -1010,15 +1288,43 @@ fn Reader(data: Loaded) -> Element {
                         }
                     }
                 },
-                div { class: "sheet",
-                    canvas { id: PAGE_CANVAS }
-                    canvas {
-                        id: INK_CANVAS,
-                        class: ink_class,
-                        onpointerdown: pointer_down,
-                        onpointermove: pointer_move,
-                        onpointerup: pointer_up.clone(),
-                        onpointercancel: pointer_up,
+                if systems_on() {
+                    div { class: "system-view", "data-view": "{view_idx() + 1}/{views.read().len()}",
+                        for (k, (p, _, b)) in crops().into_iter().enumerate() {
+                            div { key: "{k}", class: "sheet crop", style: "width: {b.vw}px; height: {b.vh}px",
+                                canvas { id: crop_canvas(k) }
+                                canvas {
+                                    id: crop_ink_canvas(k),
+                                    class: ink_class,
+                                    onpointerdown: {
+                                        let mut down = pointer_down.clone();
+                                        move |e| down(Target { page: p, bx: b, canvas: crop_ink_canvas(k) }, e)
+                                    },
+                                    onpointermove: pointer_move.clone(),
+                                    onpointerup: pointer_up.clone(),
+                                    onpointercancel: pointer_up.clone(),
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    div { class: "sheet",
+                        canvas { id: PAGE_CANVAS }
+                        canvas {
+                            id: INK_CANVAS,
+                            class: ink_class,
+                            onpointerdown: {
+                                let mut down = pointer_down.clone();
+                                move |e| {
+                                    if let Some(b) = page_box() {
+                                        down(Target { page: page(), bx: b, canvas: INK_CANVAS.into() }, e)
+                                    }
+                                }
+                            },
+                            onpointermove: pointer_move.clone(),
+                            onpointerup: pointer_up.clone(),
+                            onpointercancel: pointer_up.clone(),
+                        }
                     }
                 }
                 if at_end && mode() == Mode::Read {

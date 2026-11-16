@@ -5,6 +5,7 @@
 mod api;
 mod bridge;
 mod ink;
+mod layouts;
 mod pages;
 mod picker;
 mod suggest;

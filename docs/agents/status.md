@@ -14,12 +14,13 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | R-LIB-007 | extended score metadata | migration + `ScoreInput`/`Score` + `pages/forms.rs::ScoreFields` + FTS columns if searchable |
 | R-FILE-008 | MusicXML | new processor in `processors.rs`; `sniff_mime`; annotations need musical anchors (not page coords) — design first |
 | R-FILE-009 | GC of unreferenced blobs | must respect backup consistency (grace period), conflicts with R-FILE-004 resolved by "unreferenced only" |
-| R-READ-007, R-READ-008 | half-page turns, conductor push | conductor push needs server push (SSE/WebSocket) — new component, ask user |
+| R-READ-007, R-READ-008 | half-page turns, conductor push | half-page turns kept as a page-view option (the system view covers the need on small tablets, see R-READ-007 notes); conductor push needs server push (SSE/WebSocket) — new component, ask user |
+| R-READ-016 | librarian correction of system layouts | accepted, not implemented yet |
+| R-READ-017 | split wide systems at a barline | needs barline detection; today such music is shown at full width (`below_min`) |
 | R-ANN-017, R-ANN-018 | shared sets, encryption at rest | shared sets conflict with F-ANN-004 (explicit, read-only) |
 | R-OFF-001, R-OFF-002, R-OFF-003 | encrypted offline app | depends on file hashes (d-blobs) and page revisions (d-optimistic); plan in requirement notes |
 | R-ACC-011, R-ACC-012 | OIDC login, e-mail invites | SMTP stays optional |
 | R-ACL-007 | several ensembles per server | open question; `ensemble_id` scoping every query, cheap early / expensive late |
-| R-READ-009 | swipe page turns | |
 | R-ANN-019, R-ANN-020 | shapes, JSON export | shapes need ink format version 2 |
 | R-FILE-010 | bilevel compression of scans | |
 | R-SEC-009, R-SEC-010 | watermark, download audit log | watermark must not create blobs (conflict with R-FILE-004) |
@@ -32,7 +33,8 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 - Annotation set migration checks page count only, not page size, and does not flag moved sets for review (R-ANN-016 notes).
 - No `getCoalescedEvents()` for full pen sampling rate (a-live-ink).
 - Renderer abstraction is the `bridge.rs` function set, not a `PageRenderer` trait.
-- Neighbouring pages (±2) are not pre-rendered; pages render on demand from in-memory bytes.
+- Neighbouring pages (±2) are not pre-rendered in the page view; pages render on demand from in-memory bytes. The
+  system view pre-renders the next view's crops.
 - pdf.js legacy build instead of the modern build (d-pdf-rendering); page GET for unsaved pages returns 204 (d-204);
   unsaved strokes flushed with keepalive on tab close (d-reader-store) — additions, not in the original design.
 
@@ -40,6 +42,9 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 
 - Session expiry/sliding (R-ACC-005), reinvite (R-ACC-010), security headers (R-SEC-005), backup command (R-OPS-005), graceful shutdown (R-OPS-008), TLS (R-OPS-006).
 - Performance requirements R-PERF-001/003/005/006 verified only by prototype benchmarks in `prototypes/` and a manual RSS measurement (≈11 MB idle).
+- System view: only synthetic PDFs in automated tests; real scores checked manually with `examples/layout_report.rs`
+  (numbers in `layout.md`). Physical staff size depends on the device density (a-css-mm). Detection time on a
+  Raspberry Pi not measured (R-PERF-008 estimate). R-READ-019 (layouts prefetched with a programme) not e2e-tested.
 - Client features without e2e coverage: eraser/stamps/text/undo (R-ANN-002, R-ANN-003), palm rejection (R-ANN-004), sets menu actions, migration banner, wake lock, fullscreen, programme next/previous navigation (R-READ-005); deleting pieces/parts/programmes/groups from the UI, user role changes and disable/enable (API-tested only).
 - arm64 (Raspberry Pi) build not tested; Caddy HTTPS profile not tested end to end; release wasm with current wasm-opt not tested in CI.
 - No CI for Rust build/tests yet (only the docs gates `agent-docs.yml`, `submodules.yml` and the user-guide Pages deploy `user-guide-pages.yml`).

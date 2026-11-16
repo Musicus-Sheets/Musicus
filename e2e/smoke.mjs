@@ -6,7 +6,9 @@
 // data directory. It walks through the main flows: admin setup, instruments,
 // the guided flow for a new piece, editing parts and pieces from the
 // library, invites, groups and grants, programmes, a librarian's and a
-// member's view (no management controls), a member reading and annotating.
+// member's view (no management controls), a member reading and annotating,
+// the system view (generated part: whole systems across pages, swipe, staff
+// size, drawing in a crop).
 // The assignment picker (assigned chips + searchable multi-select dropdown)
 // is checked on group members and grants, part instruments and programme
 // pieces: search, several entries in one go, the three ways of closing
@@ -516,7 +518,8 @@ check(await redPixels(m) > 50, 'the strokes survive a reload (stored on the serv
 check(objects.length === 1 && objects[0] === 2, `the pending stroke was flushed on reload (revisions ${objects})`);
 
 // Keyboard / foot pedal page turn.
-await m.getByRole('button', { name: /Done|Draw/ }).first().click().catch(() => {});
+// After the reload the reader is in reading mode again (Draw is not active).
+check(await m.getByRole('button', { name: /Done/ }).count() === 0, 'a reload starts in reading mode');
 if (total > 1) {
   await m.keyboard.press('ArrowRight');
   await m.locator('.page-no', { hasText: `2 / ${total}` }).waitFor();
@@ -524,7 +527,129 @@ if (total > 1) {
   check(await redPixels(m) === 0, 'page 2 has its own (empty) annotation layer');
   await m.keyboard.press('PageUp');
   await m.locator('.page-no', { hasText: `1 / ${total}` }).waitFor();
+  // Swipe left / right (mouse drag; touch sends the same pointer events).
+  const sb = await m.locator('.stage').boundingBox();
+  const swipe = async (from, to) => {
+    await m.mouse.move(sb.x + sb.width * from, sb.y + sb.height * 0.5);
+    await m.mouse.down();
+    await m.mouse.move(sb.x + sb.width * to, sb.y + sb.height * 0.51, { steps: 8 });
+    await m.mouse.up();
+  };
+  await swipe(0.7, 0.3);
+  await m.locator('.page-no', { hasText: `2 / ${total}` }).waitFor();
+  await swipe(0.3, 0.7);
+  await m.locator('.page-no', { hasText: `1 / ${total}` }).waitFor();
+  check(true, 'swipes turn pages');
 }
+
+// --- System view (whole systems across pages) -----------------------------
+// A generated part: 2 A4 pages with 8 single-staff systems each (lines 5 pt apart),
+// read on an 8" tablet in landscape (1280 × 800).
+function staffPdf(pages, staves) {
+  let content = '0.6 w\n250 790 m 345 790 l 4 w S 0.6 w\n';
+  for (let k = 0; k < staves; k += 1) {
+    const top = 740 - k * 80;
+    for (let l = 0; l < 5; l += 1) content += `40 ${top - l * 5} m 555 ${top - l * 5} l S\n`;
+    for (let b = 1; b < 4; b += 1) { const x = 40 + b * 128.75; content += `${x} ${top} m ${x} ${top - 20} l S\n`; }
+    // A chord symbol above and a dynamic mark below each staff, like real music.
+    content += `60 ${top + 12} 14 6 re f 90 ${top - 38} 10 6 re f\n`;
+  }
+  const objects = ['<< /Type /Catalog /Pages 2 0 R >>',
+    `<< /Type /Pages /Kids [${Array.from({ length: pages }, (_, i) => `${i + 4} 0 R`).join(' ')}] /Count ${pages} >>`,
+    `<< /Length ${content.length} >>\nstream\n${content}endstream`];
+  for (let i = 0; i < pages; i += 1) objects.push('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 3 0 R >>');
+  let pdf = '%PDF-1.7\n';
+  const offsets = [];
+  objects.forEach((o, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+  const xref = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}`;
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return pdf;
+}
+const systemsPart = await a.evaluate(async (pdf) => {
+  const h = { 'content-type': 'application/json', 'x-musicus-csrf': '1' };
+  const trumpet = (await (await fetch('/api/instruments')).json()).find((i) => i.name === 'Trumpet');
+  const score = await (await fetch('/api/scores', { method: 'POST', headers: h, body: JSON.stringify({ title: 'Etude in systems' }) })).json();
+  const part = await (await fetch(`/api/scores/${score.id}/parts`, { method: 'POST', headers: h, body: JSON.stringify({ instrument_ids: [trumpet.id] }) })).json();
+  const up = await (await fetch(`/api/parts/${part.id}/file`, { method: 'PUT', headers: { 'x-musicus-csrf': '1' }, body: pdf })).json();
+  for (let i = 0; i < 60; i += 1) {
+    const l = await (await fetch(`/api/files/${up.file.sha256}/layout`)).json();
+    if (l.state !== 'pending') return { id: part.id, layout: l };
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return { id: part.id, layout: null };
+}, staffPdf(2, 8));
+const detected = systemsPart.layout.pages.map((p) => p.regions.filter((r) => r.kind === 'system').length);
+check(JSON.stringify(detected) === '[8,8]', `the server detected the systems of a new upload in the background (${detected})`);
+
+await m.setViewportSize({ width: 1280, height: 800 });
+await m.goto(`${base}/parts/${systemsPart.id}`);
+await m.locator('.page-no', { hasText: '1 / 2' }).waitFor();
+await m.getByRole('button', { name: /Systems/ }).click();
+await m.locator('.system-view .crop').first().waitFor();
+const viewInfo = async () => m.locator('.system-view').getAttribute('data-view');
+const crops = await m.locator('.system-view .crop').count();
+check(crops >= 3 && crops <= 9, `system view shows whole systems (${crops} items: title and systems, of 17)`);
+await m.waitForFunction(() => [...document.querySelectorAll('.system-view .crop canvas:first-child')].every((c) =>
+  c.style.width !== '' && c.width >= Math.floor(parseFloat(c.style.width) * (window.devicePixelRatio || 1)) - 1),
+null, { timeout: 20000 });
+check(true, 'crops are rendered at device resolution');
+await shot(m, 'system-view');
+check((await m.evaluate(async () => (await (await fetch('/api/auth/me')).json()).reader.mode)) === 'systems',
+  'the view setting is stored on the server');
+// Turn through the sequence: it continues from page 1 to page 2 within the same view sequence.
+const [, viewCount] = (await viewInfo()).split('/').map(Number);
+let crossed = false;
+for (let i = 1; i < viewCount; i += 1) {
+  await m.keyboard.press('ArrowRight');
+  await m.locator('.system-view').and(m.locator(`[data-view="${i + 1}/${viewCount}"]`)).waitFor();
+  crossed ||= (await m.locator('.page-no').innerText()).trim() === '2 / 2';
+}
+check(crossed && viewCount >= 3, `arrow keys walk through ${viewCount} views across the page boundary`);
+// Turning the tablet re-plans the views and keeps the reading position (still page 2).
+await m.setViewportSize({ width: 800, height: 1280 });
+await m.waitForTimeout(500);
+check((await m.locator('.page-no').innerText()).trim() === '2 / 2', 'portrait keeps the reading position');
+await m.setViewportSize({ width: 1280, height: 800 });
+await m.locator(`[data-view="${viewCount}/${viewCount}"]`).waitFor();
+// Swipe right goes back one view.
+const stageBox = await m.locator('.stage').boundingBox();
+await m.mouse.move(stageBox.x + stageBox.width * 0.3, stageBox.y + stageBox.height * 0.5);
+await m.mouse.down();
+await m.mouse.move(stageBox.x + stageBox.width * 0.7, stageBox.y + stageBox.height * 0.52, { steps: 8 });
+await m.mouse.up();
+await m.locator(`[data-view="${viewCount - 1}/${viewCount}"]`).waitFor();
+check(true, 'a swipe to the right turns back one view');
+// Bigger staff size: fewer systems per view.
+await m.getByLabel('Staff size').selectOption('S');
+await m.waitForTimeout(300);
+const small = Number((await viewInfo()).split('/')[1]);
+await m.getByLabel('Staff size').selectOption('XL');
+await m.waitForTimeout(300);
+const large = Number((await viewInfo()).split('/')[1]);
+check(large >= small, `a bigger staff size needs at least as many views (S ${small}, XL ${large})`);
+// The size menu keeps the keyboard focus; give it back to the reader (arrows would change the size).
+await m.locator('.reader-title').click();
+// Draw in the system view; the stroke is stored in page coordinates and appears in the page view.
+for (let i = 0; i < 20 && (await m.locator('.system-view').getAttribute('data-view')).split('/')[0] !== '1'; i += 1) {
+  await m.keyboard.press('ArrowLeft');
+  await m.waitForTimeout(150);
+}
+await m.getByRole('button', { name: /Draw/ }).click();
+// Crop 0 is the title line; draw on the first system.
+const cropBox = await m.locator('#crop-ink-1').boundingBox();
+await m.mouse.move(cropBox.x + cropBox.width * 0.2, cropBox.y + cropBox.height * 0.5);
+await m.mouse.down();
+await m.mouse.move(cropBox.x + cropBox.width * 0.6, cropBox.y + cropBox.height * 0.55, { steps: 12 });
+await m.mouse.up();
+await m.locator('.save-status', { hasText: /^Saved$/ }).waitFor({ timeout: 10000 });
+await m.getByRole('button', { name: /Done/ }).click();
+await m.getByRole('button', { name: /Systems/ }).click();
+await m.locator('#page-canvas').waitFor();
+await m.waitForTimeout(800);
+check(await redPixels(m) > 50, 'a stroke drawn in the system view shows in the page view');
+check((await m.evaluate(async () => (await (await fetch('/api/auth/me')).json()).reader.mode)) === 'page',
+  'switching back to the page view is stored too');
 
 // The admin does not see anna's annotations.
 const sets = await a.evaluate(async () => {

@@ -13,6 +13,7 @@ Human-oriented docs: `docs/technical` (Typst, submodule). Requirements: `docs/re
 | `decisions.md` | Design decisions `d-*` with reasons, requirements served, change rules | before changing structure or behaviour |
 | `server.md` | Server modules, request pipeline, full endpoint table | server work |
 | `data-model.md` | SQLite schema, constraints, migration rules | schema or query work |
+| `layout.md` | System detection (server), reading sequence + view planner (api), system view (client): exact algorithm with all constants, regression numbers | system view / detection work |
 | `api-and-ink.md` | `musicus-api` crate: DTOs, status codes, binary ink format, merge | API or annotation work |
 | `web-client.md` | Dioxus client: routes, session, bridge.js, reader internals | client work |
 | `workflows.md` | Build/test commands, environment pitfalls, recipes, definition of done | before committing |

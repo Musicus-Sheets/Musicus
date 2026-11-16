@@ -149,6 +149,11 @@ Caveats: loopback hides the network; synthetic engraved PDF (37 KB / 4 pages, no
 
 ### 6.1 System detection for a system-wise reader (`prototypes/system-detect`, November 2026, real scores)
 
+Status: approved by the user and implemented as the system view (F-READ-003; production code and the exact
+algorithm: `layout.md`). User decisions after this evaluation: no splitting at barlines for now (R-READ-017
+proposed), one-system overlap only when ≥ 3 systems fit, staff sizes per user on the server; the 8vb failure below
+is fixed by a-footer-attach.
+
 Question: can the server find whole music systems in uploaded PDFs reliably enough for a reader mode for small
 tablets ("concept A", agreed with the user): show as many *whole* systems as fit at a minimum on-screen staff height
 (user setting, e.g. 6/7/8/10 mm), cropped to the content width; "next" makes the last system of the view the first of

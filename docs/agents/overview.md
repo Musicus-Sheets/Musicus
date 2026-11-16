@@ -21,8 +21,8 @@ musicus-api (lib) compiled into both: JSON DTOs + binary ink format
 
 | Component | Path | Builds with | Role |
 | --- | --- | --- | --- |
-| musicus-api | `crates/musicus-api` | cargo (any target) | Contract: DTOs (`dto.rs`), annotation format + merge (`ink.rs`). No I/O. |
-| musicus-server | `crates/musicus-server` | cargo | API, auth, ACL, storage, CLI (`serve`, `create-admin`, `backup`, `healthcheck`). |
+| musicus-api | `crates/musicus-api` | cargo (any target) | Contract: DTOs (`dto.rs`), annotation format + merge (`ink.rs`), system layout + view planner (`layout.rs`). No I/O. |
+| musicus-server | `crates/musicus-server` | cargo | API, auth, ACL, storage, background system detection (`layout`, see `layout.md`), CLI (`serve`, `create-admin`, `backup`, `healthcheck`). |
 | musicus-web | `crates/musicus-web` | `dx` (wasm32 only; excluded from workspace `default-members`) | UI. Talks only REST. Management controls appear inside the normal views for librarians/admins (d-inline-management). |
 | e2e | `e2e/smoke.mjs` | node + Playwright | Browser smoke test against a running server. |
 | deployment | `Dockerfile`, `compose.yaml`, `deploy/Caddyfile`, `.env.example` | docker | Distroless image; optional Caddy HTTPS profile. |

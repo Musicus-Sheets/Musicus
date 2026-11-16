@@ -2,20 +2,42 @@
 //!
 //! Layers store page-relative coordinates (0..=65535 on both axes, see
 //! `musicus_api::ink`); this module maps them to the CSS pixels of the page
-//! as currently displayed.
+//! as currently displayed. In the system view a canvas shows only a crop of
+//! the page: [`PageBox`] then also holds the crop's offset and size, so the
+//! stored coordinates stay page-relative whatever is shown (R-ANN-005).
 
 use musicus_api::ink::{COORD_MAX, InkObject, PageLayer, Stamp, Stroke, TextNote, Tool};
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 
-/// Size of the displayed page in CSS pixels.
+/// Size of the displayed page in CSS pixels, and the part of it a canvas
+/// shows: the crop starts at (`ox`, `oy`) and is `vw` × `vh` CSS pixels.
 #[derive(Clone, Copy, Debug, PartialEq, Default)]
 pub struct PageBox {
     pub width: f64,
     pub height: f64,
+    pub ox: f64,
+    pub oy: f64,
+    pub vw: f64,
+    pub vh: f64,
 }
 
 impl PageBox {
+    /// The whole page.
+    pub fn page(width: f64, height: f64) -> Self {
+        PageBox { width, height, ox: 0.0, oy: 0.0, vw: width, vh: height }
+    }
+
+    /// A crop (0..1 of the page) of a page shown `width` × `height` CSS pixels large.
+    pub fn crop(width: f64, height: f64, x0: f64, y0: f64, x1: f64, y1: f64) -> Self {
+        PageBox { width, height, ox: x0 * width, oy: y0 * height, vw: (x1 - x0) * width, vh: (y1 - y0) * height }
+    }
+
+    /// Page CSS coordinates of a point given relative to the canvas.
+    pub fn canvas_to_page(self, x: f64, y: f64) -> (f64, f64) {
+        (x + self.ox, y + self.oy)
+    }
+
     pub fn to_page(self, x: f64, y: f64) -> (u16, u16) {
         let nx = (x / self.width * COORD_MAX as f64).clamp(0.0, COORD_MAX as f64);
         let ny = (y / self.height * COORD_MAX as f64).clamp(0.0, COORD_MAX as f64);
@@ -37,23 +59,26 @@ pub fn css_color(rgba: u32, alpha_scale: f64) -> String {
     format!("rgba({r},{g},{b},{:.3})", a as f64 / 255.0 * alpha_scale)
 }
 
-/// The 2D context of a canvas, resized to the page box at device resolution
-/// and cleared. Returns `None` if the canvas is not in the DOM.
+/// The 2D context of a canvas, resized to the visible part of the page box
+/// at device resolution, cleared, and translated so that page CSS
+/// coordinates can be drawn directly. Returns `None` if the canvas is not in
+/// the DOM.
 pub fn prepare(canvas_id: &str, page: PageBox) -> Option<CanvasRenderingContext2d> {
     let window = web_sys::window()?;
     let canvas: HtmlCanvasElement = window.document()?.get_element_by_id(canvas_id)?.dyn_into().ok()?;
     let dpr = window.device_pixel_ratio();
-    let (w, h) = ((page.width * dpr).round() as u32, (page.height * dpr).round() as u32);
+    let (w, h) = ((page.vw * dpr).round() as u32, (page.vh * dpr).round() as u32);
     if canvas.width() != w || canvas.height() != h {
         canvas.set_width(w);
         canvas.set_height(h);
     }
     let style = canvas.style();
-    let _ = style.set_property("width", &format!("{}px", page.width));
-    let _ = style.set_property("height", &format!("{}px", page.height));
+    let _ = style.set_property("width", &format!("{}px", page.vw));
+    let _ = style.set_property("height", &format!("{}px", page.vh));
     let ctx: CanvasRenderingContext2d = canvas.get_context("2d").ok()??.dyn_into().ok()?;
-    let _ = ctx.set_transform(dpr, 0.0, 0.0, dpr, 0.0, 0.0);
-    ctx.clear_rect(0.0, 0.0, page.width, page.height);
+    let _ = ctx.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+    ctx.clear_rect(0.0, 0.0, w as f64, h as f64);
+    let _ = ctx.set_transform(dpr, 0.0, 0.0, dpr, -page.ox * dpr, -page.oy * dpr);
     Some(ctx)
 }
 
@@ -165,7 +190,7 @@ fn distance_to_segment(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     ((p.0 - cx).powi(2) + (p.1 - cy).powi(2)).sqrt()
 }
 
-/// Ids of the objects under the eraser at `p` (CSS pixels).
+/// Ids of the objects under the eraser at `p` (page CSS pixels, see [`PageBox::canvas_to_page`]).
 pub fn hit(page: PageBox, layer: &PageLayer, p: (f64, f64), radius: f64) -> Vec<u64> {
     layer
         .objects

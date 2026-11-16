@@ -12,7 +12,9 @@ INTEGRITY="sha512-vg8Pw1x+AFKy4AMDvhuWl5cOYV8d698UoEANoFFhc79hqXDnZQqnOXoxw3HG90
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="$ROOT/crates/musicus-web/public/vendor/pdfjs"
-if [[ -f "$TARGET/VERSION" && "$(cat "$TARGET/VERSION")" == "$VERSION-legacy" ]]; then
+# The marker changes when the set of copied files changes, so old installs are refreshed.
+MARKER="$VERSION-legacy+wasm"
+if [[ -f "$TARGET/VERSION" && "$(cat "$TARGET/VERSION")" == "$MARKER" ]]; then
     echo "pdf.js $VERSION already present"
     exit 0
 fi
@@ -31,5 +33,10 @@ rm -rf "$TARGET"
 mkdir -p "$TARGET"
 cp "$WORK/package/legacy/build/pdf.min.mjs" "$WORK/package/legacy/build/pdf.worker.min.mjs" "$TARGET/"
 cp "$WORK/package/LICENSE" "$TARGET/LICENSE"
-echo "$VERSION-legacy" > "$TARGET/VERSION"
+# Image decoders for scanned sheets (JBIG2, JPEG 2000) and colour profiles; without
+# them pdf.js shows such pages blank. Not copied: QuickJS (PDF scripting, unused).
+mkdir -p "$TARGET/wasm"
+cp "$WORK"/package/wasm/{jbig2.wasm,jbig2_nowasm_fallback.js,openjpeg.wasm,openjpeg_nowasm_fallback.js,qcms_bg.wasm} "$TARGET/wasm/"
+cp "$WORK"/package/wasm/LICENSE_{JBIG2,OPENJPEG,QCMS,PDFJS_JBIG2,PDFJS_OPENJPEG,PDFJS_QCMS} "$TARGET/wasm/"
+echo "$MARKER" > "$TARGET/VERSION"
 echo "pdf.js $VERSION installed in $TARGET"

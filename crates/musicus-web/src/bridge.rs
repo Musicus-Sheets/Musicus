@@ -13,6 +13,19 @@ extern "C" {
     fn js_page_count(url: &str) -> js_sys::Promise;
     #[wasm_bindgen(js_name = renderPage)]
     fn js_render_page(url: &str, index: u32, canvas_id: &str, box_width: f64, box_height: f64) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = renderCrop)]
+    fn js_render_crop(
+        url: &str,
+        index: u32,
+        canvas_id: &str,
+        x0: f64,
+        y0: f64,
+        x1: f64,
+        y1: f64,
+        css_width: f64,
+    ) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = prerenderCrop)]
+    fn js_prerender_crop(url: &str, index: u32, x0: f64, y0: f64, x1: f64, y1: f64, css_width: f64);
     #[wasm_bindgen(js_name = retainOnly)]
     fn js_retain_only(keep: js_sys::Array);
     #[wasm_bindgen(js_name = keepAwake)]
@@ -72,6 +85,36 @@ pub async fn render_page(
     }
     let a = js_sys::Array::from(&v);
     Ok(Some((a.get(0).as_f64().unwrap_or(0.0), a.get(1).as_f64().unwrap_or(0.0))))
+}
+
+/// A crop of a page (0..1 of the page) for the system view.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Crop {
+    pub page: u32,
+    pub x0: f64,
+    pub y0: f64,
+    pub x1: f64,
+    pub y1: f64,
+    /// Width on screen in CSS pixels.
+    pub css_width: f64,
+}
+
+/// Renders only `crop` of a page into the canvas, sharp at devicePixelRatio.
+/// Returns the CSS size, `None` if superseded by a newer request.
+pub async fn render_crop(url: &str, canvas_id: &str, c: Crop) -> Result<Option<(f64, f64)>, String> {
+    let v = JsFuture::from(js_render_crop(url, c.page, canvas_id, c.x0, c.y0, c.x1, c.y1, c.css_width))
+        .await
+        .map_err(message)?;
+    if v.is_null() || v.is_undefined() {
+        return Ok(None);
+    }
+    let a = js_sys::Array::from(&v);
+    Ok(Some((a.get(0).as_f64().unwrap_or(0.0), a.get(1).as_f64().unwrap_or(0.0))))
+}
+
+/// Renders a crop into memory only, so the next view appears at once.
+pub fn prerender_crop(url: &str, c: Crop) {
+    js_prerender_crop(url, c.page, c.x0, c.y0, c.x1, c.y1, c.css_width);
 }
 
 /// Frees memory of files no longer needed.

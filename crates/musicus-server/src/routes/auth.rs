@@ -12,6 +12,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use musicus_api::layout::{ReaderMode, ReaderSettings, StaffSize};
 use musicus_api::{
     AcceptInvite, ChangePassword, CurrentUser, Id, InviteInfo, LoginRequest, LoginResponse, Role, SessionInfo,
 };
@@ -21,12 +22,32 @@ fn user_agent(headers: &HeaderMap) -> Option<&str> {
 }
 
 pub async fn current_user(app: &AppState, id: Id) -> ApiResult<CurrentUser> {
-    let (username, display_name, role): (String, String, String) =
-        sqlx::query_as("SELECT username, display_name, role FROM users WHERE id = ?1")
+    let (username, display_name, role, mode, size): (String, String, String, String, String) =
+        sqlx::query_as("SELECT username, display_name, role, reader_mode, staff_size FROM users WHERE id = ?1")
             .bind(id)
             .fetch_one(&app.db.read)
             .await?;
-    Ok(CurrentUser { id, username, display_name, role: Role::parse(&role).unwrap_or(Role::Member) })
+    let reader = ReaderSettings {
+        mode: ReaderMode::parse(&mode).unwrap_or_default(),
+        staff_size: StaffSize::parse(&size).unwrap_or_default(),
+    };
+    Ok(CurrentUser { id, username, display_name, role: Role::parse(&role).unwrap_or(Role::Member), reader })
+}
+
+/// Stores the user's reader mode and staff size (on the server, because the
+/// web client keeps nothing on the device; R-SEC-001, R-READ-014).
+pub async fn set_reader_settings(
+    State(app): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<ReaderSettings>,
+) -> ApiResult<Json<ReaderSettings>> {
+    sqlx::query("UPDATE users SET reader_mode = ?1, staff_size = ?2 WHERE id = ?3")
+        .bind(req.mode.as_str())
+        .bind(req.staff_size.as_str())
+        .bind(user.id)
+        .execute(&app.db.write)
+        .await?;
+    Ok(Json(req))
 }
 
 /// Responds with the user and either a cookie (web) or a bearer token (app).

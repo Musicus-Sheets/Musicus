@@ -1,9 +1,9 @@
-//! Concert programmes. Opening one downloads all its sheets into memory, so
-//! turning to the next piece on stage needs no network. Librarians and admins
-//! also get "New programme" and "Edit" (editor in `programme_edit.rs`).
+//! Concert programmes. Opening one downloads all its sheets (and their system
+//! layouts) into memory, so turning to the next piece on stage needs no
+//! network. Librarians and admins also get "New programme" and "Edit" (editor in `programme_edit.rs`).
 
 use crate::{
-    Route, api, bridge,
+    Route, api, bridge, layouts,
     pages::library::ScoreCard,
     ui::{ErrorBox, Loading, can_manage, format_date},
 };
@@ -85,6 +85,14 @@ pub fn ProgrammeView(id: i64) -> Element {
         let urls = programme_urls(p);
         // Free the memory of sheets from other programmes.
         bridge::retain_only(&urls);
+        // System layouts too (small JSON), so the system view works offline on stage.
+        let shas: Vec<String> = urls.iter().filter_map(|u| u.strip_prefix("/api/files/").map(str::to_string)).collect();
+        layouts::retain_only(&shas);
+        spawn(async move {
+            for sha in shas {
+                let _ = layouts::load(&sha).await;
+            }
+        });
         total.set(urls.len());
         loaded.set(0);
         failed.set(0);

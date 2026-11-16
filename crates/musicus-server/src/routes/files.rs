@@ -1,4 +1,4 @@
-//! Serves sheet files and thumbnails by hash, after the access check.
+//! Serves sheet files, thumbnails and system layouts by hash, after the access check.
 //!
 //! Plain requests are answered from the RAM cache (one shared copy for
 //! every musician opening the same piece); `Range` requests stream from
@@ -19,6 +19,7 @@ use axum::{
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use musicus_api::layout::{FileLayout, LayoutState};
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
@@ -60,6 +61,34 @@ pub async fn get_thumbnail(
     let (_, thumbnail) = readable_file(&app, &user, &sha256).await?;
     let thumbnail = thumbnail.ok_or(AppError::NotFound)?;
     serve_blob(&app, &thumbnail, "image/png", req).await
+}
+
+/// The music systems of every page (`GET /api/files/{sha256}/layout`), for
+/// the system view of the reader. Same access rule as the file itself.
+/// `pending` until the background worker has analysed the file.
+pub async fn get_layout(
+    State(app): State<AppState>,
+    user: AuthUser,
+    Path(sha256): Path<String>,
+) -> ApiResult<axum::Json<FileLayout>> {
+    readable_file(&app, &user, &sha256).await?;
+    let row: Option<(i64, String, String)> = sqlx::query_as(
+        "SELECT l.algorithm, l.state, l.pages FROM file_layouts l JOIN files f ON f.id = l.file_id
+         WHERE f.sha256 = ?1",
+    )
+    .bind(&sha256)
+    .fetch_optional(&app.db.read)
+    .await?;
+    let layout = match row {
+        None => FileLayout { sha256, state: LayoutState::Pending, algorithm: 0, pages: vec![] },
+        Some((algorithm, state, pages)) => FileLayout {
+            sha256,
+            state: if state == "done" { LayoutState::Done } else { LayoutState::Failed },
+            algorithm,
+            pages: serde_json::from_str(&pages).map_err(AppError::internal)?,
+        },
+    };
+    Ok(axum::Json(layout))
 }
 
 async fn serve_blob(app: &App, sha256: &str, mime: &str, req: Request) -> ApiResult<Response> {
