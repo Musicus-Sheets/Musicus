@@ -64,6 +64,7 @@ pub fn api() -> Router<AppState> {
         .route("/files/{sha256}", get(files::get_file))
         .route("/files/{sha256}/thumbnail", get(files::get_thumbnail))
         .route("/files/{sha256}/layout", get(files::get_layout))
+        .route("/files/{sha256}/layout/pages/{page}", put(files::put_correction).delete(files::delete_correction))
         // Programmes
         .route("/programmes", get(programmes::list).post(programmes::create))
         .route("/programmes/{id}", get(programmes::get).put(programmes::update).delete(programmes::delete))

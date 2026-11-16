@@ -4,6 +4,7 @@
 //! every musician opening the same piece); `Range` requests stream from
 //! disk via tower-http so a client can start with the first pages.
 
+use crate::layout::apply_correction;
 use crate::{
     access::librarian_flag,
     auth::AuthUser,
@@ -19,7 +20,7 @@ use axum::{
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use musicus_api::layout::{FileLayout, LayoutState};
+use musicus_api::layout::{FileLayout, LayoutState, PageCorrection, PageLayout};
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
@@ -72,23 +73,94 @@ pub async fn get_layout(
     Path(sha256): Path<String>,
 ) -> ApiResult<axum::Json<FileLayout>> {
     readable_file(&app, &user, &sha256).await?;
-    let row: Option<(i64, String, String)> = sqlx::query_as(
-        "SELECT l.algorithm, l.state, l.pages FROM file_layouts l JOIN files f ON f.id = l.file_id
+    Ok(axum::Json(effective_layout(&app, &sha256).await?))
+}
+
+/// The detected layout with the librarians' corrections applied.
+async fn effective_layout(app: &App, sha256: &str) -> ApiResult<FileLayout> {
+    let row: Option<(i64, i64, String, String)> = sqlx::query_as(
+        "SELECT f.id, l.algorithm, l.state, l.pages FROM file_layouts l JOIN files f ON f.id = l.file_id
          WHERE f.sha256 = ?1",
     )
-    .bind(&sha256)
+    .bind(sha256)
     .fetch_optional(&app.db.read)
     .await?;
-    let layout = match row {
-        None => FileLayout { sha256, state: LayoutState::Pending, algorithm: 0, pages: vec![] },
-        Some((algorithm, state, pages)) => FileLayout {
-            sha256,
-            state: if state == "done" { LayoutState::Done } else { LayoutState::Failed },
-            algorithm,
-            pages: serde_json::from_str(&pages).map_err(AppError::internal)?,
-        },
+    let sha256 = sha256.to_string();
+    let Some((file_id, algorithm, state, pages)) = row else {
+        return Ok(FileLayout { sha256, state: LayoutState::Pending, algorithm: 0, pages: vec![] });
     };
-    Ok(axum::Json(layout))
+    let mut pages: Vec<PageLayout> = serde_json::from_str(&pages).map_err(AppError::internal)?;
+    let corrections: Vec<(i64, String)> =
+        sqlx::query_as("SELECT page, data FROM layout_corrections WHERE file_id = ?1 ORDER BY page")
+            .bind(file_id)
+            .fetch_all(&app.db.read)
+            .await?;
+    for (page, data) in corrections {
+        if let Some(p) = usize::try_from(page).ok().and_then(|i| pages.get_mut(i)) {
+            let c: PageCorrection = serde_json::from_str(&data).map_err(AppError::internal)?;
+            *p = apply_correction(p, &c);
+        }
+    }
+    let state = if state == "done" { LayoutState::Done } else { LayoutState::Failed };
+    Ok(FileLayout { sha256, state, algorithm, pages })
+}
+
+/// Id and page count of an analysed file, for corrections (librarians only).
+async fn correctable(app: &App, user: &AuthUser, sha256: &str, page: i64) -> ApiResult<i64> {
+    user.require_librarian()?;
+    readable_file(app, user, sha256).await?;
+    let (file_id, pages): (i64, String) = sqlx::query_as(
+        "SELECT f.id, l.pages FROM files f JOIN file_layouts l ON l.file_id = f.id
+         WHERE f.sha256 = ?1 AND l.state = 'done'",
+    )
+    .bind(sha256)
+    .fetch_optional(&app.db.read)
+    .await?
+    .ok_or_else(|| AppError::Conflict("the systems of this file have not been detected yet".into()))?;
+    let count = serde_json::from_str::<Vec<serde_json::Value>>(&pages).map_err(AppError::internal)?.len() as i64;
+    if !(0..count).contains(&page) {
+        return Err(AppError::NotFound);
+    }
+    Ok(file_id)
+}
+
+/// A librarian's correction of one page (`PUT /api/files/{sha256}/layout/pages/{page}`,
+/// R-READ-016). Applies to every member; survives new detection runs.
+pub async fn put_correction(
+    State(app): State<AppState>,
+    user: AuthUser,
+    Path((sha256, page)): Path<(String, i64)>,
+    axum::Json(c): axum::Json<PageCorrection>,
+) -> ApiResult<axum::Json<FileLayout>> {
+    let file_id = correctable(&app, &user, &sha256, page).await?;
+    c.validate().map_err(|e| AppError::BadRequest(e.into()))?;
+    sqlx::query(
+        "INSERT INTO layout_corrections (file_id, page, data, updated_by, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT (file_id, page) DO UPDATE SET data = ?3, updated_by = ?4, updated_at = ?5",
+    )
+    .bind(file_id)
+    .bind(page)
+    .bind(serde_json::to_string(&c).map_err(AppError::internal)?)
+    .bind(user.id)
+    .bind(crate::db::now())
+    .execute(&app.db.write)
+    .await?;
+    Ok(axum::Json(effective_layout(&app, &sha256).await?))
+}
+
+/// Back to the automatic detection for one page.
+pub async fn delete_correction(
+    State(app): State<AppState>,
+    user: AuthUser,
+    Path((sha256, page)): Path<(String, i64)>,
+) -> ApiResult<axum::Json<FileLayout>> {
+    let file_id = correctable(&app, &user, &sha256, page).await?;
+    sqlx::query("DELETE FROM layout_corrections WHERE file_id = ?1 AND page = ?2")
+        .bind(file_id)
+        .bind(page)
+        .execute(&app.db.write)
+        .await?;
+    Ok(axum::Json(effective_layout(&app, &sha256).await?))
 }
 
 async fn serve_blob(app: &App, sha256: &str, mime: &str, req: Request) -> ApiResult<Response> {

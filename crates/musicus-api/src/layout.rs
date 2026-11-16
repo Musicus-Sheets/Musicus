@@ -3,6 +3,8 @@
 //! The server detects the music systems on every page of an uploaded PDF
 //! once (see `musicus-server/src/layout`) and serves them as [`FileLayout`].
 //! A page may be shown whole (`PageLayout::full_page`) when the detection is unsure.
+//! Librarians may correct a page ([`PageCorrection`]); the served layout then
+//! contains the corrected page.
 //! The client turns the layout into a reading sequence ([`reading_items`])
 //! and plans the views for its screen ([`plan_views`]): as many whole systems as fit at the user's minimum staff
 //! height, cropped to the content width, continuing across page boundaries.
@@ -87,6 +89,45 @@ pub struct FileLayout {
     pub algorithm: i64,
     pub pages: Vec<PageLayout>,
 }
+
+/// A librarian's correction of one page (`PUT /api/files/{sha256}/layout/pages/{page}`).
+/// The page is cut at `bounds` (increasing, 0..1 of the page height); band
+/// `i` lies between `bounds[i]` and `bounds[i + 1]` and has kind `kinds[i]`.
+/// Everything above the first and below the last bound is not shown.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct PageCorrection {
+    pub full_page: bool,
+    pub bounds: Vec<f32>,
+    pub kinds: Vec<RegionKind>,
+}
+
+/// Upper limit of bands per corrected page.
+pub const MAX_CORRECTED_BANDS: usize = 60;
+
+impl PageCorrection {
+    /// Checks the invariants; returns a message for a 400 response.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.kinds.len() > MAX_CORRECTED_BANDS {
+            return Err("too many bands");
+        }
+        if self.full_page && self.kinds.is_empty() {
+            return Ok(());
+        }
+        if self.bounds.len() != self.kinds.len() + 1 || self.kinds.is_empty() {
+            return Err("bounds must have one entry more than kinds");
+        }
+        if self.bounds.iter().any(|b| !b.is_finite() || !(0.0..=1.0).contains(b)) {
+            return Err("bounds must lie between 0 and 1");
+        }
+        if self.bounds.windows(2).any(|w| w[1] - w[0] < MIN_BAND_HEIGHT) {
+            return Err("bounds must increase");
+        }
+        Ok(())
+    }
+}
+
+/// Smallest band of a correction (0..1 of the page height).
+pub const MIN_BAND_HEIGHT: f32 = 0.005;
 
 // ---------------------------------------------------------------------------
 // Reader settings (stored per user on the server, R-SEC-001)
@@ -538,6 +579,28 @@ mod tests {
         );
         // Staff height on paper: 4 × 0.006 × 297 mm.
         assert!((items[1].staff_mm - 7.128).abs() < 1e-3);
+    }
+
+    #[test]
+    fn corrections_are_validated() {
+        let ok = PageCorrection {
+            full_page: false,
+            bounds: vec![0.1, 0.4, 0.8],
+            kinds: vec![RegionKind::System, RegionKind::Hidden],
+        };
+        assert!(ok.validate().is_ok());
+        assert!(PageCorrection { full_page: true, ..Default::default() }.validate().is_ok());
+        assert!(
+            PageCorrection { bounds: vec![0.4, 0.1], kinds: vec![RegionKind::System], ..ok.clone() }
+                .validate()
+                .is_err()
+        );
+        assert!(
+            PageCorrection { bounds: vec![0.1, 1.4], kinds: vec![RegionKind::System], ..ok.clone() }
+                .validate()
+                .is_err()
+        );
+        assert!(PageCorrection { bounds: vec![0.1], ..ok }.validate().is_err());
     }
 
     #[test]

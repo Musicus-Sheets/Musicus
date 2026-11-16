@@ -5,7 +5,8 @@
 //! greyscale with hayro and analysed by [`detect`]; the result is stored as
 //! `musicus_api::layout::PageLayout` JSON in `file_layouts`, together with
 //! [`ALGORITHM_VERSION`]. Raising that version makes the worker analyse
-//! every file again (librarians' corrections are kept separately and win).
+//! every file again (librarians' corrections are kept separately in
+//! `layout_corrections` and applied when serving, see [`apply_correction`]).
 //! Exact algorithm: `docs/technical/chapters/12-system-view.typ`.
 
 pub mod detect;
@@ -15,7 +16,7 @@ use hayro::hayro_interpret::InterpreterSettings;
 use hayro::hayro_syntax::Pdf;
 use hayro::vello_cpu::color::palette::css::WHITE;
 use hayro::{PixmapSettings, RenderCache, RenderSettings, render};
-use musicus_api::layout::{CONFIDENCE_MIN, PageLayout, Region, RegionKind};
+use musicus_api::layout::{CONFIDENCE_MIN, PageCorrection, PageLayout, Region, RegionKind};
 
 /// Version of the detection algorithm. Raise it whenever `detect` changes
 /// its results; the worker then re-analyses all files in the background.
@@ -99,6 +100,55 @@ pub fn analyse_page(gray: &Gray, width_mm: f32, height_mm: f32) -> PageLayout {
         full_page: r.confidence < CONFIDENCE_MIN || !has_systems,
         regions,
         corrected: false,
+    }
+}
+
+/// The page as a librarian corrected it. Band kinds and cut lines come from
+/// the correction; staff count, line distance and horizontal extent from the
+/// detected systems the band overlaps most (whole width if none).
+pub fn apply_correction(auto: &PageLayout, c: &PageCorrection) -> PageLayout {
+    let mut regions = Vec::new();
+    let systems: Vec<&Region> = auto.regions.iter().filter(|r| r.kind == RegionKind::System).collect();
+    let mut spaces: Vec<f32> = systems.iter().map(|r| r.staff_space).collect();
+    spaces.sort_by(f32::total_cmp);
+    let page_space = spaces.first().copied().unwrap_or(0.0);
+    if !c.full_page {
+        for (i, kind) in c.kinds.iter().enumerate() {
+            let (y0, y1) = (c.bounds[i], c.bounds[i + 1]);
+            let overlap = |r: &&Region| (r.y1.min(y1) - r.y0.max(y0)).max(0.0);
+            let inside: Vec<&Region> = auto.regions.iter().filter(|r| overlap(r) > 0.0).collect();
+            let x0 = inside.iter().map(|r| r.x0).fold(f32::MAX, f32::min);
+            let x1 = inside.iter().map(|r| r.x1).fold(0.0, f32::max);
+            let (x0, x1) = if x1 > x0 { (x0, x1) } else { (0.0, 1.0) };
+            let ink_y0 = inside.iter().map(|r| r.ink_y0).fold(f32::MAX, f32::min).max(y0);
+            let ink_y1 = inside.iter().map(|r| r.ink_y1).fold(0.0, f32::max).min(y1);
+            let (ink_y0, ink_y1) = if ink_y1 > ink_y0 { (ink_y0, ink_y1) } else { (y0, y1) };
+            let staves: u32 = systems.iter().filter(|r| overlap(r) > 0.5 * (r.y1 - r.y0)).map(|r| r.staves).sum();
+            let space = systems.iter().filter(|r| overlap(r) > 0.0).map(|r| r.staff_space).fold(f32::MAX, f32::min);
+            regions.push(Region {
+                kind: *kind,
+                y0,
+                y1,
+                ink_y0,
+                ink_y1,
+                x0,
+                x1,
+                staves: if *kind == RegionKind::System { staves.max(1) } else { 0 },
+                staff_space: match kind {
+                    RegionKind::System if space < f32::MAX => space,
+                    RegionKind::System => page_space,
+                    _ => 0.0,
+                },
+            });
+        }
+    }
+    PageLayout {
+        width_mm: auto.width_mm,
+        height_mm: auto.height_mm,
+        confidence: 1.0,
+        full_page: c.full_page || !regions.iter().any(|r| r.kind == RegionKind::System && r.staff_space > 0.0),
+        regions,
+        corrected: true,
     }
 }
 
@@ -228,5 +278,24 @@ mod tests {
         let p = analyse_page(&g, 210.0, 297.0);
         let last = p.regions.iter().rfind(|r| r.kind == RegionKind::System).unwrap();
         assert!(last.ink_y1 * 1169.0 >= (last_bottom + 21) as f32, "{:?}", p.regions);
+    }
+
+    #[test]
+    fn corrections_replace_bands_and_keep_staff_sizes() {
+        let auto = analyse_page(&page(4, 1), 210.0, 297.0);
+        let sys: Vec<&Region> = auto.regions.iter().filter(|r| r.kind == RegionKind::System).collect();
+        // Merge the first two systems, hide the rest.
+        let c = PageCorrection {
+            full_page: false,
+            bounds: vec![sys[0].y0, sys[1].y1, sys[3].y1],
+            kinds: vec![RegionKind::System, RegionKind::Hidden],
+        };
+        let p = apply_correction(&auto, &c);
+        assert!(p.corrected && !p.full_page);
+        assert_eq!(p.regions.len(), 2);
+        assert_eq!(p.regions[0].staves, 2);
+        assert!((p.regions[0].staff_space - sys[0].staff_space).abs() < 1e-6);
+        let full = apply_correction(&auto, &PageCorrection { full_page: true, ..Default::default() });
+        assert!(full.full_page && full.regions.is_empty());
     }
 }

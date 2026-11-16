@@ -211,7 +211,7 @@ with the user's consent.
 - If you change it: a calibration setting per device would need client storage (R-SEC-001) or a server setting per user and device.
 
 ### a-footer-attach
-- Decision: ink that starts within `FOOTER_ATTACH_SPACES` (2.5 line distances) below the last staff of a page belongs to the last system (up to the next ink-free run of one line distance), even if the margin scoring chose a cut above it.
+- Decision: ink that starts within `FOOTER_ATTACH_SPACES` (4 line distances; 2.5 in the first version, which turned a dynamic mark 2.4–3 spaces below the last staff into a skipped footer) below the last staff of a page belongs to the last system (up to the next ink-free run of one line distance), even if the margin scoring chose a cut above it.
 - Why: the prototype's only unflagged error (lake-pirates p. 2): an 8vb line and a low note became footer, and small footers are skipped by the reader, so music was lost. A copyright line that close is attached too — harmless (it is only shown).
 - Serves: R-READ-010, R-READ-013.
 - If you change it: raise `ALGORITHM_VERSION`; keep the unit test `ink_right_below_the_last_staff_stays_with_it`.
@@ -227,3 +227,9 @@ with the user's consent.
 - Why: without them pdf.js 6 renders pages of JBIG2/JPEG 2000 scans (common on IMSLP) blank — found while testing the system view on real scans; affected the page view too.
 - Serves: R-READ-006, R-READ-001.
 - If you change it: a pdf.js upgrade must keep `wasmUrl` and the copied file names.
+
+### a-layout-corrections
+- Decision: librarians' corrections are stored per (file, page) in their own table `layout_corrections` as the complete band list (`PageCorrection`: cut lines + kinds + whole-page flag), not as edits of the detected regions, and applied when the layout is served. One correction per page, shared by all members (the file is the same for everyone); `PUT`/`DELETE` only for librarians; the editor is a normal Shell page reached from `Edit part` (d-inline-management).
+- Why: re-detection (raised `ALGORITHM_VERSION`) rewrites `file_layouts` and must not lose manual work; a complete band list stays valid whatever the new detection finds; staff sizes still come from the detection (librarians only move lines). A corrected file version is a new file ⇒ no stale corrections.
+- Serves: R-READ-016, R-READ-010, R-ACL-001.
+- If you change it: keep corrections out of the worker; a new file version starts uncorrected (tell librarians in the guide).

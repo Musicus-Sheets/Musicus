@@ -76,7 +76,7 @@ Notation: `w×h` image, `t` line thickness, `d` line distance (centre to centre)
     (1 + distance to the staff / (`MARGIN_DECAY_SPACES` 8 d)); runs touching the page edge (or border) score −1 and
     yield a cut `EDGE_CUT_SPACES` 2 d from the ink; no run at all ⇒ step 12 within max(`MARGIN_GAP_FACTOR` 0.6 × typical
     gap, `MARGIN_MIN_SPACES` 5 d) (typical gap = median system gap, `DEFAULT_GAP_SPACES` 8 d if one system).
-    **Footer attach** (a-footer-attach): if the first ink below the bottom cut starts < `FOOTER_ATTACH_SPACES` 2.5 d
+    **Footer attach** (a-footer-attach): if the first ink below the bottom cut starts < `FOOTER_ATTACH_SPACES` 4 d
     below the last staff, the cut moves below that ink block (block ends at an ink-free run of 1 d; cut in its middle).
 14. **Regions** (deskewed, mapped back as bounding boxes: y ± (x − w/2)·tan α over the region's x range): header = first
     ink row .. first cut; system k = cut k .. cut k+1, x = ink columns (> max(1, `INK_COLUMN_FILL` 0.002 × rows))
@@ -135,6 +135,21 @@ Notes: pending/failed layout in system mode ⇒ blue banner and page view.
 offset (scale = cssWidth / (crop width · page width pt)), canvas at devicePixelRatio, cache `crops` (LRU 24 bitmaps,
 key = url|page|crop|round(cssWidth)|dpr; also used by `prerenderCrop`), newest request per canvas wins;
 `retainOnly` drops a file's crops.
+
+## Corrections (R-READ-016, a-layout-corrections)
+
+`PageCorrection {full_page, bounds, kinds}`: band i = `bounds[i]..bounds[i+1]` (0..1 of the page height) of kind
+`kinds[i]`; nothing outside the first/last bound is shown. `validate`: ≤ `MAX_CORRECTED_BANDS` 60 bands; full_page
+may have no bands; else `bounds.len() == kinds.len() + 1`, values in 0..1, each band ≥ `MIN_BAND_HEIGHT` 0.005.
+Stored per (file, page) in `layout_corrections`, applied when serving (`files::effective_layout` →
+`layout::apply_correction`): per band, x range / ink rows = union of the detected regions it overlaps (else whole
+width / the band), staves = sum of detected systems overlapping it by more than half (≥ 1 for a System band),
+staff_space = smallest of the overlapped systems (else the page's smallest); `confidence` 1, `corrected` true,
+`full_page` = correction's flag or no System band with a staff size. The worker never touches corrections, so they
+survive re-analysis. Editor: `pages/layout_edit.rs` (see `web-client.md`): draft from the effective page (regions →
+bounds/kinds; no regions ⇒ one System band 0..1), Split inserts a cut in the middle, × removes a cut (the joined
+band is System if either was), cut drag clamps between neighbours ± `MIN_BAND_HEIGHT`; Save/Reset call `layouts::forget`
+so this tab's readers refetch (other devices load the layout when they open the part again).
 
 ## Regression numbers (local example set, not committed)
 

@@ -335,6 +335,7 @@ pub fn PartEditor(
                         span { class: "file-badge", "PDF" }
                         span { class: "muted small", "{describe_file(f)} · uploaded {format_time(f.uploaded_at)}" }
                         Link { class: "button", to: Route::Viewer { id }, "Open" }
+                        Link { class: "button", to: Route::LayoutEditor { id }, "Edit systems" }
                     },
                     None => rsx! { span { class: "warn-text small", "No PDF yet" } },
                 }

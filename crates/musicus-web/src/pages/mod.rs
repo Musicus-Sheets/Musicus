@@ -2,6 +2,7 @@ pub mod account;
 pub mod forms;
 pub mod groups;
 pub mod instruments;
+pub mod layout_edit;
 pub mod library;
 pub mod login;
 pub mod programme_edit;

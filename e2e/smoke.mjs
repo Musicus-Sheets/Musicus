@@ -8,7 +8,8 @@
 // library, invites, groups and grants, programmes, a librarian's and a
 // member's view (no management controls), a member reading and annotating,
 // the system view (generated part: whole systems across pages, swipe, staff
-// size, drawing in a crop).
+// size, drawing in a crop), the librarian's system editor (join, drag, whole
+// page, reset) and its effect on members.
 // The assignment picker (assigned chips + searchable multi-select dropdown)
 // is checked on group members and grants, part instruments and programme
 // pieces: search, several entries in one go, the three ways of closing
@@ -651,6 +652,52 @@ check(await redPixels(m) > 50, 'a stroke drawn in the system view shows in the p
 check((await m.evaluate(async () => (await (await fetch('/api/auth/me')).json()).reader.mode)) === 'page',
   'switching back to the page view is stored too');
 
+// --- Librarian corrects the systems; every member's system view follows --
+await a.goto(`${base}/parts/${systemsPart.id}/edit`);
+await a.getByRole('link', { name: 'Edit systems' }).click();
+await a.getByRole('heading', { name: 'Systems' }).waitFor();
+await a.locator('.layout-overlay .band').first().waitFor();
+const bandsP1 = await a.locator('.layout-overlay .band').count();
+check(bandsP1 === 9, `the editor shows the detected bands of page 1 (title + 8 systems: ${bandsP1})`);
+await shot(a, 'layout-editor');
+await a.getByRole('button', { name: 'Remove cut 3' }).click();
+check(await a.locator('.layout-overlay .band').count() === 8, 'removing a cut joins two systems');
+const grip = a.getByRole('separator', { name: 'Cut 2' });
+const before = Number(await grip.getAttribute('aria-valuenow'));
+const gb = await grip.boundingBox();
+await a.mouse.move(gb.x + 20, gb.y + gb.height / 2);
+await a.mouse.down();
+await a.mouse.move(gb.x + 20, gb.y + gb.height / 2 - 12, { steps: 4 });
+await a.mouse.up();
+const after = Number(await grip.getAttribute('aria-valuenow'));
+check(after < before, `dragging moves a cut line (${before} → ${after} %)`);
+await a.getByRole('button', { name: 'Save page' }).click();
+await a.getByText(/^Saved/).waitFor();
+await a.getByRole('button', { name: 'Next page ›' }).click();
+await a.getByText('Page 2 / 2').waitFor();
+await a.getByLabel('Show this page as a whole page').check();
+await a.getByRole('button', { name: 'Save page' }).click();
+await a.getByText(/^Saved/).waitFor();
+const correctedLayout = await m.evaluate(async (sha) => (await fetch(`/api/files/${sha}/layout`)).json(), systemsPart.layout.sha256);
+check(correctedLayout.pages[0].regions.filter((r) => r.kind === 'system').length === 7 && correctedLayout.pages[0].corrected
+  && correctedLayout.pages[1].full_page, 'members get the corrected layout (7 systems on page 1, page 2 whole)');
+check((await m.evaluate(async (sha) => (await fetch(`/api/files/${sha}/layout/pages/0`, { method: 'PUT', headers: { 'content-type': 'application/json', 'x-musicus-csrf': '1' }, body: '{"full_page":true,"bounds":[],"kinds":[]}' })).status, systemsPart.layout.sha256)) === 403,
+  'members cannot correct layouts');
+await m.goto(`${base}/parts/${systemsPart.id}`);
+await m.getByRole('button', { name: /Systems/ }).click();
+await m.locator('.system-view .crop').first().waitFor();
+const [, endCount] = (await m.locator('.system-view').getAttribute('data-view')).split('/').map(Number);
+for (let i = 1; i < endCount; i += 1) await m.keyboard.press('ArrowRight');
+await m.locator(`[data-view="${endCount}/${endCount}"]`).waitFor();
+const lastCrops = await m.locator('.system-view .crop').count();
+const lastBox = await m.locator('.system-view .crop').first().boundingBox();
+check(lastCrops === 1 && lastBox.height > lastBox.width, 'the page marked whole is shown as one whole page in the system view');
+await m.getByRole('button', { name: /Systems/ }).click();
+await a.getByRole('button', { name: 'Reset to automatic' }).click();
+await a.getByText('Back to the automatic detection').waitFor();
+const resetLayout = await m.evaluate(async (sha) => (await fetch(`/api/files/${sha}/layout`)).json(), systemsPart.layout.sha256);
+check(!resetLayout.pages[1].full_page && !resetLayout.pages[1].corrected, 'a page can be reset to the automatic detection');
+
 // The admin does not see anna's annotations.
 const sets = await a.evaluate(async () => {
   const r = await fetch('/api/parts/1/annotation-sets');
@@ -675,10 +722,10 @@ await m.getByRole('heading', { name: 'Library' }).waitFor();
 await shot(m, 'phone-library');
 
 // Ignored: the dev build's hot-reload socket, the expected 401 of the
-// session check before logging in, and the expected 409 of deleting an
-// instrument in use.
+// session check before logging in, the expected 409 of deleting an
+// instrument in use and the expected 403 of a member correcting a layout.
 const relevant = errors.filter((e) => !e.includes('favicon') && !e.includes('/_dioxus')
-  && !e.includes('status of 401') && !e.includes('status of 409'));
+  && !e.includes('status of 401') && !e.includes('status of 409') && !e.includes('status of 403'));
 check(relevant.length === 0, `no browser errors${relevant.length ? `: ${relevant.join(' | ')}` : ''}`);
 await browser.close();
 console.log('smoke test passed');

@@ -100,7 +100,7 @@ pub const BORDER_ROW_FILL: f32 = 0.5;
 /// Ink below the last system that starts within this many spaces of its bottom line
 /// (8va/8vb lines, low notes, pedal marks) belongs to the system, up to the next ink-free
 /// run of one space.
-pub const FOOTER_ATTACH_SPACES: f32 = 2.5;
+pub const FOOTER_ATTACH_SPACES: f32 = 4.0;
 /// Horizontal ink extent of a system: from `SYSTEM_LEFT_SPACES` left of its staves
 /// (instrument names, braces) to `SYSTEM_RIGHT_SPACES` right of them (text after the last barline).
 pub const SYSTEM_LEFT_SPACES: f32 = 12.0;

@@ -13,7 +13,8 @@ Dioxus 0.7.10, features `web` + `router`; compiled to wasm32 by `dx`; assets `as
 | `/` | `pages::library::Library` | `ui::Shell` | librarian/admin: `+ Add piece`, `Edit` per piece and part |
 | `/scores/new` | `pages::score_edit::NewScore` | Shell | guided flow (L) |
 | `/scores/:id/edit` | `pages::score_edit::EditScore` | Shell | edit piece (L) |
-| `/parts/:id/edit` | `pages::score_edit::EditPart` | Shell | edit one part (L) |
+| `/parts/:id/edit` | `pages::score_edit::EditPart` | Shell | edit one part (L); link `Edit systems` next to `Open` |
+| `/parts/:id/systems` | `pages::layout_edit::LayoutEditor` | Shell | system editor of the current file (L, R-READ-016; `layout.md`) |
 | `/programmes`, `/programmes/:id` | `pages::programmes::{Programmes, ProgrammeView}` | Shell | ProgrammeView prefetches; L: `+ New programme`, `Edit` |
 | `/programmes/new`, `/programmes/:id/edit` | `pages::programme_edit::{NewProgramme, EditProgramme}` | Shell | (L) |
 | `/instruments` | `pages::instruments::Instruments` | Shell | everyone reads; L adds/edits/deletes |

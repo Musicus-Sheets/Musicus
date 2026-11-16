@@ -23,6 +23,11 @@ pub async fn load(sha256: &str) -> api::ApiResult<FileLayout> {
     Ok(layout)
 }
 
+/// Forgets a layout (after a librarian corrected it), so the next load asks the server.
+pub fn forget(sha256: &str) {
+    CACHE.with(|c| c.borrow_mut().remove(sha256));
+}
+
 /// Keeps only the layouts of these files.
 pub fn retain_only(shas: &[String]) {
     CACHE.with(|c| c.borrow_mut().retain(|k, _| shas.contains(k)));
