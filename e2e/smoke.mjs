@@ -111,6 +111,35 @@ await a.getByRole('heading', { name: 'Add piece' }).waitFor();
 await a.getByLabel('Title', { exact: true }).fill('Florentiner Marsch');
 await a.getByLabel('Composer').fill('Julius Fučík');
 await a.getByLabel('Genre').fill('Concert');
+// Tags are chips: comma / Enter finish a tag, the input moves between chips.
+const tagField = a.locator('.tag-input');
+const tagChips = () => tagField.locator('.tag-chip .tag-text').allInnerTexts();
+const sameTags = async (expected) => JSON.stringify(await tagChips()) === JSON.stringify(expected);
+await tagField.locator('input.tag-entry').click();
+await a.keyboard.type('Encore,March');
+await a.keyboard.press('Enter');
+check(await sameTags(['Encore', 'March']) && await a.getByRole('button', { name: 'Next: parts' }).isVisible(),
+  'comma and Enter turn the typed text into tag chips without submitting the form');
+await a.keyboard.type('encore,');
+check(await sameTags(['Encore', 'March']) && await tagField.locator('.tag-chip.flash').count() === 1,
+  'a duplicate tag (other case) is not added; the existing chip flashes');
+await a.keyboard.press('Backspace');
+check(await sameTags(['Encore']), 'Backspace at the start of the input removes the chip before it');
+await a.keyboard.press('ArrowLeft');
+// The input is focused again at its new place (next animation frame).
+await a.waitForFunction(() => document.activeElement?.classList.contains('tag-entry')
+  && document.activeElement.nextElementSibling?.classList.contains('tag-chip'));
+await a.keyboard.type('Festival');
+await a.keyboard.press('Enter');
+check(await sameTags(['Festival', 'Encore']), 'the input moves between chips with the arrow keys; a tag is inserted there');
+await a.keyboard.press('Delete');
+check(await sameTags(['Festival']), 'Delete at the end of the input removes the chip after it');
+await a.keyboard.insertText('Christmas, New Year, Encore');
+check(await sameTags(['Festival', 'Christmas', 'New Year', 'Encore']), 'pasting "a, b, c" creates three chips');
+await tagField.getByRole('button', { name: 'Remove tag Festival' }).click();
+check(await sameTags(['Christmas', 'New Year', 'Encore']), 'the × of a chip removes it');
+await tagField.locator('input.tag-entry').click();
+await a.keyboard.type('Polka');
 await a.getByRole('button', { name: 'Next: parts' }).click();
 await a.getByRole('heading', { name: 'Parts of “Florentiner Marsch”' }).waitFor();
 const newPart = a.locator('form.new-part');
@@ -196,8 +225,13 @@ await a.getByRole('button', { name: 'Done' }).click();
 await a.locator('.score', { hasText: 'Florentiner Marsch' }).locator('.score-head').getByRole('link', { name: 'Edit' }).click();
 await a.getByRole('heading', { name: 'Edit piece' }).waitFor();
 await a.getByLabel('Genre').fill('March');
+check(await sameTags(['Christmas', 'New Year', 'Encore', 'Polka']), 'tags typed without a final comma are kept when leaving the field');
+await tagField.getByRole('button', { name: 'Remove tag New Year' }).click();
 await a.getByRole('button', { name: 'Save details' }).click();
 await a.locator('.ok', { hasText: 'Saved' }).waitFor();
+await a.reload();
+await tagField.locator('.tag-chip').first().waitFor();
+check(await sameTags(['Christmas', 'Encore', 'Polka']), 'tags edited in the piece editor are saved');
 check(JSON.stringify(await a.locator('.part-editor h3.part-title').allInnerTexts()) === '["Flute in C 1a","Trumpet in B♭ 2"]',
   'edit view lists both parts by name');
 await shot(a, 'edit-piece');

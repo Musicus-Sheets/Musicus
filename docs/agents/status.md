@@ -51,6 +51,7 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 - `LoginLimiter` is in-memory: resets on restart, per process.
 - Pages whose PDF page count is unknown accept annotation pages 0..1999.
 - Client uses `window.prompt`/`confirm` for dialogs (no custom modal).
+- Tag entry: the input is moved between chips only with an empty input (←/→/Home/End) or by clicking a chip; clicking between two chips (not on one) puts it at the end. Keystrokes typed in the very frame after a move could go to the old focus (refocus waits for `requestAnimationFrame`).
 - Keys stored before migration 0002 that were ambiguous ("B") or free text stay as they are; they are shown verbatim in names and as "Other: …" in the key list until a librarian picks a listed key (a-part-names).
 - `part_fts` is rebuilt on start only when its row count differs from `parts`; a change of the name format needs an explicit rebuild.
 - Immediate instrument save in the part editor sends the last saved label/voice/key; unsaved typing in those fields still needs `Save part` (a-assign-picker).
