@@ -284,7 +284,8 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
 <h1><span>&#x1D11E;</span> Musicus user guide</h1>
 <p class="lead">Installation and use of Musicus, for every released version.</p>
 %s
-<footer>The user guide is licensed under the
+<footer>&copy; 2026 the Musicus contributors.
+The user guide is licensed under the
 <a href="https://creativecommons.org/licenses/by-sa/4.0/">Creative Commons Attribution-ShareAlike 4.0 International License (CC BY-SA 4.0)</a>.
 Musicus itself is free software, licensed under the
 <a href="https://www.gnu.org/licenses/agpl-3.0.html">GNU Affero General Public License, version 3 (AGPL-3.0)</a>.
