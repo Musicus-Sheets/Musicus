@@ -511,6 +511,21 @@ async fn programmes_and_search() {
     assert_eq!(s.get("/api/scores?q=concerto", &lib.admin).await.json::<Vec<Score>>().len(), 1);
     assert_eq!(s.get("/api/scores?tag=encore", &lib.anna).await.json::<Vec<Score>>().len(), 1);
     assert_eq!(s.get("/api/scores?genre=polka", &lib.anna).await.json::<Vec<Score>>().len(), 0);
+
+    // Tag suggestions: librarians get every tag (merged ignoring case),
+    // members only the tags of scores they can see.
+    s.ok::<Score>(
+        Method::PUT,
+        &format!("/api/scores/{}", other.id),
+        &lib.admin,
+        json!({"title": "Flute Concerto", "tags": ["Solo", "encore"]}),
+    )
+    .await;
+    let all: Vec<String> = s.get("/api/tags", &lib.admin).await.json();
+    assert_eq!(all.len(), 2);
+    assert!(all.iter().any(|t| t == "Solo") && all.iter().any(|t| t.eq_ignore_ascii_case("encore")));
+    let annas: Vec<String> = s.get("/api/tags", &lib.anna).await.json();
+    assert_eq!(annas, ["Encore"], "the concerto's tag Solo is hidden from anna");
 }
 
 #[tokio::test]

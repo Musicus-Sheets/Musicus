@@ -57,6 +57,12 @@ pub fn ScoreFields(draft: Signal<ScoreDraft>) -> Element {
     let mut draft = draft;
     let d = draft();
     let tags_label = use_hook(|| format!("tags-label-{}", crate::picker::unique_id()));
+    // Tags used anywhere in the library, offered while typing.
+    let known = use_resource(|| api::get::<Vec<String>>("/api/tags"));
+    let known: Vec<String> = match &*known.read() {
+        Some(Ok(t)) => t.clone(),
+        _ => Vec::new(),
+    };
     rsx! {
         div { class: "grid",
             label { "Title"
@@ -73,7 +79,7 @@ pub fn ScoreFields(draft: Signal<ScoreDraft>) -> Element {
                     oninput: move |e| draft.write().genre = e.value() } }
             div { class: "field wide",
                 span { id: "{tags_label}", class: "field-label", "Tags" }
-                TagInput { tags: draft.map_mut(|d| &d.tags, |d| &mut d.tags), labelledby: tags_label.clone(), placeholder: "e.g. Christmas, Encore" }
+                TagInput { tags: draft.map_mut(|d| &d.tags, |d| &mut d.tags), labelledby: tags_label.clone(), placeholder: "e.g. Christmas, Encore", suggestions: known }
                 span { class: "muted small", "Press comma or Enter after each tag." }
             }
             label { class: "wide", "Notes"

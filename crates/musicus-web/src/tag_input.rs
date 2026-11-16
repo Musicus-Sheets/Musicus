@@ -13,8 +13,11 @@
 //!   Backspace at the start of the input removes the chip before it, Delete
 //!   at its end the chip after it. Clicking a chip puts the input after it,
 //!   clicking the free space of the field puts it at the end.
+//! - While typing, known tags that match are suggested (`suggest.rs`); a
+//!   taken suggestion becomes a chip.
 
 use crate::picker::unique_id;
+use crate::suggest::{self, SuggestList};
 use dioxus::html::Key;
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
@@ -47,6 +50,9 @@ pub fn TagInput(
     /// Id of the element that labels the field.
     labelledby: String,
     #[props(default)] placeholder: String,
+    /// Known tags offered while typing (a-tag-suggest).
+    #[props(default)]
+    suggestions: Vec<String>,
 ) -> Element {
     let mut tags = tags;
     let uid = use_hook(unique_id);
@@ -55,6 +61,9 @@ pub fn TagInput(
     let mut cursor = use_signal(|| END);
     let mut flash = use_signal(|| None::<String>);
     let mut flash_gen = use_signal(|| 0u32);
+    let mut open = use_signal(|| false);
+    let mut active = use_signal(|| None::<usize>);
+    let list_id = format!("tag-suggest-{uid}");
 
     let n = tags.read().len();
     let pos = cursor().min(n);
@@ -90,6 +99,8 @@ pub fn TagInput(
         set_cursor(at);
     };
     let mut commit = move || {
+        open.set(false);
+        active.set(None);
         let t = text.peek().clone();
         if !t.trim().is_empty() {
             add(vec![t]);
@@ -143,6 +154,16 @@ pub fn TagInput(
         }
     };
     let id_keys = id.clone();
+    let offered = suggest::suggestions(&suggestions, &text.read(), &tags.read());
+    let shown = open() && !offered.is_empty();
+    let offered_keys = offered.clone();
+    // Taking a suggestion: it becomes a chip like typed text.
+    let mut take = move |v: String| {
+        text.set(String::new());
+        add(vec![v]);
+        open.set(false);
+        active.set(None);
+    };
 
     rsx! {
         div {
@@ -159,82 +180,100 @@ pub fn TagInput(
                 }
             },
             for t in before.iter() { {chip(t)} }
-            input {
-                                id: "{id}",
-                class: if at_end { "tag-entry end" } else { "tag-entry" },
-                style: if at_end { String::new() } else { format!("width: {width}ch") },
-                r#type: "text",
-                autocomplete: "off",
-                enterkeyhint: "enter",
-                "aria-labelledby": "{labelledby}",
-                placeholder: if n == 0 { placeholder.clone() } else { String::new() },
-                value: "{text}",
-                onclick: move |e| e.stop_propagation(),
-                onblur: move |_| commit(),
-                oninput: move |e| {
-                    let v = e.value();
-                    if v.contains(',') {
-                        // Several characters at once with a comma: pasted (or a
-                        // suggestion of the keyboard) — take all of it.
-                        let pasted = v.chars().count() > text.peek().chars().count() + 1;
-                        let mut parts: Vec<String> = v.split(',').map(str::to_owned).collect();
-                        let rest = if pasted { String::new() } else { parts.pop().unwrap_or_default() };
-                        add(parts);
-                        text.set(rest.trim_start().to_owned());
-                    } else {
-                        text.set(v);
-                    }
-                },
-                onkeydown: move |e: KeyboardEvent| {
-                    let empty = text.peek().is_empty();
-                    let n = tags.peek().len();
-                    let pos = cursor.peek().min(n);
-                    match e.key() {
-                        Key::Character(c) if c == "," => {
-                            e.prevent_default();
-                            commit();
+            // The suggestions hang under the input, wherever it is among the chips.
+            span { class: if at_end { "tag-entry-wrap end" } else { "tag-entry-wrap" },
+                input {
+                    id: "{id}",
+                    class: if at_end { "tag-entry end" } else { "tag-entry" },
+                    style: if at_end { String::new() } else { format!("width: {width}ch") },
+                    r#type: "text",
+                    autocomplete: "off",
+                    enterkeyhint: "enter",
+                    "aria-labelledby": "{labelledby}",
+                    role: "combobox",
+                    "aria-autocomplete": "list",
+                    "aria-expanded": if shown { "true" } else { "false" },
+                    "aria-controls": "{list_id}",
+                    "aria-activedescendant": match active() { Some(i) if shown => format!("{list_id}-{i}"), _ => String::new() },
+                    placeholder: if n == 0 { placeholder.clone() } else { String::new() },
+                    value: "{text}",
+                    onclick: move |e| e.stop_propagation(),
+                    onblur: move |_| commit(),
+                    oninput: move |e| {
+                        open.set(true);
+                        active.set(None);
+                        let v = e.value();
+                        if v.contains(',') {
+                            // Several characters at once with a comma: pasted (or a
+                            // suggestion of the keyboard) — take all of it.
+                            let pasted = v.chars().count() > text.peek().chars().count() + 1;
+                            let mut parts: Vec<String> = v.split(',').map(str::to_owned).collect();
+                            let rest = if pasted { String::new() } else { parts.pop().unwrap_or_default() };
+                            add(parts);
+                            text.set(rest.trim_start().to_owned());
+                        } else {
+                            text.set(v);
                         }
-                        Key::Enter => {
-                            // Never submits the surrounding form.
-                            e.prevent_default();
-                            commit();
+                    },
+                    onkeydown: move |e: KeyboardEvent| {
+                        match suggest::on_key(&e, &offered_keys, open, active) {
+                            (_, Some(v)) => return take(v),
+                            (true, None) => return,
+                            _ => {}
                         }
-                        Key::Tab => commit(),
-                        Key::Backspace if pos > 0 => {
-                            if caret(&id_keys).is_some_and(|(s, end, _)| s == 0 && end == 0) {
+                        let empty = text.peek().is_empty();
+                        let n = tags.peek().len();
+                        let pos = cursor.peek().min(n);
+                        match e.key() {
+                            Key::Character(c) if c == "," => {
                                 e.prevent_default();
-                                remove(pos - 1);
+                                commit();
                             }
-                        }
-                        Key::Delete if pos < n => {
-                            if caret(&id_keys).is_some_and(|(s, end, len)| s == len && end == len) {
+                            Key::Enter => {
+                                // Never submits the surrounding form.
                                 e.prevent_default();
-                                remove(pos);
+                                commit();
                             }
+                            Key::Tab => commit(),
+                            Key::Backspace if pos > 0 => {
+                                if caret(&id_keys).is_some_and(|(s, end, _)| s == 0 && end == 0) {
+                                    e.prevent_default();
+                                    remove(pos - 1);
+                                }
+                            }
+                            Key::Delete if pos < n => {
+                                if caret(&id_keys).is_some_and(|(s, end, len)| s == len && end == len) {
+                                    e.prevent_default();
+                                    remove(pos);
+                                }
+                            }
+                            Key::ArrowLeft if empty && pos > 0 => {
+                                e.prevent_default();
+                                set_cursor(pos - 1);
+                                refocus(&id_keys);
+                            }
+                            Key::ArrowRight if empty && pos < n => {
+                                e.prevent_default();
+                                set_cursor(pos + 1);
+                                refocus(&id_keys);
+                            }
+                            Key::Home if empty && pos > 0 => {
+                                e.prevent_default();
+                                set_cursor(0);
+                                refocus(&id_keys);
+                            }
+                            Key::End if empty && pos < n => {
+                                e.prevent_default();
+                                set_cursor(END);
+                                refocus(&id_keys);
+                            }
+                            _ => {}
                         }
-                        Key::ArrowLeft if empty && pos > 0 => {
-                            e.prevent_default();
-                            set_cursor(pos - 1);
-                            refocus(&id_keys);
-                        }
-                        Key::ArrowRight if empty && pos < n => {
-                            e.prevent_default();
-                            set_cursor(pos + 1);
-                            refocus(&id_keys);
-                        }
-                        Key::Home if empty && pos > 0 => {
-                            e.prevent_default();
-                            set_cursor(0);
-                            refocus(&id_keys);
-                        }
-                        Key::End if empty && pos < n => {
-                            e.prevent_default();
-                            set_cursor(END);
-                            refocus(&id_keys);
-                        }
-                        _ => {}
-                    }
-                },
+                    },
+                }
+                if shown {
+                    SuggestList { list_id: list_id.clone(), items: offered, active: active(), onpick: take }
+                }
             }
             for t in after.iter() { {chip(t)} }
         }

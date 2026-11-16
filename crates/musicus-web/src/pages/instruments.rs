@@ -3,6 +3,7 @@
 
 use crate::{
     api,
+    suggest::SuggestInput,
     ui::{ErrorBox, Loading, can_manage, confirm, none_if_empty},
 };
 use dioxus::prelude::*;
@@ -29,7 +30,7 @@ pub fn Instruments() -> Element {
     let manage = can_manage();
     let mut list = use_resource(|| api::get::<Vec<Instrument>>("/api/instruments"));
     let mut name = use_signal(String::new);
-    let mut family = use_signal(String::new);
+    let family = use_signal(String::new);
     let mut error = use_signal(|| None::<String>);
     let mut added = use_signal(|| None::<String>);
 
@@ -69,11 +70,7 @@ pub fn Instruments() -> Element {
                     div { class: "inline",
                         input { placeholder: "Instrument, e.g. Trumpet", required: true, value: "{name}",
                             "aria-label": "Instrument", oninput: move |e| name.set(e.value()) }
-                        input { placeholder: "Family, e.g. Brass", value: "{family}", list: "families",
-                            "aria-label": "Family", oninput: move |e| family.set(e.value()) }
-                        datalist { id: "families",
-                            for f in families.iter() { option { key: "{f}", value: "{f}" } }
-                        }
+                        SuggestInput { value: family, options: families.clone(), placeholder: "Family, e.g. Brass", label: "Family" }
                         button { class: "primary", r#type: "submit", "+ Add" }
                     }
                     if let Some(n) = added() { span { class: "ok", role: "status", "Added “{n}”." } }
@@ -93,7 +90,7 @@ pub fn Instruments() -> Element {
                             h2 { "{fam}" }
                             ul { class: "plain instrument-list",
                                 for i in members {
-                                    InstrumentRow { key: "{i.id}", instrument: i, manage,
+                                    InstrumentRow { key: "{i.id}", instrument: i, manage, families: families.clone(),
                                         onchange: move |_| { error.set(None); list.restart(); },
                                         onerror: move |m| error.set(Some(m)) }
                                 }
@@ -110,6 +107,8 @@ pub fn Instruments() -> Element {
 fn InstrumentRow(
     instrument: Instrument,
     manage: bool,
+    /// Known families, suggested while typing.
+    families: Vec<String>,
     onchange: EventHandler<()>,
     onerror: EventHandler<String>,
 ) -> Element {
@@ -151,8 +150,7 @@ fn InstrumentRow(
             li { class: "row editing",
                 form { class: "inline grow", onsubmit: save,
                     input { required: true, value: "{name}", "aria-label": "Instrument", oninput: move |e| name.set(e.value()) }
-                    input { placeholder: "Family", value: "{family}", "aria-label": "Family", list: "families",
-                        oninput: move |e| family.set(e.value()) }
+                    SuggestInput { value: family, options: families.clone(), placeholder: "Family", label: "Family" }
                     button { class: "primary", r#type: "submit", "Save" }
                     button {
                         r#type: "button",

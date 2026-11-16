@@ -88,12 +88,27 @@ check(await nav.getByRole('link', { name: 'Manage' }).count() === 0, 'there is n
 // Instruments: add, edit, delete.
 await nav.getByRole('link', { name: 'Instruments' }).click();
 await a.getByRole('heading', { name: 'Instruments' }).waitFor();
-for (const [name, family] of [['Trumpet', 'Brass'], ['Flute', 'Woodwind'], ['Horn', 'Brass']]) {
+for (const [name, family] of [['Trumpet', 'Brass'], ['Flute', 'Woodwind']]) {
   await a.getByPlaceholder('Instrument, e.g. Trumpet').fill(name);
   await a.getByPlaceholder('Family, e.g. Brass').fill(family);
   await a.getByRole('button', { name: '+ Add' }).click();
   await a.locator('.instrument-list .row', { hasText: name }).waitFor();
 }
+// The family field suggests the known families.
+await a.getByPlaceholder('Instrument, e.g. Trumpet').fill('Horn');
+// (The family stays filled after adding, for the next instrument of the same family.)
+await a.getByPlaceholder('Family, e.g. Brass').fill('');
+await a.keyboard.type('wo');
+check(JSON.stringify(await a.locator('ul.suggest li').allInnerTexts()) === '["Woodwind"]', 'the family field suggests matching families');
+await a.keyboard.press('Escape');
+check(await a.locator('ul.suggest').count() === 0, 'Escape closes the suggestions');
+await a.getByPlaceholder('Family, e.g. Brass').fill('');
+await a.keyboard.type('BRA');
+await a.keyboard.press('ArrowDown');
+await a.keyboard.press('Enter');
+check(await a.getByPlaceholder('Family, e.g. Brass').inputValue() === 'Brass', '↓ and Enter take a suggestion (without submitting)');
+await a.getByRole('button', { name: '+ Add' }).click();
+await a.locator('.instrument-list .row', { hasText: 'Horn' }).waitFor();
 const horn = a.locator('.instrument-list li', { hasText: 'Horn' });
 await horn.getByRole('button', { name: 'Edit' }).click();
 await a.locator('.instrument-list li.editing input').first().fill('French horn');
@@ -128,7 +143,7 @@ check(await sameTags(['Encore']), 'Backspace at the start of the input removes t
 await a.keyboard.press('ArrowLeft');
 // The input is focused again at its new place (next animation frame).
 await a.waitForFunction(() => document.activeElement?.classList.contains('tag-entry')
-  && document.activeElement.nextElementSibling?.classList.contains('tag-chip'));
+  && document.activeElement.parentElement.nextElementSibling?.classList.contains('tag-chip'));
 await a.keyboard.type('Festival');
 await a.keyboard.press('Enter');
 check(await sameTags(['Festival', 'Encore']), 'the input moves between chips with the arrow keys; a tag is inserted there');
@@ -232,6 +247,28 @@ await a.locator('.ok', { hasText: 'Saved' }).waitFor();
 await a.reload();
 await tagField.locator('.tag-chip').first().waitFor();
 check(await sameTags(['Christmas', 'Encore', 'Polka']), 'tags edited in the piece editor are saved');
+// Suggestions of tags used elsewhere in the library.
+await a.evaluate(async () => {
+  const r = await fetch('/api/scores', { method: 'POST', headers: { 'content-type': 'application/json', 'x-musicus-csrf': '1' },
+    body: JSON.stringify({ title: 'Kaiserwalzer', tags: ['New Year', 'Waltz', 'Fête'] }) });
+  if (!r.ok) throw new Error(`POST /api/scores: ${r.status}`);
+});
+await a.reload();
+await tagField.locator('.tag-chip').first().waitFor();
+await tagField.locator('input.tag-entry').click();
+await a.keyboard.type('fete');
+check(JSON.stringify(await tagField.locator('ul.suggest li').allInnerTexts()) === '["Fête"]', 'tag suggestions ignore case and diacritics');
+await a.keyboard.press('ArrowDown');
+await a.keyboard.press('Enter');
+check(await sameTags(['Christmas', 'Encore', 'Polka', 'Fête']), 'a suggestion taken with ↓ and Enter becomes a chip');
+await a.keyboard.type('w');
+check(JSON.stringify(await tagField.locator('ul.suggest li').allInnerTexts()) === '["Waltz","New Year"]', 'tags starting with the text come first');
+await tagField.locator('ul.suggest li', { hasText: 'New Year' }).click();
+check(await sameTags(['Christmas', 'Encore', 'Polka', 'Fête', 'New Year']), 'a click on a suggestion makes it a chip');
+await a.keyboard.type('enc');
+check(await tagField.locator('ul.suggest').count() === 0, 'tags already chosen are not suggested');
+await a.keyboard.press('Escape');
+await shot(a, 'tag-suggestions');
 check(JSON.stringify(await a.locator('.part-editor h3.part-title').allInnerTexts()) === '["Flute in C 1a","Trumpet in B♭ 2"]',
   'edit view lists both parts by name');
 await shot(a, 'edit-piece');

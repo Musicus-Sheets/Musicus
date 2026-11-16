@@ -54,6 +54,7 @@ pub fn api() -> Router<AppState> {
         .route("/groups/{id}/score-grants", put(groups::set_score_grants))
         // Library
         .route("/scores", get(library::list_scores).post(library::create_score))
+        .route("/tags", get(library::list_tags))
         .route("/scores/{id}", get(library::get_score).put(library::update_score).delete(library::delete_score))
         .route("/scores/{id}/parts", post(library::create_part))
         .route("/parts/{id}", get(library::get_part).put(library::update_part).delete(library::delete_part))

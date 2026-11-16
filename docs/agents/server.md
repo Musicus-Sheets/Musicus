@@ -73,6 +73,7 @@ Auth column: `—` none, `U` any logged-in user, `L` librarian/admin, `A` admin.
 | PUT | `/groups/{id}/instrument-grants` | L | `groups::set_instrument_grants` | replaces | R-ACL-001, R-ACL-004 |
 | PUT | `/groups/{id}/score-grants` | L | `groups::set_score_grants` | replaces | R-ACL-001, R-ACL-004 |
 | GET | `/scores?q=&genre=&tag=` | U, ACL | `library::list_scores` | `fts_terms`: one quoted prefix term per word (max 10, deduped) as JSON array; every term must match `score_fts` or the `part_fts` name of a part the user may read (`json_each` CROSS JOIN fts, UNION, `GROUP BY` score `HAVING COUNT = terms`); genre/tag NOCASE; members: scores with ≥1 visible part, parts filtered; limit 1000 | R-LIB-004, R-LIB-005 |
+| GET | `/tags` | U, ACL | `library::list_tags` | every tag of the scores the user can see (librarians: all), merged ignoring case, sorted by `natural_cmp`; for suggestions | R-LIB-014 |
 | POST | `/scores` | L | `library::create_score` | `ScoreInput` validated (title ≤200, ≤30 tags ≤40 chars, dedupe NOCASE) | R-LIB-001 |
 | GET | `/scores/{id}` | U, ACL | `library::get_score` | 404 if no visible part (members) | R-LIB-005 |
 | PUT/DELETE | `/scores/{id}` | L | `library::update_score` / `delete_score` | delete cascades parts, versions, annotation sets (blobs stay) | R-LIB-001 |

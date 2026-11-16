@@ -224,6 +224,31 @@ pub async fn list_scores(
     Ok(Json(with_parts(&app, &user, rows).await?))
 }
 
+/// Every tag used in the library, for suggestions while tagging (a-tag-suggest):
+/// librarians get all tags, others only those of scores they can see, so
+/// no tag of a hidden score leaks. Case-insensitive duplicates are merged
+/// (first spelling wins); sorted case-insensitively.
+pub async fn list_tags(State(app): State<AppState>, user: AuthUser) -> ApiResult<Json<Vec<String>>> {
+    let raw: Vec<String> = sqlx::query_scalar(concat!(
+        "SELECT DISTINCT t.value FROM scores s, json_each(s.tags) t
+         WHERE ?2 = 1 OR EXISTS (SELECT 1 FROM parts p WHERE p.score_id = s.id AND ",
+        part_visible!(),
+        ")"
+    ))
+    .bind(user.id)
+    .bind(librarian_flag(&user))
+    .fetch_all(&app.db.read)
+    .await?;
+    let mut tags: Vec<String> = Vec::new();
+    for t in raw {
+        if !tags.iter().any(|x| x.to_lowercase() == t.to_lowercase()) {
+            tags.push(t);
+        }
+    }
+    tags.sort_by(|a, b| naming::natural_cmp(a, b));
+    Ok(Json(tags))
+}
+
 pub async fn get_score(State(app): State<AppState>, user: AuthUser, Path(id): Path<Id>) -> ApiResult<Json<Score>> {
     scores_by_ids(&app, &user, &[id]).await?.pop().map(Json).ok_or(AppError::NotFound)
 }
