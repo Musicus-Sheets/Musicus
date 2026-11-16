@@ -29,3 +29,6 @@ rustc-ice-*.txt
 # Fetched by scripts/fetch-pdfjs.sh
 /crates/musicus-web/public/vendor/
 __pycache__/
+
+# Local test scores (copyrighted; never commit them or images derived from them)
+/example_scores/
