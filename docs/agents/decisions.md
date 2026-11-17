@@ -239,3 +239,25 @@ with the user's consent.
 - Why: user feedback on the first version (one crop per system, each with a shadow, gaps removed, per-view x-range and scale that filled the screen): a line drawn over several systems jumped at every system boundary, the patchwork did not look like the original sheet, and views changed size/position. A contiguous crop keeps strokes straight and 1:1 with page coordinates and keeps the familiar page image. Price: the space between systems is shown, so slightly fewer systems fit; the music does not grow to fill a screen that has room left (it stays at the chosen minimum size or full width).
 - Serves: R-READ-011, R-READ-013, R-READ-018, R-ANN-005.
 - If you change it: keep `a_view_is_one_contiguous_crop_per_page_with_one_x_range` and the smoke checks (one canvas per page segment, no shadows, straight stroke across systems).
+
+### a-device-pixels
+- Decision: the reader chooses every canvas size in whole device pixels and derives the CSS size from them
+  (`musicus_api::pixels::device_size`, mirrored by `bridge.js::deviceSize`): pixels = round(CSS × ratio), CSS = pixels /
+  ratio; pdf.js renders with viewport scale = pixels / width in pt (no extra transform); the visible canvas gets the bitmap
+  1:1. Ratio = `devicePixelRatio` × pinch zoom (quarter steps), watched (`pixelRatioChanged`: resolution media query,
+  resize, visualViewport) and re-rendered on change; capped at `MAX_CANVAS_PIXELS` (16.7 Mpx, Safari's limit) per canvas.
+  Ink canvases use the same pixels (`ink::prepare(…, ratio)`), so ink and PDF stay aligned. Crop bitmaps are cached by
+  pixel size. No sub-pixel position snapping (no CSS `translate`).
+- Why: "sometimes the PDF is blurry". Measured on real high-density Chromium (`--force-device-scale-factor`, compare a
+  screenshot with the canvas pixels): browsers place a canvas on whole device pixels themselves and paint it
+  round(left + width) − round(left) pixels wide; the old code took a fractional CSS size (fit scale) and floor/round of
+  CSS × DPR, so the painted size differed by one pixel (page 1045 backing vs 1046 painted at DPR 2, crop 1299 vs 1300,
+  2117 vs 2118 at 2.625) and the whole bitmap was resampled (mean abs. difference 4–6 grey levels, 60 % more grey pixels
+  = soft staff lines); it depended on the page size and zoom, hence "sometimes". A DPR change without resize (other
+  screen) kept the old bitmap stretched 2×, a pinch zoom magnified the bitmap. After: painted = backing in all cases,
+  difference 0. A translate onto the pixel grid was tried and dropped: unnecessary on real screens, and DSF emulation
+  (Playwright `deviceScaleFactor`) lays out in CSS pixels and scales afterwards, so it cannot show 1:1 at all — sharpness
+  tests need a real device scale factor.
+- Serves: R-READ-001, R-READ-011, R-ANN-005.
+- If you change it: keep CSS size = pixels / ratio for PDF and ink canvases (and `.page-segment` boxes), keep
+  `pixels.rs` tests and the smoke checks "painted 1:1, not resampled" (Chromium with `--force-device-scale-factor=2`).

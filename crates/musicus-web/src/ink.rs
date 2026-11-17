@@ -7,6 +7,7 @@
 //! stored coordinates stay page-relative whatever is shown (R-ANN-005).
 
 use musicus_api::ink::{COORD_MAX, InkObject, PageLayer, Stamp, Stroke, TextNote, Tool};
+use musicus_api::pixels::device_size;
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 
@@ -60,14 +61,15 @@ pub fn css_color(rgba: u32, alpha_scale: f64) -> String {
 }
 
 /// The 2D context of a canvas, resized to the visible part of the page box
-/// at device resolution, cleared, and translated so that page CSS
-/// coordinates can be drawn directly. Returns `None` if the canvas is not in
-/// the DOM.
-pub fn prepare(canvas_id: &str, page: PageBox) -> Option<CanvasRenderingContext2d> {
+/// at `ratio` device pixels per CSS pixel (the same whole pixels as the PDF
+/// canvas under it, `musicus_api::pixels::device_size`), cleared, and
+/// transformed so that page CSS coordinates can be drawn directly. Returns
+/// `None` if the canvas is not in the DOM.
+pub fn prepare(canvas_id: &str, page: PageBox, ratio: f64) -> Option<CanvasRenderingContext2d> {
     let window = web_sys::window()?;
     let canvas: HtmlCanvasElement = window.document()?.get_element_by_id(canvas_id)?.dyn_into().ok()?;
-    let dpr = window.device_pixel_ratio();
-    let (w, h) = ((page.vw * dpr).round() as u32, (page.vh * dpr).round() as u32);
+    let size = device_size(page.vw, page.vh, ratio);
+    let (w, h) = (size.width, size.height);
     if canvas.width() != w || canvas.height() != h {
         canvas.set_width(w);
         canvas.set_height(h);
@@ -78,7 +80,8 @@ pub fn prepare(canvas_id: &str, page: PageBox) -> Option<CanvasRenderingContext2
     let ctx: CanvasRenderingContext2d = canvas.get_context("2d").ok()??.dyn_into().ok()?;
     let _ = ctx.set_transform(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
     ctx.clear_rect(0.0, 0.0, w as f64, h as f64);
-    let _ = ctx.set_transform(dpr, 0.0, 0.0, dpr, -page.ox * dpr, -page.oy * dpr);
+    let (sx, sy) = (w as f64 / page.vw.max(1e-9), h as f64 / page.vh.max(1e-9));
+    let _ = ctx.set_transform(sx, 0.0, 0.0, sy, -page.ox * sx, -page.oy * sy);
     Some(ctx)
 }
 
@@ -89,8 +92,8 @@ pub fn context(canvas_id: &str) -> Option<CanvasRenderingContext2d> {
 }
 
 /// Redraws a whole layer: highlighters first, so pen marks stay on top.
-pub fn draw_layer(canvas_id: &str, page: PageBox, layer: &PageLayer) {
-    let Some(ctx) = prepare(canvas_id, page) else { return };
+pub fn draw_layer(canvas_id: &str, page: PageBox, layer: &PageLayer, ratio: f64) {
+    let Some(ctx) = prepare(canvas_id, page, ratio) else { return };
     for object in &layer.objects {
         if let InkObject::Stroke(s) = object
             && s.tool == Tool::Highlighter

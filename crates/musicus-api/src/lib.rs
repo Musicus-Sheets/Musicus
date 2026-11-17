@@ -5,10 +5,12 @@
 //!   clients send and receive as `application/octet-stream`.
 //! - [`layout`]: music systems of sheet files and the system view of the reader.
 //! - [`naming`]: part names derived from instruments, key and voice; the key list.
+//! - [`pixels`]: whole device pixels for the reader's canvases (sharp rendering).
 
 pub mod dto;
 pub mod ink;
 pub mod layout;
 pub mod naming;
+pub mod pixels;
 
 pub use dto::*;

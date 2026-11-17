@@ -4,7 +4,7 @@
 
 ```sh
 cargo build                       # api + server (web excluded from default-members)
-cargo test                        # 22 api unit, 16 server unit, 11 API integration tests
+cargo test                        # 25 api unit, 17 server unit, 11 API integration tests
 cargo run --release -p musicus-server --example layout_report -- a.pdf …   # system detection per page (regressions)
 cargo clippy --all-targets        # must be warning-free
 cargo fmt --check                 # rustfmt.toml: max_width 120
@@ -26,6 +26,10 @@ Toolchain: Rust ≥ 1.88 (edition 2024, let-chains used), target `wasm32-unknown
 - No local wasm toolchain? Build an image `FROM rust:1.97-bookworm` + `rustup target add wasm32-unknown-unknown` +
   `cargo install dioxus-cli --version 0.7.10`, mount the repo, set `CARGO_TARGET_DIR=/src/target/docker`, and run the
   web clippy / `dx build` inside it; serve the result with a host-built server (`--web-dir target/docker/dx/...`).
+- Sharpness tests: Playwright's `deviceScaleFactor` (CDP DSF emulation) lays out in CSS pixels and scales the result, so
+  fractional CSS sizes always look resampled there; use a real factor (`chromium.launch({args:
+  ['--force-device-scale-factor=2']})` + `viewport: null`) and compare `devicePixelContentBoxSize` with the canvas size
+  (a-device-pixels). Screenshot comparisons: crop the full device-pixel screenshot, a fractional `clip` resamples.
 - Playwright: the npm package version must match the installed browser revisions (`~/.cache/ms-playwright`).
 - Changing detection results: raise `layout::ALGORITHM_VERSION`; regression-check with `examples/layout_report.rs`
   on local scores (never commit copyrighted scores or images derived from them; `/example_scores/` is ignored).
