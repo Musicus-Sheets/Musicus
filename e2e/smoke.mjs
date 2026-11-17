@@ -587,11 +587,16 @@ await m.setViewportSize({ width: 1280, height: 800 });
 await m.goto(`${base}/parts/${systemsPart.id}`);
 await m.locator('.page-no', { hasText: '1 / 2' }).waitFor();
 await m.getByRole('button', { name: /Systems/ }).click();
-await m.locator('.system-view .crop').first().waitFor();
+await m.locator('.system-view .page-segment').first().waitFor();
 const viewInfo = async () => m.locator('.system-view').getAttribute('data-view');
-const crops = await m.locator('.system-view .crop').count();
-check(crops >= 3 && crops <= 9, `system view shows whole systems (${crops} items: title and systems, of 17)`);
-await m.waitForFunction(() => [...document.querySelectorAll('.system-view .crop canvas:first-child')].every((c) =>
+const shownItems = Number(await m.locator('.system-view').getAttribute('data-items'));
+check(shownItems >= 3 && shownItems <= 9, `system view shows whole systems (${shownItems} items: title and systems, of 17)`);
+check(await m.locator('.system-view .page-segment').count() === 1,
+  'the systems of one page are ONE contiguous crop of the original page (one canvas)');
+check(await m.evaluate(() => [...document.querySelectorAll('.system-view .page-segment')]
+  .every((e) => getComputedStyle(e).boxShadow === 'none' && getComputedStyle(e).borderTopWidth === '0px')),
+  'no shadows or borders between systems');
+await m.waitForFunction(() => [...document.querySelectorAll('.system-view .page-segment canvas:first-child')].every((c) =>
   c.style.width !== '' && c.width >= Math.floor(parseFloat(c.style.width) * (window.devicePixelRatio || 1)) - 1),
 null, { timeout: 20000 });
 check(true, 'crops are rendered at device resolution');
@@ -604,9 +609,10 @@ let crossed = false;
 for (let i = 1; i < viewCount; i += 1) {
   await m.keyboard.press('ArrowRight');
   await m.locator('.system-view').and(m.locator(`[data-view="${i + 1}/${viewCount}"]`)).waitFor();
-  crossed ||= (await m.locator('.page-no').innerText()).trim() === '2 / 2';
+  crossed ||= await m.locator('.system-view .page-segment').count() === 2;
 }
-check(crossed && viewCount >= 3, `arrow keys walk through ${viewCount} views across the page boundary`);
+check((await m.locator('.page-no').innerText()).trim() === '2 / 2', 'the last view is on page 2');
+check(crossed && viewCount >= 3, `arrow keys walk through ${viewCount} views; one view spans the page boundary as two adjacent crops`);
 // Turning the tablet re-plans the views and keeps the reading position (still page 2).
 await m.setViewportSize({ width: 800, height: 1280 });
 await m.waitForTimeout(500);
@@ -631,24 +637,53 @@ const large = Number((await viewInfo()).split('/')[1]);
 check(large >= small, `a bigger staff size needs at least as many views (S ${small}, XL ${large})`);
 // The size menu keeps the keyboard focus; give it back to the reader (arrows would change the size).
 await m.locator('.reader-title').click();
-// Draw in the system view; the stroke is stored in page coordinates and appears in the page view.
+// Draw a straight vertical stroke across several systems (and the gaps between them) in the
+// system view: it must stay straight and continuous, also after a reload and in the page view.
 for (let i = 0; i < 20 && (await m.locator('.system-view').getAttribute('data-view')).split('/')[0] !== '1'; i += 1) {
   await m.keyboard.press('ArrowLeft');
   await m.waitForTimeout(150);
 }
+// Red pixels in a canvas: rows from the first to the last red row that contain red, and how far
+// the centre of the red pixels moves sideways (px).
+const strokeShape = (id) => m.evaluate((canvasId) => {
+  const c = document.getElementById(canvasId);
+  const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+  const centres = [];
+  for (let y = 0; y < c.height; y += 1) {
+    let n = 0; let sx = 0;
+    for (let x = 0; x < c.width; x += 1) {
+      const i = (y * c.width + x) * 4;
+      if (d[i + 3] > 0 && d[i] > 150 && d[i + 1] < 80) { n += 1; sx += x; }
+    }
+    centres.push(n ? sx / n : null);
+  }
+  const rows = centres.map((v, y) => [v, y]).filter(([v]) => v !== null);
+  if (rows.length === 0) return { span: 0, coverage: 0, spread: 999 };
+  const span = rows[rows.length - 1][1] - rows[0][1] + 1;
+  const xs = rows.map(([v]) => v);
+  return { span, coverage: rows.length / span, spread: Math.max(...xs) - Math.min(...xs), dpr: window.devicePixelRatio || 1 };
+}, id);
 await m.getByRole('button', { name: /Draw/ }).click();
-// Crop 0 is the title line; draw on the first system.
-const cropBox = await m.locator('#crop-ink-1').boundingBox();
-await m.mouse.move(cropBox.x + cropBox.width * 0.2, cropBox.y + cropBox.height * 0.5);
+const seg = await m.locator('#crop-ink-0').boundingBox();
+const sx = seg.x + seg.width * 0.42;
+await m.mouse.move(sx, seg.y + seg.height * 0.25);
 await m.mouse.down();
-await m.mouse.move(cropBox.x + cropBox.width * 0.6, cropBox.y + cropBox.height * 0.55, { steps: 12 });
+await m.mouse.move(sx, seg.y + seg.height * 0.8, { steps: 30 });
 await m.mouse.up();
 await m.locator('.save-status', { hasText: /^Saved$/ }).waitFor({ timeout: 10000 });
 await m.getByRole('button', { name: /Done/ }).click();
+const straight = (sh, what, minSpan = seg.height * 0.4) => check(sh.span > minSpan && sh.coverage > 0.97 && sh.spread <= 3 * sh.dpr,
+  `${what} (span ${sh.span} px, coverage ${sh.coverage.toFixed(2)}, sideways ${sh.spread.toFixed(1)} px)`);
+straight(await strokeShape('crop-ink-0'), 'a stroke across several systems is straight and continuous in the system view');
+await m.reload();
+await m.locator('.system-view .page-segment').first().waitFor();
+await m.waitForTimeout(1500);
+straight(await strokeShape('crop-ink-0'), 'after a reload it is redrawn straight and continuous (stored in page coordinates)');
 await m.getByRole('button', { name: /Systems/ }).click();
 await m.locator('#page-canvas').waitFor();
 await m.waitForTimeout(800);
 check(await redPixels(m) > 50, 'a stroke drawn in the system view shows in the page view');
+straight(await strokeShape('ink-canvas'), 'in the page view it is the same straight line', 60);
 check((await m.evaluate(async () => (await (await fetch('/api/auth/me')).json()).reader.mode)) === 'page',
   'switching back to the page view is stored too');
 
@@ -685,12 +720,12 @@ check((await m.evaluate(async (sha) => (await fetch(`/api/files/${sha}/layout/pa
   'members cannot correct layouts');
 await m.goto(`${base}/parts/${systemsPart.id}`);
 await m.getByRole('button', { name: /Systems/ }).click();
-await m.locator('.system-view .crop').first().waitFor();
+await m.locator('.system-view .page-segment').first().waitFor();
 const [, endCount] = (await m.locator('.system-view').getAttribute('data-view')).split('/').map(Number);
 for (let i = 1; i < endCount; i += 1) await m.keyboard.press('ArrowRight');
 await m.locator(`[data-view="${endCount}/${endCount}"]`).waitFor();
-const lastCrops = await m.locator('.system-view .crop').count();
-const lastBox = await m.locator('.system-view .crop').first().boundingBox();
+const lastCrops = await m.locator('.system-view .page-segment').count();
+const lastBox = await m.locator('.system-view .page-segment').first().boundingBox();
 check(lastCrops === 1 && lastBox.height > lastBox.width, 'the page marked whole is shown as one whole page in the system view');
 await m.getByRole('button', { name: /Systems/ }).click();
 await a.getByRole('button', { name: 'Reset to automatic' }).click();

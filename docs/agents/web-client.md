@@ -107,7 +107,7 @@ Users: group members (label display name, detail username), instrument grants an
 ## Reader (`pages/viewer.rs`) — most complex unit
 
 Page view or system view (F-READ-003): the exact view algorithm, signals/memos (`settings`, `layout`, `items`,
-`views`, `view_idx`, `crops`, `anchor`), crop rendering, ink per crop (`Target`), swipe and the reader settings
+`views`, `view_idx`, `crops`, `anchor`), rendering of one contiguous crop of the original page per page segment, ink per segment (`Target`), swipe and the reader settings
 switch are described in `layout.md` § Client. Bar: `☰ Systems` toggle (`aria-pressed`), in system view a
 `select.staff-size` (`aria-label "Staff size"`, S/M/L/XL); changes update `Session.user.reader` and PUT
 `/api/auth/reader-settings`. Banner `.banner.info` while the layout is pending/failed. `.system-view[data-view]`.

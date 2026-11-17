@@ -323,16 +323,18 @@ struct Live {
     target: Option<Target>,
 }
 
-/// The crops of one view: page, what to render, and the box for the ink canvas.
+/// The crops of one view: ONE contiguous crop of the original page per page
+/// the view touches (`View::segments`), with what to render and the box for
+/// its ink canvas. All crops of a document share the horizontal range and
+/// the scale, so strokes across systems stay straight.
 fn view_crops(items: &[Item], v: &View) -> Vec<(u32, Crop, PageBox)> {
-    items[v.first..=v.last]
+    v.segments
         .iter()
-        .map(|it| {
+        .filter_map(|g| {
+            let it = items.iter().find(|i| i.page == g.page)?;
             let (w, h) = (it.page_w_mm * v.scale, it.page_h_mm * v.scale);
-            let x0 = (v.x0_mm / it.page_w_mm).clamp(0.0, 1.0);
-            let x1 = (v.x1_mm / it.page_w_mm).clamp(x0, 1.0);
-            let crop = Crop { page: it.page, x0, y0: it.y0, x1, y1: it.y1, css_width: (x1 - x0) * w };
-            (it.page, crop, PageBox::crop(w, h, x0, it.y0, x1, it.y1))
+            let crop = Crop { page: g.page, x0: g.x0, y0: g.y0, x1: g.x1, y1: g.y1, css_width: (g.x1 - g.x0) * w };
+            Some((g.page, crop, PageBox::crop(w, h, g.x0, g.y0, g.x1, g.y1)))
         })
         .collect()
 }
@@ -1289,9 +1291,12 @@ fn Reader(data: Loaded) -> Element {
                     }
                 },
                 if systems_on() {
-                    div { class: "system-view", "data-view": "{view_idx() + 1}/{views.read().len()}",
+                    div {
+                        class: "system-view",
+                        "data-view": "{view_idx() + 1}/{views.read().len()}",
+                        "data-items": "{views.read().get(view_idx()).map_or(0, |v| v.last + 1 - v.first)}",
                         for (k, (p, _, b)) in crops().into_iter().enumerate() {
-                            div { key: "{k}", class: "sheet crop", style: "width: {b.vw}px; height: {b.vh}px",
+                            div { key: "{k}", class: "page-segment", style: "width: {b.vw}px; height: {b.vh}px",
                                 canvas { id: crop_canvas(k) }
                                 canvas {
                                     id: crop_ink_canvas(k),

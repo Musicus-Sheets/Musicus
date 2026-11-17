@@ -104,25 +104,38 @@ Header kept on the first page, Header/Footer kept if `ink_y1 − ink_y0 > TALL_T
 ## Views (`plan_views`, `view_for_item`, `first_item_of_page`)
 
 Screen = stage size − `STAGE_MARGIN` 8 px (CSS px), `px_per_mm` = `CSS_PX_PER_MM` = 132/25.4 (a-css-mm).
-For a candidate view s..=e: crop = [min x0·page_w, max x1·page_w] mm; `fit_w` = W / crop width,
-`fit_h` = H / Σ item heights (mm), `needed` = min_staff_mm · px_per_mm / smallest staff_mm (0 without staff),
-`target` = min(needed, fit_w). Grow e while the next item is not a `Page` item and min(fit_w, fit_h) ≥ target.
-Then drop trailing header-like `Text` (next item on the same page or text in the upper half). `Page` items are
-alone. A view consisting only of the overlapped system is skipped. Scale = min(fit_w, fit_h) (fills the screen);
-`below_min` = scale < needed. Next start = last item if the view has ≥ `OVERLAP_MIN_SYSTEMS` 3 systems and ends with a
-system (one-system overlap), else last + 1 (user decision).
+The items only decide where a view starts and ends; the view shows the ORIGINAL page (a-contiguous-view):
+
+- One horizontal range for the whole document: [dx0, dx1] = union of x0·page_w .. x1·page_w (mm) of all non-`Page`
+  items; `fit_w` = W / (dx1 − dx0). One scale for the document: `needed` = min_staff_mm · px_per_mm / smallest
+  staff_mm of the document, `s` = min(needed, fit_w) (`fit_w` if no staff). Views never change scale or move sideways;
+  too wide music is shown at full width (`below_min`).
+- `View.segments`: per page touched by items first..=last, ONE `Segment {page, x0, x1, y0, y1}` (0..1): x = dx0/page_w ..
+  dx1/page_w (clamped), y = top of the first item on that page .. bottom of the last (everything in between is shown:
+  gaps, text, hidden bands, skipped small headers/footers between systems). A `Page` item = segment 0..1 × 0..1.
+- Height of s..=e = Σ over segments (y1 − y0) · page_h mm. Grow e while the next item is not a `Page` item and
+  height × s ≤ H. Then drop trailing header-like `Text` (next item on the same page or text in the upper half).
+  `Page` items are alone, scale = min(W/page_w, H/page_h). A single item taller than H at `s` gets scale H/height.
+  `below_min` = scale < needed. A view consisting only of the overlapped system is skipped.
+- Next start = last item if the view has ≥ `OVERLAP_MIN_SYSTEMS` 3 systems and ends with a system (one-system overlap),
+  else last + 1 (user decision).
 Reading position (a-view-anchor): the reader stores the first item of the current view (`anchor`) and shows
 `view_for_item` = last view starting at or before it; re-planning (rotation, size change) keeps the anchor. Page
-view → system view: anchor = `first_item_of_page(current page)`; the current page follows the first crop.
+view → system view: anchor = `first_item_of_page(current page)`; the current page follows the first segment.
 
 ## Client (`viewer.rs`)
 
 Signals/memos: `settings` (from `Session.user.reader`; changes PUT `/api/auth/reader-settings` and update the
 session), `layout` (loaded per displayed file URL, retried every `LAYOUT_RETRY_MS` 10 s while pending, ≤ 30 times),
 `items`, `views` (empty unless mode Systems and layout done with page count = pdf.js page count), `view_idx`, `crops`
-(`view_crops`: per item crop x = view mm range / page width, CSS width = crop × page_w_mm × scale, `PageBox::crop`).
-Effects: page render only when not in system view; crop render (`bridge::render_crop` per crop into `crop-{k}`,
-then `prerender_crop` for the next view); annotation load for every page shown; ink redraw per crop into
+(`view_crops`: one per `View.segments` entry — CSS width = (x1 − x0) × page_w_mm × scale, `PageBox::crop`).
+DOM: `.system-view` (one outer shadow, `data-view="i/n"`, `data-items`) holding one `.page-segment` per page (PDF
+canvas `crop-{k}` + ink canvas `crop-ink-{k}`), directly stacked; no shadow, border or gap between systems; a 1 px
+`rgba(0,0,0,.12)` hairline (`::before`, no layout effect) only where a view continues on the next page. A stroke drawn
+across several systems of a page is one stroke on one canvas, straight in page coordinates; it cannot continue onto
+the next page (another canvas, another page).
+Effects: page render only when not in system view; crop render (`bridge::render_crop` per segment into `crop-{k}`,
+then `prerender_crop` for the next view); annotation load for every page shown; ink redraw per segment into
 `crop-ink-{k}` with its `PageBox` (offset + visible size, `ink::prepare` translates by −offset). Pointer input
 carries a `Target {page, bx, canvas}`; coordinates are converted with `PageBox::canvas_to_page`, so stored ink
 stays page-relative (R-ANN-005, R-ANN-012). Undo/redo in the system view act on the page last drawn on (`edit_page`).

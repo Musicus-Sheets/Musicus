@@ -250,12 +250,6 @@ pub struct Item {
     pub staff_mm: f64,
 }
 
-impl Item {
-    fn height_mm(&self) -> f64 {
-        (self.y1 - self.y0) * self.page_h_mm
-    }
-}
-
 /// The reading sequence of a file: every page in order; per page either its
 /// shown regions or the whole page.
 pub fn reading_items(pages: &[PageLayout]) -> Vec<Item> {
@@ -320,69 +314,102 @@ pub struct Screen {
     pub px_per_mm: f64,
 }
 
-/// One screenful: items `first..=last`, stacked from the top, cropped to the
-/// union of their horizontal extents.
+/// A contiguous part of one page shown in a view (0..1 of the page).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct Segment {
+    pub page: u32,
+    pub x0: f64,
+    pub x1: f64,
+    pub y0: f64,
+    pub y1: f64,
+}
+
+/// One screenful: items `first..=last`. On each page the view shows ONE
+/// contiguous crop of the original page (`segments`, one per page touched,
+/// stacked directly below each other): from the top of its first item to the
+/// bottom of its last, with everything in between (gaps, text, hidden bands).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct View {
     pub first: usize,
     pub last: usize,
     /// CSS pixels per millimetre of paper.
     pub scale: f64,
-    /// Left and right edge of the crop, millimetres on the page.
-    pub x0_mm: f64,
-    pub x1_mm: f64,
-    /// The minimum staff height could not be reached because the music is
-    /// wider than the screen at that size; shown at full width instead.
+    pub segments: Vec<Segment>,
+    /// The minimum staff height is not reached: the music is wider than the
+    /// screen at that size (shown at full width), or one item is taller than
+    /// the screen.
     pub below_min: bool,
 }
 
 /// Plans all views of a reading sequence (the algorithm of the technical
 /// documentation, "System view"):
 ///
-/// 1. A view starts at item `s`. Whole pages are always alone.
-/// 2. Items `s..=e` fit if `min(fit_w, fit_h) >= target`, where `fit_w` =
-///    screen width / crop width, `fit_h` = screen height / summed height
-///    (scales in CSS px per paper mm), `target` = min(needed, fit_w) and
-///    `needed` = minimum staff mm × px per mm / smallest staff on paper. So
-///    music wider than the screen is shown at full width (`below_min`).
-///    The view grows while the next item fits.
-/// 3. A view never ends with a header; it moves to the next view.
-/// 4. The view is shown at `min(fit_w, fit_h)` (it fills the screen).
-/// 5. Next start: the view's last system if the view holds at least
+/// 1. One horizontal crop for the whole document: the union of the
+///    horizontal extents of all system and text items (mm); `fit_w` = screen
+///    width / its width. One scale for the whole document: `s` =
+///    min(`needed`, `fit_w`), `needed` = minimum staff mm × px per mm /
+///    smallest staff on paper of the document. So views never change scale or
+///    move sideways, and music wider than the screen at the minimum height is
+///    shown at full width (`below_min`).
+/// 2. A view starts at item `start`. Whole pages are always alone (fitted).
+/// 3. The view's height is the sum over the pages it touches of
+///    (bottom of the last item − top of the first item on that page): the
+///    contiguous crops, gaps included. The view grows while the next item is
+///    not a whole page and the height × `s` fits the screen height.
+/// 4. A view never ends with a header; it moves to the next view.
+/// 5. A single item taller than the screen is scaled down to fit (`below_min`).
+/// 6. Next start: the view's last system if the view holds at least
 ///    [`OVERLAP_MIN_SYSTEMS`] systems (one-system overlap), else the item
 ///    after the view. A view that would consist of only the overlapped
 ///    system is skipped.
 pub fn plan_views(items: &[Item], screen: Screen, min_staff_mm: f64) -> Vec<View> {
-    let crop = |a: usize, b: usize| -> (f64, f64) {
-        let x0 = items[a..=b].iter().map(|i| i.x0 * i.page_w_mm).fold(f64::MAX, f64::min);
-        let x1 = items[a..=b].iter().map(|i| i.x1 * i.page_w_mm).fold(0.0, f64::max);
-        (x0, x1)
+    let mut views = Vec::new();
+    if screen.width < 1.0 || screen.height < 1.0 || items.is_empty() {
+        return views;
+    }
+    let music = || items.iter().filter(|i| i.kind != ItemKind::Page);
+    let dx0 = music().map(|i| i.x0 * i.page_w_mm).fold(f64::MAX, f64::min);
+    let dx1 = music().map(|i| i.x1 * i.page_w_mm).fold(0.0, f64::max);
+    let fit_w = if dx1 > dx0 { screen.width / (dx1 - dx0).max(1.0) } else { 0.0 };
+    let staff = music().map(|i| i.staff_mm).filter(|&s| s > 0.0).fold(f64::MAX, f64::min);
+    let needed = if staff == f64::MAX { 0.0 } else { min_staff_mm * screen.px_per_mm / staff };
+    let s = if needed > 0.0 { needed.min(fit_w) } else { fit_w };
+
+    let segments = |a: usize, b: usize| -> Vec<Segment> {
+        let mut out: Vec<Segment> = Vec::new();
+        for i in &items[a..=b] {
+            let (x0, x1) = if i.kind == ItemKind::Page {
+                (0.0, 1.0)
+            } else {
+                ((dx0 / i.page_w_mm).clamp(0.0, 1.0), (dx1 / i.page_w_mm).clamp(0.0, 1.0))
+            };
+            match out.last_mut() {
+                Some(seg) if seg.page == i.page => {
+                    seg.y0 = seg.y0.min(i.y0);
+                    seg.y1 = seg.y1.max(i.y1);
+                }
+                _ => out.push(Segment { page: i.page, x0, x1, y0: i.y0, y1: i.y1 }),
+            }
+        }
+        out
     };
-    let fit_w = |a: usize, b: usize| {
-        let (x0, x1) = crop(a, b);
-        screen.width / (x1 - x0).max(1.0)
-    };
-    let fit_h = |a: usize, b: usize| screen.height / items[a..=b].iter().map(Item::height_mm).sum::<f64>().max(1.0);
-    let fit = |a: usize, b: usize| fit_w(a, b).min(fit_h(a, b));
-    let needed = |a: usize, b: usize| {
-        let staff = items[a..=b].iter().map(|i| i.staff_mm).filter(|&s| s > 0.0).fold(f64::MAX, f64::min);
-        if staff == f64::MAX { 0.0 } else { min_staff_mm * screen.px_per_mm / staff }
+    let height_mm = |a: usize, b: usize| -> f64 {
+        segments(a, b)
+            .iter()
+            .map(|g| (g.y1 - g.y0) * items[a..=b].iter().find(|i| i.page == g.page).map_or(0.0, |i| i.page_h_mm))
+            .sum()
     };
     let systems = |a: usize, b: usize| items[a..=b].iter().filter(|i| i.kind == ItemKind::System).count();
 
-    let mut views = Vec::new();
-    if screen.width < 1.0 || screen.height < 1.0 {
-        return views;
-    }
     let mut start = 0;
     let mut overlapped = false;
     while start < items.len() {
         let mut last = start;
         if items[start].kind != ItemKind::Page {
-            while last + 1 < items.len() && items[last + 1].kind != ItemKind::Page && {
-                let target = needed(start, last + 1).min(fit_w(start, last + 1));
-                fit(start, last + 1) >= target
-            } {
+            while last + 1 < items.len()
+                && items[last + 1].kind != ItemKind::Page
+                && height_mm(start, last + 1) * s <= screen.height
+            {
                 last += 1;
             }
             while last > start && items[last].kind == ItemKind::Text && is_header_like(items, last) {
@@ -394,9 +421,14 @@ pub fn plan_views(items: &[Item], screen: Screen, min_staff_mm: f64) -> Vec<View
             start += 1;
             continue;
         }
-        let (x0_mm, x1_mm) = crop(start, last);
-        let scale = fit(start, last);
-        views.push(View { first: start, last, scale, x0_mm, x1_mm, below_min: scale + 1e-9 < needed(start, last) });
+        let it = &items[start];
+        let scale = if it.kind == ItemKind::Page {
+            (screen.width / it.page_w_mm).min(screen.height / it.page_h_mm)
+        } else {
+            s.min(screen.height / height_mm(start, last).max(1e-6))
+        };
+        let below_min = it.kind != ItemKind::Page && scale + 1e-9 < needed;
+        views.push(View { first: start, last, scale, segments: segments(start, last), below_min });
         if last + 1 >= items.len() {
             break;
         }
@@ -454,20 +486,22 @@ mod tests {
     }
 
     #[test]
-    fn whole_systems_fill_the_screen_with_one_system_overlap() {
-        // 1000 x 700 CSS px; 168 mm content ⇒ fit_w ≈ 5.95 px/mm; 24.75 mm per system.
+    fn whole_systems_at_the_minimum_size_with_one_system_overlap() {
+        // 1000 x 700 CSS px; 168 mm content ⇒ fit_w ≈ 5.95 px/mm; needed = 5 · 5.197 / 7 ≈ 3.71 px/mm.
+        // Systems are contiguous (1/12 page = 24.75 mm each) ⇒ 700 / (n · 24.75 · 3.71) ⇒ n ≤ 7.6 ⇒ 7.
         let items = part(2, 10, 7.0);
         let views = plan_views(&items, screen(1000.0, 700.0), 5.0);
         let v = &views[0];
-        assert_eq!(v.first, 0);
-        // needed = 5 * 5.197 / 7 ≈ 3.71 ⇒ 700 / (n * 24.75) ≥ 3.71 ⇒ n ≤ 7.6 ⇒ 7 systems.
-        assert_eq!(v.last, 6);
+        assert_eq!((v.first, v.last), (0, 6));
         assert!(!v.below_min);
+        // One scale for every view of the document.
+        assert!(views.iter().all(|w| (w.scale - v.scale).abs() < 1e-9));
+        assert!((v.scale - 5.0 * CSS_PX_PER_MM / 7.0).abs() < 1e-9);
         // Overlap: the next view starts with the last system of this one.
         assert_eq!(views[1].first, 6);
-        // The sequence continues across the page boundary (item 9 → 10).
-        assert!(views.iter().any(|v| items[v.first].page == 0 && items[v.last].page == 1));
-        // Every item is shown at least once, in order.
+        // The sequence continues across the page boundary: one segment per page.
+        let across = views.iter().find(|v| items[v.first].page == 0 && items[v.last].page == 1).unwrap();
+        assert_eq!(across.segments.len(), 2);
         assert_eq!(views.last().unwrap().last, items.len() - 1);
         for w in views.windows(2) {
             assert!(w[1].first <= w[0].last + 1 && w[1].first > w[0].first);
@@ -475,10 +509,38 @@ mod tests {
     }
 
     #[test]
+    fn a_view_is_one_contiguous_crop_per_page_with_one_x_range() {
+        // Systems with gaps between them (and different widths): the crop runs from
+        // the first system's top to the last one's bottom, gaps included.
+        let mut items = vec![
+            system(0, 0.10, 0.18, 7.0),
+            system(0, 0.30, 0.38, 7.0),
+            system(0, 0.50, 0.58, 7.0),
+            system(1, 0.10, 0.18, 7.0),
+        ];
+        items[1].x0 = 0.2;
+        items[3].x1 = 0.95;
+        let views = plan_views(&items, screen(1000.0, 3000.0), 5.0);
+        assert_eq!(views.len(), 1);
+        let segs = &views[0].segments;
+        assert_eq!(segs.len(), 2);
+        assert_eq!((segs[0].page, segs[0].y0, segs[0].y1), (0, 0.10, 0.58));
+        // One horizontal crop for all: union of all items (0.1 .. 0.95 of 210 mm).
+        for g in segs {
+            assert!((g.x0 - 0.1).abs() < 1e-9 && (g.x1 - 0.95).abs() < 1e-9);
+        }
+        // The gaps count: 0.48 + 0.08 of 297 mm at the document scale must fit.
+        let views = plan_views(&items, screen(1000.0, 400.0), 5.0);
+        let h = |v: &View| v.segments.iter().map(|g| (g.y1 - g.y0) * 297.0).sum::<f64>() * v.scale;
+        assert!(views.iter().all(|v| h(v) <= 400.0 + 1e-6));
+        assert!(views[0].last < 2, "the gaps between systems take space too");
+    }
+
+    #[test]
     fn small_views_advance_without_overlap() {
         // Big minimum: only 2 systems fit ⇒ no overlap.
         let items = part(1, 10, 7.0);
-        let views = plan_views(&items, screen(1000.0, 400.0), 8.0);
+        let views = plan_views(&items, screen(1000.0, 330.0), 8.0);
         assert_eq!((views[0].first, views[0].last), (0, 1));
         assert_eq!(views[1].first, 2);
         // One system per view ⇒ advance by one.
@@ -508,6 +570,7 @@ mod tests {
         let views = plan_views(&items, screen(1000.0, 2000.0), 5.0);
         let page_view = views.iter().find(|v| v.first == 3).unwrap();
         assert_eq!(page_view.last, 3, "a whole page is alone");
+        assert_eq!(page_view.segments[0], Segment { page: 1, x0: 0.0, x1: 1.0, y0: 0.0, y1: 1.0 });
         // A title is never the last item of a view.
         let mut items = part(1, 4, 7.0);
         items.insert(2, Item { kind: ItemKind::Text, staff_mm: 0.0, ..system(0, 0.4, 0.45, 0.0) });
