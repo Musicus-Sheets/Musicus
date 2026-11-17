@@ -103,6 +103,10 @@ pub fn analyse_page(gray: &Gray, width_mm: f32, height_mm: f32) -> PageLayout {
     }
 }
 
+/// A corrected cut line closer than this to a detected one counts as unmoved
+/// (0..1 of the page height; well below a pixel of the editor).
+const CUT_EPSILON: f32 = 1e-4;
+
 /// The page as a librarian corrected it. Band kinds and cut lines come from
 /// the correction; staff count, line distance and horizontal extent from the
 /// detected systems the band overlaps most (whole width if none).
@@ -112,6 +116,8 @@ pub fn apply_correction(auto: &PageLayout, c: &PageCorrection) -> PageLayout {
     let mut spaces: Vec<f32> = systems.iter().map(|r| r.staff_space).collect();
     spaces.sort_by(f32::total_cmp);
     let page_space = spaces.first().copied().unwrap_or(0.0);
+    let is_detected_cut =
+        |b: f32| auto.regions.iter().any(|r| (r.y0 - b).abs() < CUT_EPSILON || (r.y1 - b).abs() < CUT_EPSILON);
     if !c.full_page {
         for (i, kind) in c.kinds.iter().enumerate() {
             let (y0, y1) = (c.bounds[i], c.bounds[i + 1]);
@@ -123,6 +129,10 @@ pub fn apply_correction(auto: &PageLayout, c: &PageCorrection) -> PageLayout {
             let ink_y0 = inside.iter().map(|r| r.ink_y0).fold(f32::MAX, f32::min).max(y0);
             let ink_y1 = inside.iter().map(|r| r.ink_y1).fold(0.0, f32::max).min(y1);
             let (ink_y0, ink_y1) = if ink_y1 > ink_y0 { (ink_y0, ink_y1) } else { (y0, y1) };
+            // A cut line the librarian placed (not a detected one) is shown as
+            // placed: the band reaches it, even across empty paper.
+            let (ink_y0, ink_y1) =
+                (if is_detected_cut(y0) { ink_y0 } else { y0 }, if is_detected_cut(y1) { ink_y1 } else { y1 });
             let staves: u32 = systems.iter().filter(|r| overlap(r) > 0.5 * (r.y1 - r.y0)).map(|r| r.staves).sum();
             let space = systems.iter().filter(|r| overlap(r) > 0.0).map(|r| r.staff_space).fold(f32::MAX, f32::min);
             regions.push(Region {
@@ -297,5 +307,24 @@ mod tests {
         assert!((p.regions[0].staff_space - sys[0].staff_space).abs() < 1e-6);
         let full = apply_correction(&auto, &PageCorrection { full_page: true, ..Default::default() });
         assert!(full.full_page && full.regions.is_empty());
+    }
+
+    #[test]
+    fn moved_cut_lines_are_shown_as_placed() {
+        let auto = analyse_page(&page(4, 1), 210.0, 297.0);
+        let sys: Vec<&Region> = auto.regions.iter().filter(|r| r.kind == RegionKind::System).collect();
+        // The first system is pulled up to the top edge of the page; the cut
+        // below it stays where it was detected.
+        let c = PageCorrection {
+            full_page: false,
+            bounds: vec![0.0, sys[0].y1, sys[3].y1],
+            kinds: vec![RegionKind::System, RegionKind::System],
+        };
+        let p = apply_correction(&auto, &c);
+        assert!(sys[0].y0 > 0.0 && sys[0].ink_y0 > 0.0);
+        assert_eq!(p.regions[0].ink_y0, 0.0, "moved cut: the band reaches the page edge");
+        assert_eq!(p.regions[0].ink_y1, sys[0].ink_y1, "detected cut: still trimmed to the ink");
+        let items = musicus_api::layout::reading_items(std::slice::from_ref(&p));
+        assert_eq!(items[0].y0, 0.0);
     }
 }

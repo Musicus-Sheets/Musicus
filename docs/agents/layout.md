@@ -156,7 +156,8 @@ key = url|page|crop|round(cssWidth)|dpr; also used by `prerenderCrop`), newest r
 may have no bands; else `bounds.len() == kinds.len() + 1`, values in 0..1, each band ≥ `MIN_BAND_HEIGHT` 0.005.
 Stored per (file, page) in `layout_corrections`, applied when serving (`files::effective_layout` →
 `layout::apply_correction`): per band, x range / ink rows = union of the detected regions it overlaps (else whole
-width / the band), staves = sum of detected systems overlapping it by more than half (≥ 1 for a System band),
+width / the band); an edge that is not a detected cut line (|Δ| ≥ `CUT_EPSILON` 1e-4, i.e. the librarian moved or
+added it) sets the ink row itself, so the band is shown up to that line even across empty paper; staves = sum of detected systems overlapping it by more than half (≥ 1 for a System band),
 staff_space = smallest of the overlapped systems (else the page's smallest); `confidence` 1, `corrected` true,
 `full_page` = correction's flag or no System band with a staff size. The worker never touches corrections, so they
 survive re-analysis. Editor: `pages/layout_edit.rs` (see `web-client.md`): draft from the effective page (regions →
