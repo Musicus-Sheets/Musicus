@@ -37,7 +37,10 @@ while read -r key path; do
     repo="$WORK/$name"
     git "${GIT_URL_OPTS[@]}" clone --quiet --bare --filter=blob:none --single-branch --branch "$branch" "$url" "$repo"
 
-    if git -C "$repo" rev-list --first-parent "$branch" | grep -qx "$pinned"; then
+    # Read the whole list first: `rev-list | grep -q` fails under pipefail
+    # when grep stops at the first match and rev-list dies of SIGPIPE.
+    first_parents="$(git -C "$repo" rev-list --first-parent "$branch")"
+    if grep -qx "$pinned" <<<"$first_parents"; then
         echo "ok:    $path -> ${pinned:0:12} (on $branch)"
     elif git -C "$repo" merge-base --is-ancestor "$pinned" "$branch" 2>/dev/null; then
         echo "error: $path -> ${pinned:0:12} was merged into $branch, but is not a commit of $branch itself" >&2
