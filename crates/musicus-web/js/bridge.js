@@ -70,30 +70,115 @@ export async function pageCount(url) {
   return (await open(url)).numPages;
 }
 
+// --- Sharp rendering -----------------------------------------------------
+//
+// A canvas is sharp only if the browser shows its bitmap 1:1. Browsers put a
+// canvas on whole device pixels themselves (also when it is centred on a half
+// pixel) and paint it round(left + width) - round(left) device pixels wide; if
+// that differs from the backing store, the whole bitmap is resampled, which
+// blurs every staff line. So sizes are chosen in whole device pixels and the
+// CSS size is derived from them (musicus_api::pixels::device_size, same rule
+// as `deviceSize` below): CSS width x ratio is then a whole number and the
+// painted size equals the backing size wherever the canvas lands.
+
+/** Keep equal to musicus_api::pixels::MAX_CANVAS_PIXELS. */
+const MAX_CANVAS_PIXELS = 16777216;
+
+/**
+ * Device pixels per CSS pixel the reader renders at: devicePixelRatio times
+ * the pinch zoom (rounded up to quarter steps, so a pinch does not re-render
+ * at every intermediate scale).
+ */
+export function pixelRatio() {
+  const dpr = window.devicePixelRatio || 1;
+  const pinch = window.visualViewport ? window.visualViewport.scale : 1;
+  return pinch > 1.01 ? dpr * Math.ceil(pinch * 4) / 4 : dpr;
+}
+
+let ratioChange = null;
+
+/**
+ * Resolves with the new pixelRatio() once it changed and settled for 250 ms:
+ * browser zoom, a window moved to another screen, a pinch zoom. One shared
+ * set of listeners, however many readers wait.
+ */
+export function pixelRatioChanged() {
+  if (!ratioChange) {
+    ratioChange = new Promise((resolve) => {
+      const start = pixelRatio();
+      const media = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+      let timer = 0;
+      const stop = () => {
+        clearTimeout(timer);
+        media.removeEventListener('change', check);
+        window.removeEventListener('resize', check);
+        window.visualViewport?.removeEventListener('resize', check);
+      };
+      function check() {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          const now = pixelRatio();
+          if (now !== start) {
+            stop();
+            ratioChange = null;
+            resolve(now);
+          }
+        }, 250);
+      }
+      media.addEventListener('change', check);
+      window.addEventListener('resize', check);
+      window.visualViewport?.addEventListener('resize', check);
+    });
+  }
+  return ratioChange;
+}
+
+/** Same rule as musicus_api::pixels::device_size: whole pixels, capped. */
+function deviceSize(cssW, cssH, ratio) {
+  cssW = Math.max(0, cssW);
+  cssH = Math.max(0, cssH);
+  let r = Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+  const area = cssW * cssH * r * r;
+  if (area > MAX_CANVAS_PIXELS) r *= Math.sqrt(MAX_CANVAS_PIXELS / area);
+  let width = Math.max(1, Math.round(cssW * r));
+  let height = Math.max(1, Math.round(cssH * r));
+  if (width * height > MAX_CANVAS_PIXELS) {
+    width = Math.max(1, Math.floor(cssW * r));
+    height = Math.max(1, Math.floor(cssH * r));
+  }
+  return { width, height, ratio: r };
+}
+
+/** Shows `bitmap` in the canvas: same backing size, CSS size = pixels / ratio. */
+function show(canvas, bitmap, width, height, ratio) {
+  canvas.width = width;
+  canvas.height = height;
+  canvas.style.width = `${width / ratio}px`;
+  canvas.style.height = `${height / ratio}px`;
+  canvas.getContext('2d').drawImage(bitmap, 0, 0);
+}
+
 /**
  * Renders page `index` (0-based) as large as fits into boxWidth x boxHeight
- * CSS pixels, sharp on high-density screens. Returns [cssWidth, cssHeight]
- * of the drawn page, or null if a newer render replaced this one.
+ * CSS pixels at `ratio` device pixels per CSS pixel (pixelRatio()). Returns
+ * [cssWidth, cssHeight] of the drawn page (exactly its backing pixels /
+ * ratio), or null if a newer render replaced this one.
  */
-export async function renderPage(url, index, canvasId, boxWidth, boxHeight) {
+export async function renderPage(url, index, canvasId, boxWidth, boxHeight, ratio) {
   const pdf = await open(url);
   const page = await pdf.getPage(index + 1);
   const base = page.getViewport({ scale: 1 });
-  const scale = Math.max(0.1, Math.min(boxWidth / base.width, boxHeight / base.height));
-  const viewport = page.getViewport({ scale });
-  const dpr = window.devicePixelRatio || 1;
+  const fit = Math.max(0.1, Math.min(boxWidth / base.width, boxHeight / base.height));
+  const size = deviceSize(base.width * fit, base.height * fit, ratio);
+  // Device pixels per pt; the width fills `size.width` exactly.
+  const viewport = page.getViewport({ scale: size.width / base.width });
 
   // Render off-screen first so the visible page never flashes blank.
   const off = document.createElement('canvas');
-  off.width = Math.floor(viewport.width * dpr);
-  off.height = Math.floor(viewport.height * dpr);
+  off.width = size.width;
+  off.height = size.height;
   tasks.get(canvasId)?.cancel();
-  const task = page.render({
-    canvas: off,
-    canvasContext: off.getContext('2d'),
-    viewport,
-    transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0],
-  });
+  const task = page.render({ canvas: off, canvasContext: off.getContext('2d'), viewport });
   tasks.set(canvasId, task);
   try {
     await task.promise;
@@ -111,32 +196,44 @@ export async function renderPage(url, index, canvasId, boxWidth, boxHeight) {
   if (!canvas) {
     return null;
   }
-  canvas.width = off.width;
-  canvas.height = off.height;
-  canvas.style.width = `${viewport.width}px`;
-  canvas.style.height = `${viewport.height}px`;
-  canvas.getContext('2d').drawImage(off, 0, 0);
-  return [viewport.width, viewport.height];
+  show(canvas, off, size.width, size.height, size.ratio);
+  return [size.width / size.ratio, size.height / size.ratio];
 }
 
 /**
- * System view: rendered crops, keyed by file, page, crop and size. Holds the
- * current and the next view (pre-rendered), so a page turn shows a finished
- * bitmap at once. Memory only, like everything here.
+ * System view: rendered crops, keyed by file, page, crop and pixel size. Holds
+ * the current and the next view (pre-rendered), so a page turn shows a
+ * finished bitmap at once. Bounded by count and pixels; memory only.
  */
 const crops = new Map();
 const MAX_CROPS = 24;
+const MAX_CROP_PIXELS = 3 * MAX_CANVAS_PIXELS;
 /** canvas id -> key of the crop it should show (newest request wins). */
 const wantedCrop = new Map();
 
-function cropKey(url, index, x0, y0, x1, y1, cssWidth) {
-  const dpr = window.devicePixelRatio || 1;
-  return [url, index, x0, y0, x1, y1, Math.round(cssWidth), dpr].join('|');
+function cropKey(url, index, x0, y0, x1, y1, width, height) {
+  return [url, index, x0, y0, x1, y1, width, height].join('|');
 }
 
-/** Renders only the crop (0..1 of the page) at `cssWidth` CSS px, sharp at devicePixelRatio. */
-function cropBitmap(url, index, x0, y0, x1, y1, cssWidth) {
-  const key = cropKey(url, index, x0, y0, x1, y1, cssWidth);
+/** Pixels of the bitmap a key names (its last two fields). */
+function keyPixels(key) {
+  const f = key.split('|');
+  return Number(f[f.length - 2]) * Number(f[f.length - 1]);
+}
+
+function forget(key) {
+  const p = crops.get(key);
+  crops.delete(key);
+  // Free the bitmap now (Safari reclaims canvas memory late).
+  p?.then((b) => { if (![...wantedCrop.values()].includes(key)) b.canvas.width = 0; }).catch(() => {});
+}
+
+/**
+ * Renders only the crop (0..1 of the page) into exactly width x height device
+ * pixels: pdf.js viewport with offset, scale = width / crop width in pt.
+ */
+function cropBitmap(url, index, x0, y0, x1, y1, width, height) {
+  const key = cropKey(url, index, x0, y0, x1, y1, width, height);
   if (crops.has(key)) {
     // Most recently used last.
     const p = crops.get(key);
@@ -148,53 +245,51 @@ function cropBitmap(url, index, x0, y0, x1, y1, cssWidth) {
     const pdf = await open(url);
     const page = await pdf.getPage(index + 1);
     const base = page.getViewport({ scale: 1 });
-    const scale = cssWidth / ((x1 - x0) * base.width);
+    const scale = width / ((x1 - x0) * base.width);
     const viewport = page.getViewport({ scale, offsetX: -x0 * base.width * scale, offsetY: -y0 * base.height * scale });
-    const dpr = window.devicePixelRatio || 1;
-    const cssHeight = (y1 - y0) * base.height * scale;
     const off = document.createElement('canvas');
-    off.width = Math.max(1, Math.round(cssWidth * dpr));
-    off.height = Math.max(1, Math.round(cssHeight * dpr));
-    await page.render({
-      canvas: off,
-      canvasContext: off.getContext('2d'),
-      viewport,
-      transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0],
-    }).promise;
-    return { canvas: off, cssWidth, cssHeight };
+    off.width = width;
+    off.height = height;
+    await page.render({ canvas: off, canvasContext: off.getContext('2d'), viewport }).promise;
+    return { canvas: off };
   })();
   crops.set(key, p);
   p.catch(() => crops.delete(key));
-  while (crops.size > MAX_CROPS) {
-    crops.delete(crops.keys().next().value);
+  let pixels = 0;
+  for (const k of crops.keys()) pixels += keyPixels(k);
+  while (crops.size > 1 && (crops.size > MAX_CROPS || pixels > MAX_CROP_PIXELS)) {
+    const oldest = crops.keys().next().value;
+    pixels -= keyPixels(oldest);
+    forget(oldest);
   }
   return p;
 }
 
 /**
- * Shows a crop of page `index` in the canvas `canvasId`, `cssWidth` CSS px
- * wide. Returns [cssWidth, cssHeight], or null if a newer request for the
- * same canvas replaced this one.
+ * Shows a crop of page `index` in the canvas `canvasId`: width x height device
+ * pixels at `ratio` (from musicus_api::pixels::device_size). Returns
+ * [cssWidth, cssHeight], or null if a newer request for the same canvas
+ * replaced this one.
  */
-export async function renderCrop(url, index, canvasId, x0, y0, x1, y1, cssWidth) {
-  const key = cropKey(url, index, x0, y0, x1, y1, cssWidth);
+export async function renderCrop(url, index, canvasId, x0, y0, x1, y1, width, height, ratio) {
+  const key = cropKey(url, index, x0, y0, x1, y1, width, height);
   wantedCrop.set(canvasId, key);
-  const bitmap = await cropBitmap(url, index, x0, y0, x1, y1, cssWidth);
+  let bitmap = await cropBitmap(url, index, x0, y0, x1, y1, width, height);
+  if (bitmap.canvas.width === 0) {
+    // Evicted and freed while this request waited: render again.
+    bitmap = await cropBitmap(url, index, x0, y0, x1, y1, width, height);
+  }
   const canvas = document.getElementById(canvasId);
   if (!canvas || wantedCrop.get(canvasId) !== key) {
     return null;
   }
-  canvas.width = bitmap.canvas.width;
-  canvas.height = bitmap.canvas.height;
-  canvas.style.width = `${bitmap.cssWidth}px`;
-  canvas.style.height = `${bitmap.cssHeight}px`;
-  canvas.getContext('2d').drawImage(bitmap.canvas, 0, 0);
-  return [bitmap.cssWidth, bitmap.cssHeight];
+  show(canvas, bitmap.canvas, width, height, ratio);
+  return [width / ratio, height / ratio];
 }
 
 /** Renders a crop into the memory cache only (the next view). */
-export function prerenderCrop(url, index, x0, y0, x1, y1, cssWidth) {
-  cropBitmap(url, index, x0, y0, x1, y1, cssWidth).catch(() => {});
+export function prerenderCrop(url, index, x0, y0, x1, y1, width, height) {
+  cropBitmap(url, index, x0, y0, x1, y1, width, height).catch(() => {});
 }
 
 /** Drops everything not in `keep` (array of urls) from memory. */
@@ -204,7 +299,7 @@ export function retainOnly(keep) {
     if (!wanted.has(url)) {
       bytes.delete(url);
       for (const key of [...crops.keys()]) {
-        if (key.startsWith(`${url}|`)) crops.delete(key);
+        if (key.startsWith(`${url}|`)) forget(key);
       }
       const doc = docs.get(url);
       docs.delete(url);

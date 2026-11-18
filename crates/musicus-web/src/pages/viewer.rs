@@ -36,6 +36,7 @@ use musicus_api::{
     layout::{
         self as lay, CSS_PX_PER_MM, FileLayout, Item, LayoutState, ReaderMode, ReaderSettings, Screen, StaffSize, View,
     },
+    pixels::device_size,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -327,14 +328,24 @@ struct Live {
 /// the view touches (`View::segments`), with what to render and the box for
 /// its ink canvas. All crops of a document share the horizontal range and
 /// the scale, so strokes across systems stay straight.
-fn view_crops(items: &[Item], v: &View) -> Vec<(u32, Crop, PageBox)> {
+///
+/// Sharpness: each crop gets whole device pixels at `ratio`
+/// (`musicus_api::pixels::device_size`); its page box is derived from them
+/// (page width = crop pixels / ratio / crop width), so the PDF canvas, the
+/// ink canvas and the segment box have exactly the same CSS size.
+fn view_crops(items: &[Item], v: &View, ratio: f64) -> Vec<(u32, Crop, PageBox)> {
     v.segments
         .iter()
         .filter_map(|g| {
             let it = items.iter().find(|i| i.page == g.page)?;
             let (w, h) = (it.page_w_mm * v.scale, it.page_h_mm * v.scale);
-            let crop = Crop { page: g.page, x0: g.x0, y0: g.y0, x1: g.x1, y1: g.y1, css_width: (g.x1 - g.x0) * w };
-            Some((g.page, crop, PageBox::crop(w, h, g.x0, g.y0, g.x1, g.y1)))
+            let size = device_size((g.x1 - g.x0) * w, (g.y1 - g.y0) * h, ratio);
+            let w = size.css_width() / (g.x1 - g.x0).max(1e-9);
+            let h = w * it.page_h_mm / it.page_w_mm.max(1e-9);
+            let crop = Crop { page: g.page, x0: g.x0, y0: g.y0, x1: g.x1, y1: g.y1, size };
+            let mut b = PageBox::crop(w, h, g.x0, g.y0, g.x1, g.y1);
+            (b.vw, b.vh) = (size.css_width(), size.css_height());
+            Some((g.page, crop, b))
         })
         .collect()
 }
@@ -362,6 +373,8 @@ fn Reader(data: Loaded) -> Element {
     let mut page = use_signal(|| 0u32);
     let mut page_total = use_signal(|| 0u32);
     let mut stage = use_signal(|| (0.0f64, 0.0f64));
+    // Device pixels per CSS pixel to render at (devicePixelRatio × pinch zoom).
+    let mut ratio = use_signal(bridge::pixel_ratio);
     let mut page_box = use_signal(|| None::<PageBox>);
     let mut mode = use_signal(|| Mode::Read);
     let mut tool = use_signal(|| ToolKind::Pen);
@@ -446,7 +459,7 @@ fn Reader(data: Loaded) -> Element {
     let crops = use_memo(move || {
         let v = views.read();
         match v.get(view_idx()) {
-            Some(view) => view_crops(&items.read(), view),
+            Some(view) => view_crops(&items.read(), view, ratio()),
             None => Vec::new(),
         }
     });
@@ -480,6 +493,13 @@ fn Reader(data: Loaded) -> Element {
     });
     use_hook(move || {
         spawn(bridge::keep_awake(true));
+        // Browser zoom, another screen, pinch zoom: render again at the new resolution.
+        spawn(async move {
+            loop {
+                let r = bridge::pixel_ratio_changed().await;
+                ratio.set(r);
+            }
+        });
         if let Some(u) = next_url {
             spawn(async move {
                 let _ = bridge::prefetch(&u).await;
@@ -520,12 +540,12 @@ fn Reader(data: Loaded) -> Element {
 
     // Render the PDF page whenever file, page or available space change.
     use_effect(move || {
-        let (Some(u), (w, h), p) = (url(), stage(), page()) else { return };
+        let (Some(u), (w, h), p, r) = (url(), stage(), page(), ratio()) else { return };
         if w < 20.0 || h < 20.0 || systems_on() {
             return;
         }
         spawn(async move {
-            match bridge::render_page(&u, p, PAGE_CANVAS, w - STAGE_MARGIN, h - STAGE_MARGIN).await {
+            match bridge::render_page(&u, p, PAGE_CANVAS, w - STAGE_MARGIN, h - STAGE_MARGIN, r).await {
                 Ok(Some((width, height))) => page_box.set(Some(PageBox::page(width, height))),
                 Ok(None) => {}
                 Err(e) => error.set(Some(format!("Could not render the page: {e}"))),
@@ -540,7 +560,7 @@ fn Reader(data: Loaded) -> Element {
         if current.is_empty() {
             return;
         }
-        let next = views.read().get(view_idx() + 1).map(|v| view_crops(&items.read(), v)).unwrap_or_default();
+        let next = views.read().get(view_idx() + 1).map(|v| view_crops(&items.read(), v, ratio())).unwrap_or_default();
         spawn(async move {
             for (k, (_, crop, _)) in current.iter().enumerate() {
                 if let Err(e) = bridge::render_crop(&u, &crop_canvas(k), *crop).await {
@@ -590,11 +610,11 @@ fn Reader(data: Loaded) -> Element {
             let shown = crops();
             if shown.is_empty() {
                 if let Some(b) = page_box() {
-                    ink::draw_layer(INK_CANVAS, b, layer(page()));
+                    ink::draw_layer(INK_CANVAS, b, layer(page()), ratio());
                 }
             } else {
-                for (k, (p, _, b)) in shown.iter().enumerate() {
-                    ink::draw_layer(&crop_ink_canvas(k), *b, layer(*p));
+                for (k, (p, c, b)) in shown.iter().enumerate() {
+                    ink::draw_layer(&crop_ink_canvas(k), *b, layer(*p), c.size.ratio);
                 }
             }
         }

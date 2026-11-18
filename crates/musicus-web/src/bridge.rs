@@ -1,5 +1,6 @@
 //! Typed access to `js/bridge.js` (pdf.js, in-memory prefetch, wake lock).
 
+use musicus_api::pixels::DeviceSize;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
@@ -12,7 +13,14 @@ extern "C" {
     #[wasm_bindgen(js_name = pageCount)]
     fn js_page_count(url: &str) -> js_sys::Promise;
     #[wasm_bindgen(js_name = renderPage)]
-    fn js_render_page(url: &str, index: u32, canvas_id: &str, box_width: f64, box_height: f64) -> js_sys::Promise;
+    fn js_render_page(
+        url: &str,
+        index: u32,
+        canvas_id: &str,
+        box_width: f64,
+        box_height: f64,
+        ratio: f64,
+    ) -> js_sys::Promise;
     #[wasm_bindgen(js_name = renderCrop)]
     fn js_render_crop(
         url: &str,
@@ -22,10 +30,16 @@ extern "C" {
         y0: f64,
         x1: f64,
         y1: f64,
-        css_width: f64,
+        width: u32,
+        height: u32,
+        ratio: f64,
     ) -> js_sys::Promise;
     #[wasm_bindgen(js_name = prerenderCrop)]
-    fn js_prerender_crop(url: &str, index: u32, x0: f64, y0: f64, x1: f64, y1: f64, css_width: f64);
+    fn js_prerender_crop(url: &str, index: u32, x0: f64, y0: f64, x1: f64, y1: f64, width: u32, height: u32);
+    #[wasm_bindgen(js_name = pixelRatio)]
+    pub fn pixel_ratio() -> f64;
+    #[wasm_bindgen(js_name = pixelRatioChanged)]
+    fn js_pixel_ratio_changed() -> js_sys::Promise;
     #[wasm_bindgen(js_name = retainOnly)]
     fn js_retain_only(keep: js_sys::Array);
     #[wasm_bindgen(js_name = keepAwake)]
@@ -70,16 +84,25 @@ pub async fn page_count(url: &str) -> Result<u32, String> {
     Ok(n.as_f64().unwrap_or(0.0) as u32)
 }
 
-/// Renders a page into the canvas with id `canvas_id`, fitted into the box.
-/// Returns the CSS size of the drawn page, `None` if superseded.
+/// Waits until [`pixel_ratio`] changes (browser zoom, another screen, pinch
+/// zoom; settled for 250 ms) and returns the new ratio.
+pub async fn pixel_ratio_changed() -> f64 {
+    JsFuture::from(js_pixel_ratio_changed()).await.ok().and_then(|v| v.as_f64()).unwrap_or_else(pixel_ratio)
+}
+
+/// Renders a page into the canvas with id `canvas_id`, fitted into the box,
+/// at `ratio` device pixels per CSS pixel (whole device pixels, see
+/// `musicus_api::pixels`). Returns the CSS size of the drawn page (= its
+/// backing pixels / ratio), `None` if superseded.
 pub async fn render_page(
     url: &str,
     index: u32,
     canvas_id: &str,
     box_w: f64,
     box_h: f64,
+    ratio: f64,
 ) -> Result<Option<(f64, f64)>, String> {
-    let v = JsFuture::from(js_render_page(url, index, canvas_id, box_w, box_h)).await.map_err(message)?;
+    let v = JsFuture::from(js_render_page(url, index, canvas_id, box_w, box_h, ratio)).await.map_err(message)?;
     if v.is_null() || v.is_undefined() {
         return Ok(None);
     }
@@ -95,14 +118,15 @@ pub struct Crop {
     pub y0: f64,
     pub x1: f64,
     pub y1: f64,
-    /// Width on screen in CSS pixels.
-    pub css_width: f64,
+    /// Canvas size in device pixels; on screen `size.css_width()` CSS pixels wide.
+    pub size: DeviceSize,
 }
 
-/// Renders only `crop` of a page into the canvas, sharp at devicePixelRatio.
-/// Returns the CSS size, `None` if superseded by a newer request.
+/// Renders only `crop` of a page into the canvas, exactly `c.size` device
+/// pixels. Returns the CSS size, `None` if superseded by a newer request.
 pub async fn render_crop(url: &str, canvas_id: &str, c: Crop) -> Result<Option<(f64, f64)>, String> {
-    let v = JsFuture::from(js_render_crop(url, c.page, canvas_id, c.x0, c.y0, c.x1, c.y1, c.css_width))
+    let s = c.size;
+    let v = JsFuture::from(js_render_crop(url, c.page, canvas_id, c.x0, c.y0, c.x1, c.y1, s.width, s.height, s.ratio))
         .await
         .map_err(message)?;
     if v.is_null() || v.is_undefined() {
@@ -114,7 +138,7 @@ pub async fn render_crop(url: &str, canvas_id: &str, c: Crop) -> Result<Option<(
 
 /// Renders a crop into memory only, so the next view appears at once.
 pub fn prerender_crop(url: &str, c: Crop) {
-    js_prerender_crop(url, c.page, c.x0, c.y0, c.x1, c.y1, c.css_width);
+    js_prerender_crop(url, c.page, c.x0, c.y0, c.x1, c.y1, c.size.width, c.size.height);
 }
 
 /// Frees memory of files no longer needed.

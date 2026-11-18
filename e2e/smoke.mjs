@@ -8,7 +8,8 @@
 // library, invites, groups and grants, programmes, a librarian's and a
 // member's view (no management controls), a member reading and annotating,
 // the system view (generated part: whole systems across pages, swipe, staff
-// size, drawing in a crop), the librarian's system editor (join, drag, whole
+// size, drawing in a crop), sharp rendering on a 2× screen (page and system
+// view, ratio change, pinch zoom), the librarian's system editor (join, drag, whole
 // page, reset) and its effect on members.
 // The assignment picker (assigned chips + searchable multi-select dropdown)
 // is checked on group members and grants, part instruments and programme
@@ -686,6 +687,93 @@ check(await redPixels(m) > 50, 'a stroke drawn in the system view shows in the p
 straight(await strokeShape('ink-canvas'), 'in the page view it is the same straight line', 60);
 check((await m.evaluate(async () => (await (await fetch('/api/auth/me')).json()).reader.mode)) === 'page',
   'switching back to the page view is stored too');
+
+// --- Sharp rendering on a high-density screen -----------------------------
+// The PDF canvases must be shown 1:1, else the browser resamples them and every staff line blurs:
+// backing store = CSS box × devicePixelRatio (whole pixels), in the page view and the system view,
+// also after the ratio changes at runtime (another screen, browser zoom) and under a pinch zoom.
+// Chromium: a real 2× screen (--force-device-scale-factor; DSF emulation lays out in CSS pixels and
+// scales afterwards), and the size the browser paints (devicePixelContentBox) must equal the backing.
+{
+  const chrome = engine === chromium;
+  const hiBrowser = chrome ? await chromium.launch({
+    ...(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {}),
+    args: ['--force-device-scale-factor=2', '--window-size=1280,800'],
+  }) : browser;
+  const hiCtx = await hiBrowser.newContext({
+    storageState: await member.storageState(),
+    ...(chrome ? { viewport: null } : { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 }),
+  });
+  const hi = await hiCtx.newPage();
+  watch(hi);
+  // Every PDF canvas: backing size, CSS box × ratio, painted device pixels (Chromium, Firefox).
+  const pdfCanvases = () => hi.evaluate(async () => {
+    const list = [...document.querySelectorAll('#page-canvas, .page-segment canvas:first-child')];
+    return Promise.all(list.map((c) => new Promise((resolve) => {
+      const r = c.getBoundingClientRect();
+      const base = { id: c.id, w: c.width, h: c.height, cssW: r.width, cssH: r.height, dpr: window.devicePixelRatio,
+        pinch: window.visualViewport ? window.visualViewport.scale : 1 };
+      const ro = new ResizeObserver((e) => {
+        ro.disconnect();
+        const s = e[0].devicePixelContentBoxSize?.[0];
+        resolve({ ...base, painted: s ? [s.inlineSize, s.blockSize] : null });
+      });
+      try { ro.observe(c, { box: 'device-pixel-content-box' }); } catch { resolve({ ...base, painted: null }); }
+    })));
+  });
+  const fits = (c, zoom = 1) => c.w > 0 && Math.abs(c.w - c.cssW * c.dpr * zoom) <= 1 && Math.abs(c.h - c.cssH * c.dpr * zoom) <= 1;
+  // (`painted` is only meaningful without CDP emulation.)
+  const describe = (cs, { zoom = 1, painted = true } = {}) => cs.map((c) => `${c.id} ${c.w}×${c.h} for `
+    + `${(c.cssW * c.dpr * zoom).toFixed(2)}×${(c.cssH * c.dpr * zoom).toFixed(2)}`
+    + `${painted && chrome && c.painted ? `, painted ${c.painted.join('×')}` : ''}`).join('; ');
+  const waitSharp = (zoom = 1) => hi.waitForFunction((zoom) => {
+    const list = [...document.querySelectorAll('#page-canvas, .page-segment canvas:first-child')];
+    return list.length > 0 && list.every((c) => {
+      const r = c.getBoundingClientRect();
+      const d = window.devicePixelRatio * zoom;
+      return c.width > 0 && Math.abs(c.width - r.width * d) <= 1 && Math.abs(c.height - r.height * d) <= 1;
+    });
+  }, zoom, { timeout: 15000 }).catch(() => {});
+  const sharp = async (what) => {
+    await waitSharp();
+    const cs = await pdfCanvases();
+    check(cs.length > 0 && cs[0].dpr === 2 && cs.every((c) => fits(c)), `${what}: backing store = CSS box × 2 (${describe(cs)})`);
+    if (chrome) {
+      check(cs.every((c) => c.painted && c.painted[0] === c.w && c.painted[1] === c.h), `${what}: painted 1:1, not resampled`);
+    }
+  };
+  await hi.goto(`${base}/parts/${systemsPart.id}`);
+  await hi.locator('#page-canvas').waitFor();
+  await sharp('page view at devicePixelRatio 2');
+  if (chrome) {
+    const cdp = await hiCtx.newCDPSession(hi);
+    const { width, height } = await hi.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+    // Another screen: the ratio changes, the CSS size does not.
+    await cdp.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 3, mobile: false });
+    await hi.waitForFunction(() => window.devicePixelRatio === 3);
+    await waitSharp();
+    const moved = await pdfCanvases();
+    check(moved.every((c) => c.dpr === 3 && fits(c)), `page view re-rendered when the ratio changed to 3 (${describe(moved, { painted: false })})`);
+    await cdp.send('Emulation.clearDeviceMetricsOverride');
+    await hi.waitForFunction(() => window.devicePixelRatio === 2);
+    // Pinch zoom: rendered at ratio × zoom, so the magnified page stays sharp.
+    await cdp.send('Emulation.setPageScaleFactor', { pageScaleFactor: 2 });
+    await waitSharp(2);
+    const pinched = await pdfCanvases();
+    check(pinched.every((c) => c.pinch === 2 && fits(c, 2)), `pinch zoom 2× renders at 4 pixels per CSS pixel (${describe(pinched, { zoom: 2, painted: false })})`);
+    await cdp.send('Emulation.setPageScaleFactor', { pageScaleFactor: 1 });
+    await cdp.detach();
+  }
+  await hi.getByRole('button', { name: /Systems/ }).click();
+  await hi.locator('.system-view .page-segment').first().waitFor();
+  await sharp('system view at devicePixelRatio 2');
+  // Back to the page view: the setting is stored for anna, the next steps expect the page view.
+  await hi.getByRole('button', { name: /Systems/ }).click();
+  await hi.locator('#page-canvas').waitFor();
+  await hi.waitForFunction(async () => (await (await fetch('/api/auth/me')).json()).reader.mode === 'page');
+  await hiCtx.close();
+  if (chrome) await hiBrowser.close();
+}
 
 // --- Librarian corrects the systems; every member's system view follows --
 await a.goto(`${base}/parts/${systemsPart.id}/edit`);

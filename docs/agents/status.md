@@ -45,6 +45,10 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
   (numbers in `layout.md`). Physical staff size depends on the device density (a-css-mm). Detection time on a
   Raspberry Pi not measured (R-PERF-008 estimate). R-READ-019 (layouts prefetched with a programme) not e2e-tested.
 - Client features without e2e coverage: eraser/stamps/text/undo (R-ANN-002, R-ANN-003), palm rejection (R-ANN-004), sets menu actions, migration banner, wake lock, fullscreen, programme next/previous navigation (R-READ-005); deleting pieces/parts/programmes/groups from the UI, user role changes and disable/enable (API-tested only).
+- Sharp rendering (a-device-pixels): painted = backing verified only in Chromium (real `--force-device-scale-factor`);
+  Firefox and Safari (no `devicePixelContentBox`) not measured; real browser zoom (Ctrl +) and a real second screen are
+  only simulated with CDP device-metrics emulation (sizes checked, not the painted pixels); pinch zoom sharpness checked
+  by backing size only. The layout editor renders at the current ratio but does not re-render on a ratio change.
 - arm64 (Raspberry Pi) build not tested; Caddy HTTPS profile not tested end to end; release wasm with current wasm-opt not tested in CI.
 - No CI for Rust build/tests yet (only the docs gates `agent-docs.yml`, `submodules.yml` and the user-guide Pages deploy `user-guide-pages.yml`).
 - User-guide Pages workflow (a-guide-site): the script is tested locally (tags, test build, skipped and failing versions, HTTPS fetch); the GitHub-side parts (`gh release list`, Pages deploy, `github-pages` environment rules for tags) are only verified by a real run.
@@ -63,4 +67,6 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 - Assignment picker lists every candidate in the DOM (no virtualisation); fine for a few thousand entries. Score grants and the programme picker load all scores (`GET /api/scores`, full objects with parts).
 - A tap outside an open picker only closes it (backdrop); the tapped control needs a second tap (a-assign-picker). Leaving the page with the browser's back button while a picker is open drops the ticks.
 - `programmes.rs::futures_join` awaits sequentially (works only because prefetch is eager, a-eager-prefetch).
+- Pinch zoom re-renders at up to `MAX_CANVAS_PIXELS` per canvas (crop cache ≤ 3 × that); while pinched the canvas
+  position is not on whole device pixels (browser-controlled), so it is sharp but not strictly 1:1.
 - Thumbnails are blobs without a `files` row; never served except via their PDF's hash.

@@ -119,7 +119,7 @@ fn Editor(part: Part, sha256: String) -> Element {
                     .and_then(|v| v.as_f64())
                     .map(|w| (w - 48.0).min(820.0))
                     .unwrap_or(800.0);
-                match bridge::render_page(&url, p, CANVAS, width, 100_000.0).await {
+                match bridge::render_page(&url, p, CANVAS, width, 100_000.0, bridge::pixel_ratio()).await {
                     Ok(Some(s)) => size.set(Some(s)),
                     Ok(None) => {}
                     Err(e) => status.set(Some(Err(format!("Could not render the page: {e}")))),

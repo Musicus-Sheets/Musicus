@@ -128,7 +128,10 @@ view → system view: anchor = `first_item_of_page(current page)`; the current p
 Signals/memos: `settings` (from `Session.user.reader`; changes PUT `/api/auth/reader-settings` and update the
 session), `layout` (loaded per displayed file URL, retried every `LAYOUT_RETRY_MS` 10 s while pending, ≤ 30 times),
 `items`, `views` (empty unless mode Systems and layout done with page count = pdf.js page count), `view_idx`, `crops`
-(`view_crops`: one per `View.segments` entry — CSS width = (x1 − x0) × page_w_mm × scale, `PageBox::crop`).
+(`view_crops(items, view, ratio)`: one per `View.segments` entry — `Crop.size` = `device_size((x1 − x0) × page_w_mm × scale,
+(y1 − y0) × page_h_mm × scale, ratio)` whole device pixels; page box width = `size.css_width()` / (x1 − x0), height by the
+page aspect, `vw/vh` = the snapped CSS size, so PDF canvas, ink canvas and `.page-segment` box are exactly the same size;
+a-device-pixels).
 DOM: `.system-view` (one outer shadow, `data-view="i/n"`, `data-items`) holding one `.page-segment` per page (PDF
 canvas `crop-{k}` + ink canvas `crop-ink-{k}`), directly stacked; no shadow, border or gap between systems; a 1 px
 `rgba(0,0,0,.12)` hairline (`::before`, no layout effect) only where a view continues on the next page. A stroke drawn
@@ -144,10 +147,11 @@ previous / next piece. Swipe: pointer down/up on the stage in read mode, |dx| �
 the click that ends a swipe is ignored (400 ms). `.system-view[data-view="i/n"]` is for tests.
 Notes: pending/failed layout in system mode ⇒ blue banner and page view.
 
-`bridge.js`: `renderCrop(url, page, canvasId, x0, y0, x1, y1, cssWidth)` renders only the crop with a pdf.js viewport
-offset (scale = cssWidth / (crop width · page width pt)), canvas at devicePixelRatio, cache `crops` (LRU 24 bitmaps,
-key = url|page|crop|round(cssWidth)|dpr; also used by `prerenderCrop`), newest request per canvas wins;
-`retainOnly` drops a file's crops.
+`bridge.js`: `renderCrop(url, page, canvasId, x0, y0, x1, y1, width, height, ratio)` renders only the crop with a pdf.js
+viewport offset into exactly width × height device pixels (scale = width / (crop width · page width pt)), CSS size =
+pixels / ratio; cache `crops` (key = url|page|crop|width|height; ≤ 24 bitmaps and ≤ 3 × `MAX_CANVAS_PIXELS`; also used by
+`prerenderCrop`), newest request per canvas wins; `retainOnly` drops a file's crops. A change of `pixelRatio()` (zoom,
+other screen, pinch) changes the sizes, hence new keys and a re-render.
 
 ## Corrections (R-READ-016, a-layout-corrections)
 

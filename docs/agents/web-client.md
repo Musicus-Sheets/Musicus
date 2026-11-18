@@ -47,9 +47,11 @@ Server serves `index.html` for any non-`/api` path, so deep links work.
 | `prefetch(url) -> impl Future` (eager, a-eager-prefetch) | `prefetch` | `bytes: Map<url, Promise<Uint8Array>>`; `fetch(url, {credentials: same-origin})`; failed promise removed |
 | `is_cached(url)` | `isCached` | |
 | `page_count(url)` | `pageCount` | opens doc via pdf.js (`docs` Map; `getDocument({data: bytes.slice()})` because pdf.js transfers the buffer to its worker) |
-| `render_page(url, index, canvas_id, w, h) -> Option<(css_w, css_h)>` | `renderPage` | scale = fit box; render to off-screen canvas at devicePixelRatio; cancels older task for same canvas (`tasks` Map) → returns null if cancelled; copies into visible canvas, sets CSS size |
-| `render_crop(url, canvas_id, Crop) -> Option<(css_w, css_h)>` | `renderCrop` | system view: renders only the crop (pdf.js viewport `offsetX/Y`, scale = css width / crop width in pt) at devicePixelRatio into a cached off-screen canvas (LRU 24, key url\|page\|crop\|round(css w)\|dpr), copies it into the canvas; newest request per canvas wins (else null) |
-| `prerender_crop(url, Crop)` | `prerenderCrop` | fills the crop cache (next view) |
+| `pixel_ratio()` | `pixelRatio` | render ratio = `devicePixelRatio` × pinch zoom (`visualViewport.scale`, if > 1.01, rounded up to quarter steps) |
+| `pixel_ratio_changed() -> f64` | `pixelRatioChanged` | resolves with the new ratio once it changed and settled 250 ms (`matchMedia('(resolution: …dppx)')` change, window resize, `visualViewport` resize); one shared promise |
+| `render_page(url, index, canvas_id, w, h, ratio) -> Option<(css_w, css_h)>` | `renderPage` | fit box in CSS px → `deviceSize` (whole device pixels, same rule as `musicus_api::pixels::device_size`, cap `MAX_CANVAS_PIXELS`); pdf.js viewport scale = pixel width / page width pt (no transform); off-screen canvas; cancels older task for same canvas (`tasks` Map) → null if cancelled; `show` copies it 1:1 and sets CSS size = pixels / ratio, which it returns (a-device-pixels) |
+| `render_crop(url, canvas_id, Crop) -> Option<(css_w, css_h)>` | `renderCrop` | system view: renders only the crop (pdf.js viewport `offsetX/Y`, scale = `Crop.size.width` / crop width in pt) into exactly `Crop.size` device pixels in a cached off-screen canvas (key url\|page\|crop\|width\|height; ≤ 24 bitmaps and ≤ 3 × `MAX_CANVAS_PIXELS` pixels, oldest evicted and freed with `width = 0` unless a canvas still wants it), copies it 1:1, CSS size = pixels / ratio; newest request per canvas wins (else null) |
+| `prerender_crop(url, Crop)` | `prerenderCrop` | fills the crop cache (next view, same pixel sizes) |
 | `retain_only(urls)` | `retainOnly` | drops other bytes/docs (destroys docs) and their crops |
 | `set_pending(set, page, rev, bytes)` / `clear_pending` | `setPending`/`clearPending` | `pendingPages` Map; copies bytes (a-wasm-view-copy); on `pagehide` sends each with `fetch(PUT, keepalive, If-Match, x-musicus-csrf)` |
 | `keep_awake(on)` | `keepAwake` | screen wake lock; `document.body.dataset.keepAwake` drives re-acquire on `visibilitychange` |
@@ -65,7 +67,7 @@ of the programme after `bridge::retain_only` (R-READ-019).
 
 ## Ink drawing (`ink.rs`)
 
-`PageBox {width, height, ox, oy, vw, vh}` (CSS px of the displayed page; crop offset and visible size; `PageBox::page(w,h)` = whole page, `PageBox::crop(w,h,x0,y0,x1,y1)`): `canvas_to_page(x,y)` adds the offset, `to_page(x,y)` (page CSS px) → u16 coords, `to_css((u16,u16))`, `len_css(units)`. `prepare(canvas_id, box)` sizes canvas to vw×vh × DPR, clears, sets transform (dpr, translate −offset), so layers are drawn in page CSS px. `draw_layer`: highlighters (alpha 0.35) first, then pens (per-segment width by pressure: `pen_width_css` = len × (0.55 + 0.9·p), p=0 ⇒ 0.5), stamps (glyph, serif), texts. `hit(box, layer, point, radius)` → ids within radius (strokes by segment distance, stamps by centre, text by bounding box). `new_id()` = random u64 from `Math.random`.
+`PageBox {width, height, ox, oy, vw, vh}` (CSS px of the displayed page; crop offset and visible size; `PageBox::page(w,h)` = whole page, `PageBox::crop(w,h,x0,y0,x1,y1)`): `canvas_to_page(x,y)` adds the offset, `to_page(x,y)` (page CSS px) → u16 coords, `to_css((u16,u16))`, `len_css(units)`. `prepare(canvas_id, box, ratio)` sizes the canvas to `musicus_api::pixels::device_size(vw, vh, ratio)` (the same whole pixels as the PDF canvas under it), CSS size vw×vh, clears, sets transform (pixels/vw, pixels/vh, translate −offset), so layers are drawn in page CSS px. `draw_layer`: highlighters (alpha 0.35) first, then pens (per-segment width by pressure: `pen_width_css` = len × (0.55 + 0.9·p), p=0 ⇒ 0.5), stamps (glyph, serif), texts. `hit(box, layer, point, radius)` → ids within radius (strokes by segment distance, stamps by centre, text by bounding box). `new_id()` = random u64 from `Math.random`.
 
 ## Pages
 
@@ -118,7 +120,9 @@ Signals: `sets`, `active` (set id), `page`, `page_total`, `stage` (size from `on
 
 Non-signal state (d-reader-store): `store: Rc<RefCell<Store>>`, `Store.pages: HashMap<(set_id, page), PageState>`; `PageState {layer, revision, base_ids, loaded, generation, saved_generation, saving, undo, redo}`; `live: Rc<RefCell<Live>>` (current stroke, pointer id, `pen_seen`).
 
-Effects: url → `page_count`; (url, stage, page) → `render_page` into `page-canvas` (box = stage − 8 px) → `page_box`; (active, page) → `load_page`; (version, page_box, show_ink, active, page) → `ink::draw_layer` into `ink-canvas`. On mount: `keep_awake(true)`, prefetch next piece. On drop: flush dirty pages with `spawn_forever(save_page…)`, `keep_awake(false)`; keyboard listener removed.
+Signal `ratio` (= `bridge::pixel_ratio()`, updated by a task looping on `bridge::pixel_ratio_changed()`): browser zoom, a window moved to another screen and pinch zoom re-render page and crops (a-device-pixels).
+
+Effects: url → `page_count`; (url, stage, page, ratio) → `render_page` into `page-canvas` (box = stage − 8 px) → `page_box` (CSS size returned by the bridge = pixels / ratio); (active, page) → `load_page`; (version, page_box, show_ink, active, page, ratio) → `ink::draw_layer(…, ratio)` into `ink-canvas`. On mount: `keep_awake(true)`, prefetch next piece. On drop: flush dirty pages with `spawn_forever(save_page…)`, `keep_awake(false)`; keyboard listener removed.
 
 `load_page(store, key)`: GET page; decode; if local objects were drawn before load finished ⇒ `merge(∅, local, server)`; set `revision`, `base_ids`, `loaded`.
 
