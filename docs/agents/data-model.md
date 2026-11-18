@@ -1,4 +1,4 @@
-# Data model (SQLite, `crates/musicus-server/migrations/0001_init.sql`, `0002_part_names.sql`)
+# Data model (SQLite, `crates/musicus-server/migrations/0001_init.sql`, `0002_part_names.sql`, `0003_system_layouts.sql`, `0004_layout_corrections.sql`)
 
 Times = Unix seconds (`db::now()`); dates = `YYYY-MM-DD` text; booleans = INTEGER 0/1; JSON arrays as TEXT.
 Migrations: applied at start by `sqlx::migrate!` (R-OPS-004). NEVER edit an applied migration (checksum mismatch aborts start-up); add `000N_<name>.sql`. Update this file in the same commit.
@@ -7,7 +7,7 @@ Migrations: applied at start by `sqlx::migrate!` (R-OPS-004). NEVER edit an appl
 
 | Table | Columns (PK first) | Constraints / notes | Requirements |
 | --- | --- | --- | --- |
-| `users` | `id`, `username` UNIQUE NOCASE, `display_name`, `password_hash` NULL until invite accepted, `role` CHECK member/librarian/admin, `disabled`, `created_at` | stored lowercased by `insert_user` | R-ACC-001, R-ACC-008 |
+| `users` | `id`, `username` UNIQUE NOCASE, `display_name`, `password_hash` NULL until invite accepted, `role` CHECK member/librarian/admin, `disabled`, `created_at`, `reader_mode` CHECK page/systems default page, `staff_size` CHECK S/M/L/XL default M (0003) | stored lowercased by `insert_user` | R-ACC-001, R-ACC-008, R-READ-014 |
 | `invites` | `token_hash` BLOB PK, `user_id` FK cascade, `expires_at` | WITHOUT ROWID; idx user | R-ACC-001, R-ACC-002 |
 | `sessions` | `id`, `token_hash` UNIQUE, `user_id` FK cascade, `created_at`, `last_seen_at`, `expires_at`, `user_agent` (≤200 chars) | idx user | R-ACC-005, R-ACC-006 |
 | `groups` | `id`, `name` UNIQUE NOCASE | | R-ACL-004 |
@@ -19,6 +19,8 @@ Migrations: applied at start by `sqlx::migrate!` (R-OPS-004). NEVER edit an appl
 | `parts` | `id`, `score_id` FK cascade, `label` TEXT NULL = custom name (NULL ⇒ derived name, a-part-names), `voice` TEXT NULL (free text ≤20), `transposition` TEXT NULL = key code of `musicus_api::naming::KEYS` (Bb, Eb, F, C, A, D, G, E, Ab, Db, Gb, H) or an older free-text value, `notes`, `created_at` | idx score; 0002 rebuilt `label`/`voice` with ADD/DROP/RENAME COLUMN (column order: id, score_id, transposition, notes, created_at, label, voice) | R-LIB-002, R-LIB-010, R-LIB-011 |
 | `part_fts` | FTS5 standalone, col `name` = `part_index::index_text` (shown name + derived name if custom + key code), rowid = part id; `unicode61 remove_diacritics 2` | written by the server (`part_index::reindex`) on part create/update and instrument rename; trigger `parts_fts_delete` removes rows; rebuilt on start if row count ≠ parts | R-LIB-004, R-LIB-010 |
 | `part_instruments` | PK (`instrument_id`, `part_id`) | WITHOUT ROWID; idx part; instrument FK RESTRICT (in use ⇒ 409) | R-LIB-002, R-LIB-003 |
+| `file_layouts` | `file_id` PK FK files cascade, `algorithm` (detection version), `state` CHECK done/failed, `pages` TEXT = JSON `Vec<musicus_api::layout::PageLayout>` (`[]` if failed), `updated_at` | written only by `layout::worker` (upsert); no row = pending (0003) | R-READ-010 |
+| `layout_corrections` | PK (`file_id`, `page`) 0-based, `data` TEXT = JSON `PageCorrection {full_page, bounds, kinds}`, `updated_by` FK users SET NULL, `updated_at` | WITHOUT ROWID; file FK cascade; applied on read, never touched by the worker (0004) | R-READ-016 |
 | `part_files` | PK (`part_id`, `version`), `file_id` FK, `uploaded_at` | WITHOUT ROWID; idx file; current = MAX(version) | R-FILE-002 |
 | `group_instrument_grants` | PK (`group_id`, `instrument_id`) | WITHOUT ROWID; idx instrument | R-ACL-001 |
 | `group_score_grants` | PK (`group_id`, `score_id`) | WITHOUT ROWID; idx score | R-ACL-001 |

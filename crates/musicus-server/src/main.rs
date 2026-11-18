@@ -74,6 +74,8 @@ async fn serve(args: ServeArgs) -> Result<()> {
         tracing::warn!("No users yet. Created 'admin'; set its password at:");
         tracing::warn!("{}/invite/{token}", args.public_url.trim_end_matches('/'));
     }
+    // Detects the music systems of new (and not yet analysed) files in the background.
+    musicus_server::layout::worker::spawn(state.clone());
     if let Some(dir) = &args.web_dir
         && !dir.join("index.html").exists()
     {

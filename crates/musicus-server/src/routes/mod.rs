@@ -37,6 +37,7 @@ pub fn api() -> Router<AppState> {
         .route("/auth/logout", post(auth::logout))
         .route("/auth/me", get(auth::me))
         .route("/auth/password", post(auth::change_password))
+        .route("/auth/reader-settings", put(auth::set_reader_settings))
         .route("/auth/sessions", get(auth::list_sessions))
         .route("/auth/sessions/{id}", axum::routing::delete(auth::revoke_session))
         .route("/auth/invites/{token}", get(auth::invite_info).post(auth::accept_invite))
@@ -62,6 +63,8 @@ pub fn api() -> Router<AppState> {
         .route("/parts/{id}/versions", get(library::list_versions))
         .route("/files/{sha256}", get(files::get_file))
         .route("/files/{sha256}/thumbnail", get(files::get_thumbnail))
+        .route("/files/{sha256}/layout", get(files::get_layout))
+        .route("/files/{sha256}/layout/pages/{page}", put(files::put_correction).delete(files::delete_correction))
         // Programmes
         .route("/programmes", get(programmes::list).post(programmes::create))
         .route("/programmes/{id}", get(programmes::get).put(programmes::update).delete(programmes::delete))

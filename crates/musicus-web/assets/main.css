@@ -321,6 +321,17 @@ a.icon { color: #f2f4f8; text-decoration: none; }
   overflow: hidden; touch-action: manipulation; }
 .sheet { position: relative; box-shadow: 0 2px 16px rgba(0, 0, 0, 0.45); background: #fff; line-height: 0; }
 #page-canvas { display: block; }
+/* System view: one contiguous crop of the original page per page segment, directly stacked;
+   one shadow around the whole view, none between systems; a hairline only at a page boundary. */
+.system-view { display: flex; flex-direction: column; align-items: center; gap: 0; background: #fff;
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.45); line-height: 0; }
+.page-segment { position: relative; background: #fff; }
+.page-segment canvas:first-child { display: block; }
+.page-segment + .page-segment::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 1px;
+  background: rgba(0, 0, 0, 0.12); pointer-events: none; z-index: 1; }
+.reader-bar .staff-size { min-height: 44px; border: 1px solid #4a515d; border-radius: 8px; padding: 0 0.4rem;
+  background: transparent; color: #f2f4f8; width: auto; }
+.staff-size option { color: #111; }
 canvas.ink { position: absolute; left: 0; top: 0; pointer-events: none; }
 canvas.ink.active { pointer-events: auto; touch-action: none; cursor: crosshair; }
 .next-piece { position: absolute; right: 16px; bottom: 16px; background: #2f5bd3; color: #fff; padding: 0.7rem 1rem;
@@ -328,6 +339,7 @@ canvas.ink.active { pointer-events: auto; touch-action: none; cursor: crosshair;
 .banner { background: #5c4a12; color: #fff; padding: 0.5rem 0.8rem; display: flex; gap: 0.6rem; align-items: center;
   flex-wrap: wrap; }
 .banner.error { background: #6b1d21; }
+.banner.info { background: #24406b; }
 .banner button { color: #fff; border-color: rgba(255, 255, 255, 0.5); background: transparent; }
 .set-menu { position: absolute; right: 8px; top: 56px; z-index: 10; width: min(360px, calc(100vw - 16px));
   color: var(--text); max-height: calc(100vh - 80px); overflow: auto; }
@@ -335,3 +347,32 @@ canvas.ink.active { pointer-events: auto; touch-action: none; cursor: crosshair;
 .set-option input { min-height: auto; width: 1.1rem; height: 1.1rem; }
 .menu-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.8rem 0 0.4rem; }
 .set-menu .close { float: right; }
+
+/* System layout editor (librarians) */
+.layout-toolbar { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; margin: 0.6rem 0; }
+.page-no-dark { font-variant-numeric: tabular-nums; }
+label.check { flex-direction: row; align-items: center; gap: 0.5rem; margin: 0.4rem 0 0.8rem; }
+label.check input { width: 1.2rem; height: 1.2rem; min-height: auto; }
+.layout-page { position: relative; margin: 0 auto 1rem; box-shadow: 0 2px 14px rgba(0, 0, 0, 0.25); background: #fff;
+  line-height: 0; max-width: 100%; }
+.layout-page canvas { display: block; }
+.layout-overlay { position: absolute; inset: 0; touch-action: none; }
+.layout-overlay.whole .band { opacity: 0.25; }
+.band { position: absolute; left: 0; right: 0; box-sizing: border-box; line-height: 1.2; }
+.band.system { background: rgba(47, 91, 211, 0.08); }
+.band.system:nth-of-type(even) { background: rgba(26, 143, 60, 0.09); }
+.band.header { background: rgba(240, 150, 0, 0.16); }
+.band.footer { background: rgba(120, 120, 120, 0.16); }
+.band.hidden { background: repeating-linear-gradient(135deg, rgba(0, 0, 0, 0.28) 0 6px, rgba(0, 0, 0, 0.12) 6px 12px); }
+.band-tools { position: absolute; right: 4px; top: 4px; display: flex; gap: 4px; z-index: 2; }
+.band-tools select, .band-tools button { min-height: 32px; padding: 0 0.4rem; font-size: 0.8rem; background: #fff; width: auto; }
+.band-label { position: absolute; left: 4px; top: 4px; font-size: 0.75rem; color: #1b2a55; background: rgba(255, 255, 255, 0.85);
+  padding: 1px 4px; border-radius: 4px; }
+.cut { position: absolute; left: 0; right: 0; height: 0; border-top: 2px solid #d0021b; z-index: 3; }
+.cut.dragging { border-top-color: #7a0010; }
+.cut .grip { position: absolute; left: 0; right: 0; top: -11px; height: 22px; cursor: ns-resize; touch-action: none; }
+.cut .grip:focus-visible { outline: 2px solid #2f5bd3; }
+.cut-remove { position: absolute; left: calc(50% - 16px); top: -16px; min-height: 30px; min-width: 32px; padding: 0; border-radius: 50%;
+  background: #fff; color: #d0021b; border: 1px solid #d0021b; line-height: 1; display: inline-flex;
+  align-items: center; justify-content: center; font-size: 1.1rem; }
+.layout-actions { position: sticky; bottom: 0; z-index: 5; background: var(--bg); padding: 0.5rem 0; }

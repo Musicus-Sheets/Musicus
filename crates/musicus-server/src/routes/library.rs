@@ -536,10 +536,13 @@ async fn store_upload(app: &App, part_id: Id, pending: &crate::blobs::PendingBlo
             .bind(now())
             .execute(&app.db.write)
             .await?;
-            sqlx::query_scalar("SELECT id FROM files WHERE sha256 = ?1")
+            let id = sqlx::query_scalar("SELECT id FROM files WHERE sha256 = ?1")
                 .bind(&pending.sha256)
                 .fetch_one(&app.db.write)
-                .await?
+                .await?;
+            // A new file: let the background worker find its music systems.
+            app.layout_jobs.notify_one();
+            id
         }
     };
 

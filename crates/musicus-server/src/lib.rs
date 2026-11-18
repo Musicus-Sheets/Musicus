@@ -12,6 +12,7 @@ pub mod cache;
 pub mod config;
 pub mod db;
 pub mod error;
+pub mod layout;
 pub mod part_index;
 pub mod processors;
 pub mod routes;

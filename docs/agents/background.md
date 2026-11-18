@@ -147,6 +147,102 @@ page — light 8×40 points: JSON 11.0 KB, JSON+zstd 4.2 KB, binary delta+zstd 1
 heavy 120×80: 322 / 130 / 36 KB. Raspberry Pi 4 cores are ~3–4× slower (estimate) → 120-client burst still < ~1 s CPU.
 Caveats: loopback hides the network; synthetic engraved PDF (37 KB / 4 pages, no music font) and simulated scan (2.5 MB / 4 pages).
 
+### 6.1 System detection for a system-wise reader (`prototypes/system-detect`, November 2026, real scores)
+
+Status: approved by the user and implemented as the system view (F-READ-003; production code and the exact
+algorithm: `layout.md`). User decisions after this evaluation: no splitting at barlines for now (R-READ-017
+proposed), one-system overlap only when ≥ 3 systems fit, staff sizes per user on the server; the 8vb failure below
+is fixed by a-footer-attach.
+
+Question: can the server find whole music systems in uploaded PDFs reliably enough for a reader mode for small
+tablets ("concept A", agreed with the user): show as many *whole* systems as fit at a minimum on-screen staff height
+(user setting, e.g. 6/7/8/10 mm), cropped to the content width; "next" makes the last system of the view the first of
+the next view (if only one fits, advance by one); systems form one sequence across page boundaries; a system is never
+cut. Not a requirement yet (no feature work; see the requirement sketch below).
+
+Method (`prototypes/system-detect/src/detect.rs`; input is a greyscale raster, so it can move into
+`crates/musicus-server/src/processors.rs` unchanged; only dependency hayro 0.8 for rendering):
+
+1. Render greyscale at 150 dpi with hayro; pages larger than A4 get the pixel budget of A4 at 150 dpi (the manuscript
+   facsimile declares 532×810 mm pages; detection works in pixels per staff space, not in dpi).
+2. Otsu threshold; staff-line thickness and line distance from vertical run-length histograms.
+3. Skew from the sharpness of the row projection of thin horizontal pixels (±3°, 0.01° steps), then vertical shear.
+4. Line evidence = ink in horizontal runs ≥ 1.5 line distances (staff lines stay long runs through note heads and
+   stems; text does not — the first version used "thin vertical runs" and found staves in text pages).
+5. Per vertical strip (8 line distances wide): rows covered ≥ 50 % → line candidates → groups of 5 equally spaced
+   lines (one interior line may be missing in dense passages; groups with candidates in the middle of their gaps are
+   rejected — on the hand-ruled manuscript every-other-line groups across two close staves were the main error); a
+   6th line of similar strength = tablature, kept only if its spacing is ≥ 1.25× the page's normal staves.
+6. Strip groups are linked left to right into staves (tolerant to curvature); broken tracks are merged; staves
+   shorter than 12 line distances are dropped.
+7. Two vertically adjacent staves belong to one system if the rows between them are inked at their left edge
+   (system barline, brace, bracket) or a narrow column is inked across the whole gap anywhere (barlines after an
+   incipit, group barlines). Single-instrument parts have no such connection → one staff per system.
+8. Cuts between systems at the centre of the longest ink-free row run (else minimum ink; "unclean" if the cut crosses
+   more than 2 % of the content width). Above the first / below the last system the ink-free run is scored by
+   length / (1 + distance to the staff / 8 line distances), ignoring the page margin; ink beyond = header / footer.
+9. Confidence = product of penalties (unclean cuts, staff-like lines far from the staves of a system, inconsistent
+   staff counts per system, unequal staff widths in a system, odd line distances, skew > 1.5°); < 0.6 → the page falls
+   back to full-page view. Pages without staves: "no staves" (fallback) or "blank".
+
+Test set: 23 PDFs in the untracked `example_scores/` (copyrighted; never commit them or images derived from them):
+first 12 pages of each, all 16 pages of the manuscript → 92 pages, 84 with music. Every overlay was judged by hand by
+the agent (systems complete? every marking on the right side of the cut?); the 17 staves found on manuscript pages
+1–15 match the 17 parts of BWV 191.
+
+| Category | Music pages | Correct (harmless deviations) | Wrong, not flagged | Flagged → full page |
+| --- | --- | --- | --- | --- |
+| Clarinet parts, scans of engraved prints (6 files) | 10 | 10 (3: title/tempo line on the wrong side) | 0 | 0 |
+| Lead sheets, guitar + tab, drums, easy piano, vector (10 files) | 15 | 14 (2: verses as tall footer, kept) | 1 | 0 |
+| Piano pieces and studies, IMSLP (3 files) | 13 | 13 | 0 | 0 |
+| Dense old prints, scans: Arban studies, Türk 1792 landscape (2 files) | 20 | 20 (11: footnotes attached to the last system) | 0 | 0 |
+| Full scores: NBA edition scan (15 staves), Bach autograph P 1145 (17 staves) | 26 | 25 | 0 | 1 |
+
+No correct page was flagged; all 8 title/text/blank pages correctly produced no systems. The one unflagged error:
+an 8vb line with a low ledger note 4–5 line distances below the last system became "footer" (and a small footer is
+dropped by the reader). The flagged page: manuscript page 16 (darker paper, two staff groups, 14 of ~24 staves).
+
+Timing (Ryzen 7 5800H, one core, release): render 30 ms, detection 29 ms per page on average (max 60 / 51 ms, the
+manuscript); peak RSS 51 MB for a 3-page part, 130 MB for the 100 MB manuscript PDF. A Raspberry Pi 4/5 core is
+~3–4× / ~2× slower → ~0.1–0.4 s per page, i.e. well under a minute for a 100-page score. It runs once per uploaded
+file (blobs are immutable, R-FILE-004) in the background, so this is uncritical (budget it like thumbnails, R-PERF-001).
+
+Navigation simulation (`nav-sim`; 8" tablet 1280×800 px at 189 ppi = 172×108 mm, 10.5" 2224×1668 px at 264 ppi =
+214×160 mm; staff height = 4 line distances; "today" = full page fitted to the screen; minimum staff 7 mm):
+
+| Document (pages, systems; staff on paper) | 8" landscape | 8" portrait | 10.5" landscape |
+| --- | --- | --- | --- |
+| Clarinet part, A4 (3 p., 30 systems; 5.5 mm) | 7 views, 5.1 systems/view, 2.0 → 5.1 mm (×2.5) | 3 views, 2.8 → 3.1 mm (×1.1) | 6 views, 3.0 → 6.3 mm (×2.1) |
+| Clarinet part, A4 dense (2 p., 25; 7.6 mm) | 6 views, 5.0/view, 2.7 → 7.5 mm (×2.7) | 2 views, ×1.2 | 4 views, 4.1 → 7.5 mm (×1.8) |
+| Arban studies (4 p., 54; 6.5 mm) | 11 views, 5.8/view, 2.4 → 5.6 mm (×2.4) | 4 views, ×1.1 | 9 views, 3.5 → 7.0 mm (×2.0) |
+| Piano, Dunhill (6 p., 27 grand staves; 7.4 mm) | 24 views, 2.0/view, 2.7 → 6.5 mm (×2.4) | 6 views, ×1.1 | 13 views, 4.0 → 7.8 mm (×2.0) |
+| Lead sheet (1 p., 4; 8.7 mm) | 2 views, 3.4 → 8.1 mm (×2.4) | 1 view, ×1.1 | 1 view, 5.0 → 7.8 mm (×1.6) |
+| Full score NBA (3 p., 1 system/page; 5.4 mm) | 1 system per view, 1.8 → 2.2 mm (×1.2) | ×1.3 | ×1.2 |
+
+Findings: (a) the screen *width* is the limit: without horizontal reflow the staff can grow only to
+paper staff × screen width / content width (A4 content 170–190 mm vs. 172 mm screen → ≈ 0.9–1.0× the paper size),
+so a 7 mm minimum is reachable on an 8" tablet only for parts engraved with staves ≥ ~7.5 mm; smaller staves need
+splitting systems at barlines ("concept B", needs barline detection). (b) Concept A is a landscape mode: in portrait
+the gain is only the margin crop (×1.0–1.3). (c) When only two systems fit (piano), the one-system overlap halves the
+progress per page turn (24 turns for 6 pages). (d) Full scores with one system per page gain nothing; keep page mode.
+
+Failure modes and what a correction UI must handle: material far above/below the outer systems on the wrong side of
+the header/footer cut (8vb lines, low notes, subtitle lines, tempo lines, footnotes) → move a cut, toggle a region
+between "belongs to the system" / "header" / "hide"; straight cuts through interleaving slurs/stems in dense scans
+(shown as unclean, only cosmetic below 2 %) → move a cut; missed or merged staves (manuscripts, unusual layouts) →
+split/merge systems or mark the page "full page"; not tested: 1-line percussion staves (not detected by design), two
+short systems side by side, ossia staves, rotated pages. Annotations stay in page coordinates (views are crops of the
+page), so the immutable ink objects (R-ANN-012) are unaffected; a corrected region layout changes only the views.
+
+Recommendation for production: run detection as a processor step after upload, next to the thumbnail, in a blocking
+task; store per file and page the regions (page-relative boxes, staff count, line distance, confidence) plus an
+algorithm version (re-run when it increases); expose them with the file metadata; the client crops the pdf.js
+rendering per view and falls back to page mode on flagged pages. Corrections belong to the file (librarian role),
+not to the member. Related: R-READ-007 (half-page turns) serves the same need (seeing across a page turn); the system
+sequence across pages covers it in landscape. Requirements would be needed for: system-wise reading as a new reader
+feature, detection on upload, the minimum-staff-height setting, per-page fallback, librarian correction, and a
+detection time budget on small servers.
+
 ## 7. Design details beyond the requirements (still valid)
 
 - Access rules are additive only — no deny rules — so access is always explainable ("you see it because you are in
@@ -188,6 +284,7 @@ Caveats: loopback hides the network; synthetic engraved PDF (37 KB / 4 pages, no
 | TLS on an offline Pi | self-signed breaks cookies/wake lock | DNS-01 certificate or VPS |
 | Strictly private annotations | sections cannot share bowings/cuts | R-ANN-017 shared read-only sets |
 | Pen latency through Dioxus events | lag at high sampling rates | imperative live drawing (a-live-ink); test on real tablets |
+| System detection (§6.1) wrong on unusual layouts | a system shown cut or out of order | per-page confidence fallback to page mode; librarian correction of regions |
 
 ## 9. Open questions (ask the user before deciding)
 

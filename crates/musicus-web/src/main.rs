@@ -5,6 +5,7 @@
 mod api;
 mod bridge;
 mod ink;
+mod layouts;
 mod pages;
 mod picker;
 mod suggest;
@@ -17,6 +18,7 @@ use pages::{
     account::Account,
     groups::Groups,
     instruments::Instruments,
+    layout_edit::LayoutEditor,
     library::Library,
     login::{Invite, Login},
     programme_edit::{EditProgramme, NewProgramme},
@@ -49,6 +51,8 @@ pub enum Route {
         EditScore { id: i64 },
         #[route("/parts/:id/edit")]
         EditPart { id: i64 },
+        #[route("/parts/:id/systems")]
+        LayoutEditor { id: i64 },
         #[route("/programmes")]
         Programmes {},
         #[route("/programmes/new")]

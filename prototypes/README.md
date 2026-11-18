@@ -18,6 +18,8 @@ They are **not** production code. The design rationale and all results are in
 | `musicus-proto` `scale_bench` + `pg-proto` `pg_scale` | Large library (2 M parts, 1 M annotation pages, ~9 GB) in SQLite vs PostgreSQL | `scale_bench <db-file> 20`; `psql -f scale_pg.sql`, then `pg_scale 20` (env `READERS` = 0..8) |
 | `pg-proto/docker-compose.example.yml` | Packaging sketch: server + PostgreSQL | `docker compose -f docker-compose.example.yml config` |
 | `pdf-render-wasm` | WASM size of hayro | `cargo build --release --target wasm32-unknown-unknown` |
+| `system-detect` | Music systems can be found automatically in uploaded PDFs (system-wise reader for small tablets) | `cargo run --release --bin system-detect -- file.pdf --out DIR`; `--bin nav-sim -- file.pdf --render tab8-land:7` |
+| `system-detect/scripts/batch.sh`, `report.py`, `nav_examples.sh` | Batch run, HTML review report, view sequences over a local test set | see the script headers |
 
 `pdf-render-wasm` is built without hayro's default features (no bundled fonts,
 3.7 MB / 1.1 MB gzip). With default features it was 4.5 MB / 1.7 MB gzip.
@@ -59,3 +61,24 @@ library), so the PostgreSQL benchmark lives in its own crate.
 | 4 writers only: saves/s (p99) | 2 500-2 800 (22-31 ms) | 3 200-3 500 (3-4 ms) |
 | 8 readers + 4 writers: reads/s, saves/s (p99) | 21 400-21 800, 560-670 (63-85 ms) | 8 600-9 000, 1 700-1 800 (6 ms) |
 | Full online backup | 46 s (`VACUUM INTO`) | 45 s (`pg_dump -Z0`) |
+
+## System detection (`system-detect`, real scores, November 2026)
+
+Local test set of 23 PDFs (not in the repository: copyrighted; overlays and views derived
+from them must not be committed either): 92 pages, 84 with music. Every overlay was judged
+by hand. Details, failure modes and the production recommendation: `docs/agents/background.md` §6.1.
+
+| Category | Music pages | Correct (of which harmless deviations) | Wrong | Flagged → full page |
+| --- | --- | --- | --- | --- |
+| Clarinet parts, scans of engraved prints | 10 | 10 (3) | 0 | 0 |
+| Lead sheets, guitar + tab, drums, easy piano (vector) | 15 | 14 (2) | 1 cut (8vb line went to the footer) | 0 |
+| Piano pieces and studies (IMSLP) | 13 | 13 (0) | 0 | 0 |
+| Dense old prints, scans (Arban 1890s, Türk 1792) | 20 | 20 (11: footnotes/tempo line attached) | 0 | 0 |
+| Full scores: NBA edition scan, Bach autograph manuscript | 26 | 25 (0) | 0 | 1 (manuscript page with darker paper) |
+
+| Measure (Ryzen 7 5800H, one core) | Result |
+| --- | --- |
+| hayro render, greyscale 150 dpi (pixel budget of A4 for larger pages) | 30 ms mean per page (8–60 ms) |
+| Detection | 29 ms mean per page (13–51 ms) |
+| Peak RSS | 51 MB (3-page part), 130 MB (100 MB manuscript PDF) |
+| Staff height on an 8" landscape tablet, A4 parts | 2.0–4.2 mm with the full page → 5.1–10 mm in system views (×1.7–2.7), limited by the screen width |

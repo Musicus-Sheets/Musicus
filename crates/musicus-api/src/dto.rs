@@ -92,6 +92,9 @@ pub struct CurrentUser {
     pub username: String,
     pub display_name: String,
     pub role: Role,
+    /// Reader mode and staff size, stored on the server (nothing on the device).
+    #[serde(default)]
+    pub reader: crate::layout::ReaderSettings,
 }
 
 /// What the invite page shows before the user chooses a password.

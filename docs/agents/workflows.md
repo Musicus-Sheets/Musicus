@@ -4,11 +4,12 @@
 
 ```sh
 cargo build                       # api + server (web excluded from default-members)
-cargo test                        # 13 api unit, 11 server unit, 9 API integration tests
+cargo test                        # 22 api unit, 16 server unit, 11 API integration tests
+cargo run --release -p musicus-server --example layout_report -- a.pdf …   # system detection per page (regressions)
 cargo clippy --all-targets        # must be warning-free
 cargo fmt --check                 # rustfmt.toml: max_width 120
 cargo clippy -p musicus-web --target wasm32-unknown-unknown
-./scripts/fetch-pdfjs.sh          # once; populates crates/musicus-web/public/vendor/pdfjs (gitignored)
+./scripts/fetch-pdfjs.sh          # once (again after changes of the script); populates crates/musicus-web/public/vendor/pdfjs (gitignored)
 dx build --platform web --package musicus-web            # debug → target/dx/musicus-web/debug/web/public
 dx bundle --platform web --package musicus-web --release # release (needs wasm-opt)
 cargo run -p musicus-server -- serve --data-dir /tmp/m --web-dir target/dx/musicus-web/debug/web/public --insecure-cookies
@@ -21,6 +22,13 @@ docker compose up -d --build
 Toolchain: Rust ≥ 1.88 (edition 2024, let-chains used), target `wasm32-unknown-unknown`, `dx` 0.7.10 (must match dioxus crate version), wasm-bindgen CLI version must equal the `wasm-bindgen` crate version in Cargo.lock (dx downloads it).
 
 ## Environment pitfalls (seen in practice)
+
+- No local wasm toolchain? Build an image `FROM rust:1.97-bookworm` + `rustup target add wasm32-unknown-unknown` +
+  `cargo install dioxus-cli --version 0.7.10`, mount the repo, set `CARGO_TARGET_DIR=/src/target/docker`, and run the
+  web clippy / `dx build` inside it; serve the result with a host-built server (`--web-dir target/docker/dx/...`).
+- Playwright: the npm package version must match the installed browser revisions (`~/.cache/ms-playwright`).
+- Changing detection results: raise `layout::ALGORITHM_VERSION`; regression-check with `examples/layout_report.rs`
+  on local scores (never commit copyrighted scores or images derived from them; `/example_scores/` is ignored).
 
 - `dx` downloads esbuild, wasm-bindgen, wasm-opt; behind TLS-intercepting proxies the download fails ("UnknownIssuer"). Fix: put the tools on PATH and set `NO_DOWNLOADS=1` (dx then uses PATH). Docker: build arg `RUST_IMAGE=<image with tools + NO_DOWNLOADS=1>`.
 - `dx` tool cache: `~/.local/share/.dx/tools/<tool>-<version>/`.

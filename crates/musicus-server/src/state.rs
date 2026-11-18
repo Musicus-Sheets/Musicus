@@ -2,7 +2,7 @@
 
 use crate::{auth::LoginLimiter, blobs::BlobStore, cache::FileCache, config::ClientCache, db::Db};
 use std::sync::Arc;
-use tokio::sync::Semaphore;
+use tokio::sync::{Notify, Semaphore};
 
 pub type AppState = Arc<App>;
 
@@ -15,6 +15,8 @@ pub struct App {
     /// Bounds concurrent Argon2 computations: each needs 19 MiB, so 60
     /// simultaneous logins would otherwise need over 1 GB of RAM.
     pub hashing: Semaphore,
+    /// Wakes the system layout worker (`layout::worker`) after an upload.
+    pub layout_jobs: Notify,
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +52,7 @@ impl App {
             settings,
             limiter: LoginLimiter::default(),
             hashing: Semaphore::new(cores),
+            layout_jobs: Notify::new(),
         })
     }
 }

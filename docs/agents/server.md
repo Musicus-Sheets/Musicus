@@ -2,15 +2,17 @@
 
 ## Module graph
 
-`main` → `config` (clap) → `lib::open_state` → `state::App {db, blobs, cache, settings, limiter, hashing}`.
+`main` → `config` (clap) → `lib::open_state` → `state::App {db, blobs, cache, settings, limiter, hashing, layout_jobs}`.
 `routes::app(state, web_dir)` → handlers in `routes::*` use `auth::AuthUser`, `access::part_visible!`, `error::AppError`,
-`db::{now, json_ids}`, `blobs`, `cache` (files only), `processors` (upload only). `tests/api.rs` drives `routes::app` directly.
+`db::{now, json_ids}`, `blobs`, `cache` (files only), `processors` (upload only). `layout` (system detection, own
+module doc `layout.md`) runs in a background worker, not in handlers. `tests/api.rs` drives `routes::app` directly.
 
 ## Start-up (`main.rs::serve`)
 
 1. `ServeArgs` → `Settings {cookie_secure = !insecure_cookies, client_cache, session_ttl_secs = days*86400, invite_ttl_secs = 7d, max_upload_bytes, trust_proxy}`.
 2. `open_state(data_dir, ram_cache_mb*MiB, settings)`: mkdir, `Db::open` (readers = cores clamped 2..8, runs `sqlx::migrate!("./migrations")`), `part_index::rebuild_if_needed` (rebuilds `part_fts` when its row count differs from `parts`, i.e. after migration 0002), `BlobStore::open` (mkdir `blobs/`, `tmp/`, empties `tmp/`), `App::new` (semaphore permits = cores).
 3. `bootstrap_admin`: if `users` empty → insert `admin` (role admin, no password) + invite; log `<public_url>/invite/<token>` (R-ACC-003).
+3a. `layout::worker::spawn(state)`: background system detection of every file without a current layout (backfill after updates, then new uploads; a-layout-worker).
 4. `--web-dir` must contain `index.html` else exit error.
 5. TLS if `--tls-cert` and `--tls-key` (rustls with `ring` provider installed explicitly) else plain TCP. `into_make_service_with_connect_info::<SocketAddr>()` (needed by `ClientIp`).
 6. Graceful shutdown on SIGTERM/Ctrl-C (R-OPS-008).
@@ -54,6 +56,7 @@ Auth column: `—` none, `U` any logged-in user, `L` librarian/admin, `A` admin.
 | POST | `/auth/login` | — | `auth::login` | `LoginRequest{username,password,bearer}`; limiter 429; 401 wrong; 200 `LoginResponse` + Set-Cookie (or `token` if bearer) | R-ACC-004, R-SEC-003 |
 | POST | `/auth/logout` | U | `auth::logout` | deletes current session; 204 + clearing cookie | R-ACC-006 |
 | GET | `/auth/me` | U | `auth::me` | `CurrentUser` | — |
+| PUT | `/auth/reader-settings` | U | `auth::set_reader_settings` | `ReaderSettings {mode: page\|systems, staff_size: S\|M\|L\|XL}` (invalid ⇒ 4xx from the JSON extractor); stored in `users`; returns it; also part of `CurrentUser.reader` | R-READ-014 |
 | POST | `/auth/password` | U | `auth::change_password` | wrong current ⇒ 403; policy 8..256 chars ⇒ 400; deletes other sessions; 204 | R-ACC-007 |
 | GET | `/auth/sessions` | U | `auth::list_sessions` | own non-expired sessions, `current` flag | R-ACC-006 |
 | DELETE | `/auth/sessions/{id}` | U | `auth::revoke_session` | own only else 404; 204 | R-ACC-006 |
@@ -84,6 +87,9 @@ Auth column: `—` none, `U` any logged-in user, `L` librarian/admin, `A` admin.
 | GET | `/parts/{id}/versions` | U, ACL | `library::list_versions` | newest first | R-FILE-002 |
 | GET | `/files/{sha256}` | U, ACL(any part) | `files::get_file` | invalid hash ⇒ 404; If-None-Match ⇒ 304; Range ⇒ 206 via ServeFile; else RAM cache; ETag `"sha"`; Cache-Control per setting; Last-Modified removed | R-FILE-005, R-FILE-006, R-FILE-007 |
 | GET | `/files/{sha256}/thumbnail` | U, ACL(any part) | `files::get_thumbnail` | PNG; 404 if none | R-LIB-006 |
+| GET | `/files/{sha256}/layout` | U, ACL(any part) | `files::get_layout` | `FileLayout`: no `file_layouts` row ⇒ `state: pending, algorithm: 0, pages: []`; else `done`/`failed` + stored pages (an older algorithm is served until re-analysed) with `layout_corrections` applied (`apply_correction`, `corrected: true`); invalid/unknown/denied ⇒ 404 | R-READ-010, R-READ-016 |
+| PUT | `/files/{sha256}/layout/pages/{page}` | L | `files::put_correction` | `PageCorrection` (`validate` ⇒ 400); not analysed/failed ⇒ 409; page ∉ 0..pages ⇒ 404; upsert `layout_corrections` (`updated_by`); returns the effective `FileLayout` | R-READ-016 |
+| DELETE | `/files/{sha256}/layout/pages/{page}` | L | `files::delete_correction` | removes the correction (back to automatic); same checks; returns the effective `FileLayout` | R-READ-016 |
 | GET | `/programmes` | U, ACL | `programmes::list` | `item_count` = visible items; members: only programmes with ≥1 visible item | R-PROG-002 |
 | POST | `/programmes` | L | `programmes::create` | date `YYYY-MM-DD` else 400 | R-PROG-001 |
 | GET | `/programmes/{id}` | U, ACL | `programmes::get` | items with visible scores only (positions kept); member with none ⇒ 404 | R-PROG-002 |
@@ -112,8 +118,8 @@ Overriding headers `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `
 
 ## Upload pipeline (`library::upload_file` → `store_upload`)
 
-part exists? (404) → `blobs.receive(body, limit)` → read first 1 KiB → `sniff_mime` (415) → known sha? commit (dedupe) : read file, `spawn_blocking(process_pdf)` (panic ⇒ no metadata), thumbnail via `put_bytes`, commit, `INSERT … ON CONFLICT(sha256) DO NOTHING` → tx: latest version's file ≠ this file ⇒ insert version n+1. On any error the pending temp file is discarded.
+part exists? (404) → `blobs.receive(body, limit)` → read first 1 KiB → `sniff_mime` (415) → known sha? commit (dedupe) : read file, `spawn_blocking(process_pdf)` (panic ⇒ no metadata), thumbnail via `put_bytes`, commit, `INSERT … ON CONFLICT(sha256) DO NOTHING`, `layout_jobs.notify_one()` (new file only) → tx: latest version's file ≠ this file ⇒ insert version n+1. On any error the pending temp file is discarded.
 
 ## Tests (`tests/api.rs`)
 
-`Server::start()` = temp dir + `open_state` + `bootstrap_admin` + `routes::app(state, None)`; `cookie_secure=false`. Helpers: `send`, `json`, `ok::<T>`, `login` (bearer), `accept_invite` (returns cookie), `admin()`, `member()`, `upload()`; `hits(q, token)` (number of search results); `library()` fixture = instruments Trumpet/Flute, group Trumpets with anna, score with trumpet part (no label, key Bb, voice "2" ⇒ "Trumpet in B♭ 2", 4 pages) + flute part (custom name "Solo Flute", 2 pages), both uploaded. `tiny_pdf(pages, tag)` builds valid PDFs. Tests: `login_sessions_and_csrf`, `members_only_reach_granted_parts`, `uploads_are_versioned_and_validated`, `annotations_are_private_versioned_and_conflict_checked`, `programmes_and_search`, `user_administration`, `instruments_are_listed_for_everyone_and_kept_while_in_use`, `part_names_keys_and_part_search`, `migration_0002_keeps_old_parts` (applies only 0001 from a temp copy, writes old-style rows, then `open_state`).
+`Server::start()` = temp dir + `open_state` + `bootstrap_admin` + `routes::app(state, None)`; `cookie_secure=false`; keeps `state` so tests drive `layout::worker::run_once` (no worker task in tests). Helpers: `send`, `json`, `ok::<T>`, `login` (bearer), `accept_invite` (returns cookie), `admin()`, `member()`, `upload()`; `hits(q, token)` (number of search results); `library()` fixture = instruments Trumpet/Flute, group Trumpets with anna, score with trumpet part (no label, key Bb, voice "2" ⇒ "Trumpet in B♭ 2", 4 pages) + flute part (custom name "Solo Flute", 2 pages), both uploaded. `tiny_pdf(pages, tag)` builds valid PDFs. Tests: `login_sessions_and_csrf`, `members_only_reach_granted_parts`, `uploads_are_versioned_and_validated`, `annotations_are_private_versioned_and_conflict_checked`, `programmes_and_search`, `user_administration`, `instruments_are_listed_for_everyone_and_kept_while_in_use`, `part_names_keys_and_part_search`, `migration_0002_keeps_old_parts` (applies only 0001 from a temp copy, writes old-style rows, then `open_state`), `system_layouts_are_detected_in_the_background_and_follow_file_access` (`staff_pdf` uploads: pending → worker → 8 systems per page, empty pages whole, ACL 404, reader settings round trip), `librarians_correct_system_layouts_for_everyone` (409 before analysis, member 403, page 404, invalid 400, merge/hide/whole page visible to members, kept after a re-analysis with a raised version, reset).

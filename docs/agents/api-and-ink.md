@@ -15,6 +15,9 @@ Crate `crates/musicus-api`: deps serde + postcard only, no I/O, compiles for nat
 - `AnnotationSet.file_sha256/file_version` = the version the set is bound to (compare with `Part.file.version` to detect outdated sets); `pages` = saved pages with revisions.
 - Constants: `CSRF_HEADER = "x-musicus-csrf"`, `SESSION_COOKIE = "musicus_session"`.
 
+- `CurrentUser.reader: layout::ReaderSettings` (`#[serde(default)]`); system layout types, reading sequence and view
+  planner live in `layout.rs` (described in `layout.md`).
+
 Adding an endpoint: request/response structs here → handler in server → client helper call. Keep field names stable (future app).
 
 ## Part names and keys (`naming.rs`, a-part-names, R-LIB-010, R-LIB-011)

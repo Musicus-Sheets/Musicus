@@ -191,3 +191,51 @@ with the user's consent.
 - Why: `<datalist>` matching, ordering and keys differ between Chromium, Firefox and Safari, it cannot ignore diacritics or exclude chosen tags, and it does not fit the chip input (a taken value must become a chip). Tags are free text; members could otherwise learn tags of scores they cannot see, hence the ACL filter even though only librarians edit tags. Without preselection, Enter and comma keep finishing what was typed.
 - Serves: R-LIB-014, R-LIB-013, R-ACL-001.
 - If you change it: keep `list_tags` ACL-filtered (or restrict it to librarians); keep mousedown prevented on suggestions (otherwise the tag input commits the partial text on blur). Update `e2e/smoke.mjs` (family and tag suggestion checks).
+
+### d-system-layout
+- Decision: music systems are detected on the server, once per file (blobs are immutable), by a projection-based analysis of each page rendered with hayro (`layout::detect`), stored as JSON in `file_layouts` with `ALGORITHM_VERSION`; the client only plans views for its screen (`musicus_api::layout::plan_views`). Unsure pages (confidence < 0.6, no systems) are shown whole. Systems wider than the screen are shown at full width, never split (split at barlines = R-READ-017, proposed). Exact algorithm: `layout.md`, technical chapter "System view".
+- Why: one analysis serves every member, never at the moment a piece is opened on stage; 23–112 ms/page on one core, no model, no new dependency (hayro already renders thumbnails); OMR would be far heavier and fail on manuscripts. Prototype: 82/84 music pages of 23 real scores correct (`background.md` §6.1).
+- Serves: F-READ-003, R-READ-010, R-READ-011, R-READ-015, R-PERF-008, R-FILE-004.
+- If you change it: any change of detection results ⇒ raise `ALGORITHM_VERSION` (all files are re-analysed in the background) and update `layout.md` + `docs/technical/chapters/12-system-view.typ` (constants are named the same in code and docs). Changing view rules ⇒ `musicus_api::layout` tests + R-READ-011/012/013.
+
+### a-layout-worker
+- Decision: one tokio task (`layout::worker::spawn`, started by `serve`) processes one file at a time on `spawn_blocking`, newest file first (`ORDER BY f.id DESC`); it sleeps on `App.layout_jobs` (`Notify`; uploads call `notify_one`, a permit is stored if the worker is busy). Failures are stored as `failed` (no retry until the version rises); DB errors back off 30 s. Tests call `run_once` directly (the test `Server` does not spawn the worker).
+- Why: bounded CPU and memory on a Pi (one page raster at a time); a fresh upload is analysed before an old backfill; requests never wait; no job table needed because "no row or older algorithm" is the queue.
+- Serves: R-READ-010, R-PERF-008, R-PERF-001.
+- If you change it: more workers need a claim mechanism (two would pick the same file). Keep analysis off request paths.
+
+### a-css-mm
+- Decision: staff sizes are physical millimetres computed with a fixed `CSS_PX_PER_MM` = 132/25.4 (132 CSS px per inch), not the CSS `mm` unit (96 px per inch). S/M/L/XL = 5/6/7/8 mm, default M.
+- Why: browsers do not report the physical density; tablets show 120–160 CSS px per inch (iPad 132), so CSS mm would be about 30 % too small. Sizes from the prototype data: an A4 part on an 8" tablet in landscape reaches 5–7.5 mm at full width.
+- Serves: R-READ-014, R-READ-011.
+- If you change it: a calibration setting per device would need client storage (R-SEC-001) or a server setting per user and device.
+
+### a-footer-attach
+- Decision: ink that starts within `FOOTER_ATTACH_SPACES` (4 line distances; 2.5 in the first version, which turned a dynamic mark 2.4–3 spaces below the last staff into a skipped footer) below the last staff of a page belongs to the last system (up to the next ink-free run of one line distance), even if the margin scoring chose a cut above it.
+- Why: the prototype's only unflagged error (lake-pirates p. 2): an 8vb line and a low note became footer, and small footers are skipped by the reader, so music was lost. A copyright line that close is attached too — harmless (it is only shown).
+- Serves: R-READ-010, R-READ-013.
+- If you change it: raise `ALGORITHM_VERSION`; keep the unit test `ink_right_below_the_last_staff_stays_with_it`.
+
+### a-view-anchor
+- Decision: the reader stores the reading position in the system view as the index of the first item of the current view (`anchor`), not the view index; the shown view is `view_for_item` = the last view starting at or before the anchor. Views are re-planned from scratch on every size/setting change.
+- Why: view indices change when the screen turns or the staff size changes; the anchor keeps the music being read on screen. With the one-system overlap an item can end one view and start the next; "last view starting at or before" picks the one the musician turned to.
+- Serves: R-READ-011, R-READ-012.
+- If you change it: keep `position_survives_a_new_plan`.
+
+### a-pdfjs-wasm
+- Decision: `fetch-pdfjs.sh` also copies pdf.js' `wasm/` decoders (JBIG2, OpenJPEG, qcms incl. their non-wasm fallbacks, licences; not QuickJS) and `bridge.js` passes `wasmUrl: '/vendor/pdfjs/wasm/'` to `getDocument`.
+- Why: without them pdf.js 6 renders pages of JBIG2/JPEG 2000 scans (common on IMSLP) blank — found while testing the system view on real scans; affected the page view too.
+- Serves: R-READ-006, R-READ-001.
+- If you change it: a pdf.js upgrade must keep `wasmUrl` and the copied file names.
+
+### a-layout-corrections
+- Decision: librarians' corrections are stored per (file, page) in their own table `layout_corrections` as the complete band list (`PageCorrection`: cut lines + kinds + whole-page flag), not as edits of the detected regions, and applied when the layout is served. One correction per page, shared by all members (the file is the same for everyone); `PUT`/`DELETE` only for librarians; the editor is a normal Shell page reached from `Edit part` (d-inline-management).
+- Why: re-detection (raised `ALGORITHM_VERSION`) rewrites `file_layouts` and must not lose manual work; a complete band list stays valid whatever the new detection finds; staff sizes still come from the detection (librarians only move lines). A corrected file version is a new file ⇒ no stale corrections.
+- Serves: R-READ-016, R-READ-010, R-ACL-001.
+- If you change it: keep corrections out of the worker; a new file version starts uncorrected (tell librarians in the guide).
+
+### a-contiguous-view
+- Decision: the detected systems only decide where a system view starts and ends. On each page a view shows ONE contiguous crop of the original PDF page, from the top of its first item to the bottom of its last, with everything between (gaps, text, bands marked hidden or small headers/footers that lie between shown systems); hidden/skipped bands matter only at the start or end of a view. One horizontal range and one scale per document (from the minimum staff size or the screen width, whichever is smaller); no stitching of separate system crops, no removed gaps, no shadows or borders between systems; a view across a page boundary stacks two crops directly, with a 1 px hairline.
+- Why: user feedback on the first version (one crop per system, each with a shadow, gaps removed, per-view x-range and scale that filled the screen): a line drawn over several systems jumped at every system boundary, the patchwork did not look like the original sheet, and views changed size/position. A contiguous crop keeps strokes straight and 1:1 with page coordinates and keeps the familiar page image. Price: the space between systems is shown, so slightly fewer systems fit; the music does not grow to fill a screen that has room left (it stays at the chosen minimum size or full width).
+- Serves: R-READ-011, R-READ-013, R-READ-018, R-ANN-005.
+- If you change it: keep `a_view_is_one_contiguous_crop_per_page_with_one_x_range` and the smoke checks (one canvas per page segment, no shadows, straight stroke across systems).

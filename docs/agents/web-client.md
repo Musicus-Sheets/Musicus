@@ -13,7 +13,8 @@ Dioxus 0.7.10, features `web` + `router`; compiled to wasm32 by `dx`; assets `as
 | `/` | `pages::library::Library` | `ui::Shell` | librarian/admin: `+ Add piece`, `Edit` per piece and part |
 | `/scores/new` | `pages::score_edit::NewScore` | Shell | guided flow (L) |
 | `/scores/:id/edit` | `pages::score_edit::EditScore` | Shell | edit piece (L) |
-| `/parts/:id/edit` | `pages::score_edit::EditPart` | Shell | edit one part (L) |
+| `/parts/:id/edit` | `pages::score_edit::EditPart` | Shell | edit one part (L); link `Edit systems` next to `Open` |
+| `/parts/:id/systems` | `pages::layout_edit::LayoutEditor` | Shell | system editor of the current file (L, R-READ-016; `layout.md`) |
 | `/programmes`, `/programmes/:id` | `pages::programmes::{Programmes, ProgrammeView}` | Shell | ProgrammeView prefetches; L: `+ New programme`, `Edit` |
 | `/programmes/new`, `/programmes/:id/edit` | `pages::programme_edit::{NewProgramme, EditProgramme}` | Shell | (L) |
 | `/instruments` | `pages::instruments::Instruments` | Shell | everyone reads; L adds/edits/deletes |
@@ -47,16 +48,24 @@ Server serves `index.html` for any non-`/api` path, so deep links work.
 | `is_cached(url)` | `isCached` | |
 | `page_count(url)` | `pageCount` | opens doc via pdf.js (`docs` Map; `getDocument({data: bytes.slice()})` because pdf.js transfers the buffer to its worker) |
 | `render_page(url, index, canvas_id, w, h) -> Option<(css_w, css_h)>` | `renderPage` | scale = fit box; render to off-screen canvas at devicePixelRatio; cancels older task for same canvas (`tasks` Map) → returns null if cancelled; copies into visible canvas, sets CSS size |
-| `retain_only(urls)` | `retainOnly` | drops other bytes/docs (destroys docs) |
+| `render_crop(url, canvas_id, Crop) -> Option<(css_w, css_h)>` | `renderCrop` | system view: renders only the crop (pdf.js viewport `offsetX/Y`, scale = css width / crop width in pt) at devicePixelRatio into a cached off-screen canvas (LRU 24, key url\|page\|crop\|round(css w)\|dpr), copies it into the canvas; newest request per canvas wins (else null) |
+| `prerender_crop(url, Crop)` | `prerenderCrop` | fills the crop cache (next view) |
+| `retain_only(urls)` | `retainOnly` | drops other bytes/docs (destroys docs) and their crops |
 | `set_pending(set, page, rev, bytes)` / `clear_pending` | `setPending`/`clearPending` | `pendingPages` Map; copies bytes (a-wasm-view-copy); on `pagehide` sends each with `fetch(PUT, keepalive, If-Match, x-musicus-csrf)` |
 | `keep_awake(on)` | `keepAwake` | screen wake lock; `document.body.dataset.keepAwake` drives re-acquire on `visibilitychange` |
 | `toggle_fullscreen()`, `copy_text()` | | |
 
-pdf.js URLs: `/vendor/pdfjs/pdf.min.mjs` + worker `/vendor/pdfjs/pdf.worker.min.mjs` (legacy build, d-pdf-rendering).
+pdf.js URLs: `/vendor/pdfjs/pdf.min.mjs` + worker `/vendor/pdfjs/pdf.worker.min.mjs` (legacy build, d-pdf-rendering); `getDocument({data, wasmUrl: '/vendor/pdfjs/wasm/'})` for JBIG2/JPEG 2000 scans (a-pdfjs-wasm).
+
+## System layouts (`layouts.rs`)
+
+`thread_local` `HashMap<sha256, FileLayout>` (memory only, R-SEC-001): `load(sha)` returns a cached done/failed layout or
+fetches `GET /api/files/{sha}/layout` (pending is not cached); `retain_only(shas)`. `ProgrammeView` loads all layouts
+of the programme after `bridge::retain_only` (R-READ-019).
 
 ## Ink drawing (`ink.rs`)
 
-`PageBox {width, height}` (CSS px of displayed page): `to_page(x,y)` → u16 coords, `to_css((u16,u16))`, `len_css(units)`. `prepare(canvas_id, box)` sizes canvas to box × DPR, sets transform, clears. `draw_layer`: highlighters (alpha 0.35) first, then pens (per-segment width by pressure: `pen_width_css` = len × (0.55 + 0.9·p), p=0 ⇒ 0.5), stamps (glyph, serif), texts. `hit(box, layer, point, radius)` → ids within radius (strokes by segment distance, stamps by centre, text by bounding box). `new_id()` = random u64 from `Math.random`.
+`PageBox {width, height, ox, oy, vw, vh}` (CSS px of the displayed page; crop offset and visible size; `PageBox::page(w,h)` = whole page, `PageBox::crop(w,h,x0,y0,x1,y1)`): `canvas_to_page(x,y)` adds the offset, `to_page(x,y)` (page CSS px) → u16 coords, `to_css((u16,u16))`, `len_css(units)`. `prepare(canvas_id, box)` sizes canvas to vw×vh × DPR, clears, sets transform (dpr, translate −offset), so layers are drawn in page CSS px. `draw_layer`: highlighters (alpha 0.35) first, then pens (per-segment width by pressure: `pen_width_css` = len × (0.55 + 0.9·p), p=0 ⇒ 0.5), stamps (glyph, serif), texts. `hit(box, layer, point, radius)` → ids within radius (strokes by segment distance, stamps by centre, text by bounding box). `new_id()` = random u64 from `Math.random`.
 
 ## Pages
 
@@ -97,6 +106,12 @@ Users: group members (label display name, detail username), instrument grants an
 
 ## Reader (`pages/viewer.rs`) — most complex unit
 
+Page view or system view (F-READ-003): the exact view algorithm, signals/memos (`settings`, `layout`, `items`,
+`views`, `view_idx`, `crops`, `anchor`), rendering of one contiguous crop of the original page per page segment, ink per segment (`Target`), swipe and the reader settings
+switch are described in `layout.md` § Client. Bar: `☰ Systems` toggle (`aria-pressed`), in system view a
+`select.staff-size` (`aria-label "Staff size"`, S/M/L/XL); changes update `Session.user.reader` and PUT
+`/api/auth/reader-settings`. Banner `.banner.info` while the layout is pending/failed. `.system-view[data-view]`.
+
 Load: `ViewerPage` → `load(id, pid)`: `GET /api/parts/{id}`, `GET /api/scores/{score_id}`, `GET /api/parts/{id}/annotation-sets`, optional `GET /api/programmes/{pid}` → `Reader`.
 
 Signals: `sets`, `active` (set id), `page`, `page_total`, `stage` (size from `onresize`), `page_box`, `mode` (Read/Draw), `tool`, colours/widths, `show_ink`, `status` (SaveStatus), `error`, `menu`, `version` (redraw trigger). Memo `url`: file of active set (may be an old version) else current file.
@@ -111,8 +126,8 @@ Effects: url → `page_count`; (url, stage, page) → `render_page` into `page-c
 
 `change(key, f)`: apply f to PageState → push undo action, clear redo, `generation += 1`, `sync_pending`, bump `version`, schedule `save(key, delay=true)` (1500 ms; skipped if generation changed meanwhile). `add_object`: if no active set ⇒ POST new set (name = programme title or "My annotations", linked programme) then add. `erase_at` removes all hit ids (one `Action::Remove`). `undo_redo` inverts `Add`/`Remove` actions.
 
-Input on `ink-canvas` (pointer events active only in Draw mode via CSS class): pen/highlighter collect points (CSS px + pressure; mouse ⇒ pressure 0), paint segments live (a-live-ink), on up convert to page coords (dedupe consecutive equal points, cap 20 000) ⇒ `Stroke::from_points`; touch ignored after a pen was seen (R-ANN-004); eraser on down/move; stamp on down; text via `prompt`.
+Input on `ink-canvas` / `crop-ink-{k}` (pointer events active only in Draw mode via CSS class; each handler gets a `Target {page, bx, canvas}`): pen/highlighter collect points (page CSS px via `canvas_to_page` + pressure; mouse ⇒ pressure 0), paint segments live (a-live-ink), on up convert to page coords (dedupe consecutive equal points, cap 20 000) ⇒ `Stroke::from_points`; touch ignored after a pen was seen (R-ANN-004); eraser on down/move; stamp on down; text via `prompt`.
 
-Navigation `turn(delta)`: flush dirty pages immediately; `page+delta < 0` ⇒ previous piece route; `≥ page_total` ⇒ next piece route; else set page. Tap zones in Read mode: x < 1/3 width ⇒ −1, > 2/3 ⇒ +1. Keys via `document::eval` listener (stored in `window.__musicusKeys`, ignores INPUT/TEXTAREA/SELECT): ArrowLeft/ArrowUp/PageUp ⇒ −1; ArrowRight/ArrowDown/PageDown/Space ⇒ +1 (R-READ-002). `neighbours(programme, part)`: previous/next item with a part that has a file, preferring shared instrument (R-READ-005).
+Navigation `turn(delta)`: flush dirty pages immediately; in the system view by view (see `layout.md`); else `page+delta < 0` ⇒ previous piece route; `≥ page_total` ⇒ next piece route; else set page. Tap zones in Read mode: x < 1/3 width ⇒ −1, > 2/3 ⇒ +1 (ignored for 400 ms after a swipe). Swipe (pointer down/up on the stage, Read mode, |dx| ≥ 60 px and > 2|dy|): left ⇒ +1, right ⇒ −1 (R-READ-009). Keys via `document::eval` listener (stored in `window.__musicusKeys`, ignores INPUT/TEXTAREA/SELECT): ArrowLeft/ArrowUp/PageUp ⇒ −1; ArrowRight/ArrowDown/PageDown/Space ⇒ +1 (R-READ-002). `neighbours(programme, part)`: previous/next item with a part that has a file, preferring shared instrument (R-READ-005).
 
 Sets menu: radio list (shows "default" and outdated `v<n>` tags), New, Duplicate (`copy_from`), Rename, Make default, Use for this programme, Delete; banner offers `migrate` when `set.file_version != part.file.version` (R-ANN-016). `choose_set`: programme-linked set ⇒ default ⇒ first (R-ANN-009).

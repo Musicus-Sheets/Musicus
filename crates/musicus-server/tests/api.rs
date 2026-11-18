@@ -18,6 +18,7 @@ use tower::ServiceExt;
 
 struct Server {
     router: Router,
+    state: musicus_server::state::AppState,
     _dir: tempfile::TempDir,
     admin_invite: String,
 }
@@ -49,7 +50,7 @@ impl Server {
         let state = open_state(dir.path(), 64 * 1024 * 1024, settings).await.unwrap();
         let admin_invite = bootstrap_admin(&state).await.unwrap().expect("fresh database");
         assert!(bootstrap_admin(&state).await.unwrap().is_none());
-        Server { router: routes::app(state, None), _dir: dir, admin_invite }
+        Server { router: routes::app(state.clone(), None), state, _dir: dir, admin_invite }
     }
 
     async fn send(&self, method: Method, uri: &str, auth: Auth<'_>, headers: &[(&str, &str)], body: Body) -> Reply {
@@ -167,6 +168,49 @@ fn tiny_pdf(pages: usize, tag: &str) -> Vec<u8> {
         objects.push("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] >>".to_owned());
     }
     let mut pdf = format!("%PDF-1.7\n%{tag}\n").into_bytes();
+    let mut offsets = Vec::new();
+    for (i, obj) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.extend(format!("{} 0 obj\n{obj}\nendobj\n", i + 1).bytes());
+    }
+    let xref = pdf.len();
+    pdf.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).bytes());
+    for off in offsets {
+        pdf.extend(format!("{off:010} 00000 n \n").bytes());
+    }
+    pdf.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).bytes());
+    pdf
+}
+
+/// A PDF with `pages` A4 pages of `staves` single-staff systems (lines 5 pt
+/// apart, a short title line on top), like an engraved part.
+fn staff_pdf(pages: usize, staves: usize) -> Vec<u8> {
+    let mut content = String::from("0.6 w\n");
+    content += "250 790 m 345 790 l 4 w S 0.6 w\n";
+    for k in 0..staves {
+        let top = 740.0 - k as f64 * 80.0;
+        for l in 0..5 {
+            let y = top - l as f64 * 5.0;
+            content += &format!("40 {y} m 555 {y} l S\n");
+        }
+        // A barline every quarter of the staff.
+        for b in 1..4 {
+            let x = 40.0 + b as f64 * 128.75;
+            content += &format!("{x} {top} m {x} {} l S\n", top - 20.0);
+        }
+    }
+    let mut objects = vec![
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        format!(
+            "<< /Type /Pages /Kids [{}] /Count {pages} >>",
+            (0..pages).map(|i| format!("{} 0 R", i + 4)).collect::<Vec<_>>().join(" ")
+        ),
+        format!("<< /Length {} >>\nstream\n{content}endstream", content.len()),
+    ];
+    for _ in 0..pages {
+        objects.push("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 3 0 R >>".to_owned());
+    }
+    let mut pdf = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
     for (i, obj) in objects.iter().enumerate() {
         offsets.push(pdf.len());
@@ -766,7 +810,7 @@ async fn migration_0002_keeps_old_parts() {
     let settings = Settings { cookie_secure: false, ..Settings::default() };
     let state = open_state(dir.path(), 1 << 20, settings).await.unwrap();
     let invite = bootstrap_admin(&state).await.unwrap().unwrap();
-    let s = Server { router: routes::app(state, None), _dir: dir, admin_invite: invite };
+    let s = Server { router: routes::app(state.clone(), None), state, _dir: dir, admin_invite: invite };
     let admin = s.admin().await;
     let score: Score = s.get("/api/scores/1", &admin).await.json();
     type Row<'a> = (Option<&'a str>, Option<&'a str>, Option<&'a str>, &'a str);
@@ -801,4 +845,126 @@ async fn migration_0002_keeps_old_parts() {
     // Index built on start: old parts are found by their (derived) names.
     assert_eq!(s.get("/api/scores?q=clarinet", &admin).await.json::<Vec<Score>>().len(), 1);
     assert_eq!(s.get("/api/scores?q=horn%203", &admin).await.json::<Vec<Score>>().len(), 1);
+}
+
+#[tokio::test]
+async fn system_layouts_are_detected_in_the_background_and_follow_file_access() {
+    use musicus_api::{
+        CurrentUser,
+        layout::{FileLayout, LayoutState, ReaderMode, ReaderSettings, RegionKind, StaffSize},
+    };
+    use musicus_server::layout::worker;
+    let s = Server::start().await;
+    let lib = library(&s).await;
+    let part: Part = s.upload(&lib.admin, lib.trumpet_part.id, staff_pdf(2, 8)).await.json();
+    let sha = part.file.unwrap().sha256;
+    let flute_sha = lib.flute_part.file.as_ref().unwrap().sha256.clone();
+
+    // Until the worker ran, the layout is pending (requests never wait for it).
+    let pending: FileLayout = s.get(&format!("/api/files/{sha}/layout"), &lib.anna).await.json();
+    assert_eq!(pending.state, LayoutState::Pending);
+    // The worker analyses every file without a layout (the three uploads), newest first.
+    let mut runs = 0;
+    while worker::run_once(&s.state).await.unwrap() {
+        runs += 1;
+    }
+    assert_eq!(runs, 3);
+    let layout: FileLayout = s.get(&format!("/api/files/{sha}/layout"), &lib.anna).await.json();
+    assert_eq!(layout.state, LayoutState::Done);
+    assert_eq!(layout.algorithm, musicus_server::layout::ALGORITHM_VERSION);
+    assert_eq!(layout.pages.len(), 2);
+    for page in &layout.pages {
+        let systems: Vec<_> = page.regions.iter().filter(|r| r.kind == RegionKind::System).collect();
+        assert_eq!(systems.len(), 8, "{:?}", page.regions);
+        assert!(systems.iter().all(|r| r.staves == 1) && !page.full_page);
+        assert!((page.width_mm - 209.9).abs() < 0.5);
+        // Line distance 5 pt of 842 pt.
+        assert!((systems[0].staff_space - 5.0 / 842.0).abs() < 0.001);
+    }
+    // Empty pages: analysed, shown whole.
+    let empty: FileLayout = s.get(&format!("/api/files/{flute_sha}/layout"), &lib.admin).await.json();
+    assert!(empty.state == LayoutState::Done && empty.pages.iter().all(|p| p.full_page));
+
+    // Same access rule as the file: denied (or unknown) answers 404.
+    assert_eq!(s.get(&format!("/api/files/{flute_sha}/layout"), &lib.anna).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(s.get(&format!("/api/files/{}/layout", "0".repeat(64)), &lib.anna).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(s.get("/api/files/xyz/layout", &lib.anna).await.status, StatusCode::NOT_FOUND);
+
+    // Reader settings live on the server, per user.
+    let me: CurrentUser = s.get("/api/auth/me", &lib.anna).await.json();
+    assert_eq!(me.reader, ReaderSettings { mode: ReaderMode::Page, staff_size: StaffSize::M });
+    let new = ReaderSettings { mode: ReaderMode::Systems, staff_size: StaffSize::XL };
+    let saved: ReaderSettings = s.ok(Method::PUT, "/api/auth/reader-settings", &lib.anna, new).await;
+    assert_eq!(saved, new);
+    assert_eq!(s.get("/api/auth/me", &lib.anna).await.json::<CurrentUser>().reader, new);
+    assert_eq!(s.get("/api/auth/me", &lib.admin).await.json::<CurrentUser>().reader.mode, ReaderMode::Page);
+    let bad =
+        s.json(Method::PUT, "/api/auth/reader-settings", &lib.anna, json!({"mode": "scroll", "staff_size": "M"})).await;
+    assert!(bad.status.is_client_error());
+}
+
+#[tokio::test]
+async fn librarians_correct_system_layouts_for_everyone() {
+    use musicus_api::layout::{FileLayout, LayoutState, PageCorrection, RegionKind};
+    use musicus_server::layout::worker;
+    let s = Server::start().await;
+    let lib = library(&s).await;
+    let part: Part = s.upload(&lib.admin, lib.trumpet_part.id, staff_pdf(2, 8)).await.json();
+    let sha = part.file.unwrap().sha256;
+    let uri = |page: i64| format!("/api/files/{sha}/layout/pages/{page}");
+    let merge = |l: &FileLayout| {
+        // Page 1: merge the first two systems, hide everything below the fourth.
+        let sys: Vec<_> = l.pages[0].regions.iter().filter(|r| r.kind == RegionKind::System).collect();
+        PageCorrection {
+            full_page: false,
+            bounds: vec![sys[0].y0, sys[1].y1, sys[3].y1, sys[7].y1],
+            kinds: vec![RegionKind::System, RegionKind::System, RegionKind::Hidden],
+        }
+    };
+
+    // Not analysed yet: nothing to correct.
+    let c = PageCorrection { full_page: true, ..Default::default() };
+    assert_eq!(s.json(Method::PUT, &uri(0), &lib.admin, &c).await.status, StatusCode::CONFLICT);
+    while worker::run_once(&s.state).await.unwrap() {}
+    let auto: FileLayout = s.get(&format!("/api/files/{sha}/layout"), &lib.anna).await.json();
+
+    // Members may not correct; bad corrections and pages are rejected.
+    assert_eq!(s.json(Method::PUT, &uri(0), &lib.anna, &c).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        s.send(Method::DELETE, &uri(0), Auth::Bearer(&lib.anna), &[], Body::empty()).await.status,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(s.json(Method::PUT, &uri(2), &lib.admin, &c).await.status, StatusCode::NOT_FOUND);
+    let bad = PageCorrection { full_page: false, bounds: vec![0.5, 0.2], kinds: vec![RegionKind::System] };
+    assert_eq!(s.json(Method::PUT, &uri(0), &lib.admin, &bad).await.status, StatusCode::BAD_REQUEST);
+
+    // A correction applies to every member's layout.
+    let corrected: FileLayout = s.ok(Method::PUT, &uri(0), &lib.admin, merge(&auto)).await;
+    let page = &corrected.pages[0];
+    assert!(page.corrected && !page.full_page);
+    let kinds: Vec<(RegionKind, u32)> = page.regions.iter().map(|r| (r.kind, r.staves)).collect();
+    assert_eq!(kinds, vec![(RegionKind::System, 2), (RegionKind::System, 2), (RegionKind::Hidden, 0)]);
+    s.ok::<FileLayout>(Method::PUT, &uri(1), &lib.admin, PageCorrection { full_page: true, ..Default::default() })
+        .await;
+    let seen: FileLayout = s.get(&format!("/api/files/{sha}/layout"), &lib.anna).await.json();
+    assert_eq!(seen.pages[0], *page);
+    assert!(seen.pages[1].full_page && seen.pages[1].corrected);
+
+    // A new detection run (algorithm raised) keeps the corrections.
+    sqlx::query("UPDATE file_layouts SET algorithm = 0").execute(&s.state.db.write).await.unwrap();
+    let mut runs = 0;
+    while worker::run_once(&s.state).await.unwrap() {
+        runs += 1;
+    }
+    assert_eq!(runs, 3);
+    let rerun: FileLayout = s.get(&format!("/api/files/{sha}/layout"), &lib.anna).await.json();
+    assert_eq!(rerun.state, LayoutState::Done);
+    assert_eq!(rerun.pages[0], *page);
+
+    // Reset: back to the automatic detection.
+    let reset = s.send(Method::DELETE, &uri(0), Auth::Bearer(&lib.admin), &[], Body::empty()).await;
+    assert_eq!(reset.status, StatusCode::OK);
+    let reset: FileLayout = reset.json();
+    assert_eq!(reset.pages[0], auto.pages[0]);
+    assert!(reset.pages[1].corrected);
 }
