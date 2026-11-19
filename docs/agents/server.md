@@ -10,7 +10,7 @@ module doc `layout.md`) runs in a background worker, not in handlers. `tests/api
 ## Start-up (`main.rs::serve`)
 
 1. `ServeArgs` → `Settings {cookie_secure = !insecure_cookies, client_cache, session_ttl_secs = days*86400, invite_ttl_secs = 7d, max_upload_bytes, trust_proxy}`.
-2. `open_state(data_dir, ram_cache_mb*MiB, settings)`: mkdir, `Db::open` (readers = cores clamped 2..8, runs `sqlx::migrate!("./migrations")`), `part_index::rebuild_if_needed` (rebuilds `part_fts` when its row count differs from `parts`, i.e. after migration 0002), `BlobStore::open` (mkdir `blobs/`, `tmp/`, empties `tmp/`), `App::new` (semaphore permits = cores).
+2. `open_state(data_dir, ram_cache_mb*MiB, settings)`: mkdir, `Db::open` (readers = cores clamped 2..8, runs `sqlx::migrate!("./migrations")`), `part_index::rebuild_if_needed` (rebuilds `part_fts` when its row count differs from `parts`, i.e. after migration 0002 or 0005, which empties it), `BlobStore::open` (mkdir `blobs/`, `tmp/`, empties `tmp/`), `App::new` (semaphore permits = cores).
 3. `bootstrap_admin`: if `users` empty → insert `admin` (role admin, no password) + invite; log `<public_url>/invite/<token>` (R-ACC-003).
 3a. `layout::worker::spawn(state)`: background system detection of every file without a current layout (backfill after updates, then new uploads; a-layout-worker).
 4. `--web-dir` must contain `index.html` else exit error.
@@ -80,9 +80,9 @@ Auth column: `—` none, `U` any logged-in user, `L` librarian/admin, `A` admin.
 | POST | `/scores` | L | `library::create_score` | `ScoreInput` validated (title ≤200, ≤30 tags ≤40 chars, dedupe NOCASE) | R-LIB-001 |
 | GET | `/scores/{id}` | U, ACL | `library::get_score` | 404 if no visible part (members) | R-LIB-005 |
 | PUT/DELETE | `/scores/{id}` | L | `library::update_score` / `delete_score` | delete cascades parts, versions, annotation sets (blobs stay) | R-LIB-001 |
-| POST | `/scores/{id}/parts` | L | `library::create_part` | `PartInput` (label optional ≤120, voice optional text ≤20, key `naming::normalize_key` else 400, ≤20 instruments); re-indexes `part_fts` | R-LIB-002, R-LIB-010, R-LIB-011 |
+| POST | `/scores/{id}/parts` | L | `library::create_part` | `PartInput` (label optional ≤120, voices: list cleaned by `naming::clean_voices`, ≤10 entries of ≤20 chars else 400, stored in `part_voices` by `set_voices`, key `naming::normalize_key` else 400, ≤20 instruments); re-indexes `part_fts` | R-LIB-002, R-LIB-010, R-LIB-011 |
 | GET | `/parts/{id}` | U, ACL | `library::get_part` | `Part` with `display_name` (custom or derived) and current `FileVersion` | R-LIB-005, R-LIB-010 |
-| PUT/DELETE | `/parts/{id}` | L | `library::update_part` / `delete_part` | all fields + instruments replaced; key as on POST, except the part's stored (legacy) key may be sent unchanged; re-indexes `part_fts` (delete: trigger) | R-LIB-002, R-LIB-011 |
+| PUT/DELETE | `/parts/{id}` | L | `library::update_part` / `delete_part` | all fields + instruments + voices replaced; key as on POST, except the part's stored (legacy) key may be sent unchanged; re-indexes `part_fts` (delete: trigger) | R-LIB-002, R-LIB-011 |
 | PUT | `/parts/{id}/file` | L | `library::upload_file` | raw body; no body limit layer (blob store enforces `max_upload_bytes` ⇒ 413); non-PDF ⇒ 415; dedupe; new version unless same file as latest | R-FILE-001, R-FILE-002, R-FILE-003 |
 | GET | `/parts/{id}/versions` | U, ACL | `library::list_versions` | newest first | R-FILE-002 |
 | GET | `/files/{sha256}` | U, ACL(any part) | `files::get_file` | invalid hash ⇒ 404; If-None-Match ⇒ 304; Range ⇒ 206 via ServeFile; else RAM cache; ETag `"sha"`; Cache-Control per setting; Last-Modified removed | R-FILE-005, R-FILE-006, R-FILE-007 |

@@ -279,7 +279,7 @@ async fn library(s: &Server) -> Library {
             Method::POST,
             &format!("/api/scores/{}/parts", score.id),
             &admin,
-            json!({"instrument_ids": [trumpet.id], "voice": "2", "transposition": "Bb"}),
+            json!({"instrument_ids": [trumpet.id], "voices": ["2"], "transposition": "Bb"}),
         )
         .await;
     let fp: Part = s
@@ -672,18 +672,18 @@ async fn part_names_keys_and_part_search() {
     let part = |id: Id| format!("/api/parts/{id}");
     let trumpet = lib.trumpet_part.instrument_ids.clone();
 
-    // Voice is free text; common key spellings are normalised; unknown keys are refused.
+    // Voices are free text; common key spellings are normalised; unknown keys are refused.
     let p: Part = s
         .ok(
             Method::PUT,
             &part(lib.trumpet_part.id),
             &lib.admin,
-            json!({"instrument_ids": trumpet, "voice": "1a", "transposition": "in B-flat"}),
+            json!({"instrument_ids": trumpet, "voices": ["1a"], "transposition": "in B-flat"}),
         )
         .await;
     assert_eq!(
-        (p.voice.as_deref(), p.transposition.as_deref(), p.display_name.as_str()),
-        (Some("1a"), Some("Bb"), "Trumpet in B♭ 1a")
+        (p.voices.as_slice(), p.transposition.as_deref(), p.display_name.as_str()),
+        (["1a".to_owned()].as_slice(), Some("Bb"), "Trumpet in B♭ 1a")
     );
     let bad = s
         .json(
@@ -719,7 +719,7 @@ async fn part_names_keys_and_part_search() {
             Method::PUT,
             &part(lib.trumpet_part.id),
             &lib.admin,
-            json!({"label": "Solo Cornet", "instrument_ids": trumpet, "voice": "1", "transposition": "Bb"}),
+            json!({"label": "Solo Cornet", "instrument_ids": trumpet, "voices": ["1"], "transposition": "Bb"}),
         )
         .await;
     assert_eq!((p.label.as_deref(), p.display_name.as_str()), (Some("Solo Cornet"), "Solo Cornet"));
@@ -728,7 +728,7 @@ async fn part_names_keys_and_part_search() {
             Method::PUT,
             &part(lib.trumpet_part.id),
             &lib.admin,
-            json!({"label": "", "instrument_ids": trumpet, "voice": "1", "transposition": "Bb"}),
+            json!({"label": "", "instrument_ids": trumpet, "voices": [1], "transposition": "Bb"}),
         )
         .await;
     assert_eq!((p.label, p.display_name.as_str()), (None, "Trumpet in B♭ 1"));
@@ -739,7 +739,7 @@ async fn part_names_keys_and_part_search() {
             Method::POST,
             &format!("/api/scores/{}/parts", lib.score),
             &lib.admin,
-            json!({"instrument_ids": trumpet, "voice": v, "transposition": "Bb"}),
+            json!({"instrument_ids": trumpet, "voices": [v], "transposition": "Bb"}),
         )
         .await;
     }
@@ -776,9 +776,80 @@ async fn part_names_keys_and_part_search() {
     s.send(Method::DELETE, &part(unnamed.id), Auth::Bearer(&lib.admin), &[], Body::empty()).await;
 }
 
+/// Several voices per part (a-part-voices): order kept, duplicates and
+/// blanks dropped, limits enforced, named "… 1 & 2", found under each voice.
+#[tokio::test]
+async fn parts_with_several_voices() {
+    let s = Server::start().await;
+    let lib = library(&s).await;
+    let trumpet = lib.trumpet_part.instrument_ids.clone();
+    let new_part = format!("/api/scores/{}/parts", lib.score);
+    let p: Part = s
+        .ok(
+            Method::POST,
+            &new_part,
+            &lib.admin,
+            json!({"instrument_ids": trumpet, "voices": [" 2 ", 1, "", "2", "solo", "Solo"], "transposition": "Bb"}),
+        )
+        .await;
+    assert_eq!(p.voices, ["2", "1", "solo"], "order kept, blanks and duplicates (ignoring case) dropped");
+    assert_eq!(p.display_name, "Trumpet in B♭ 2 & 1 & solo");
+    // Update replaces the whole list, in the new order.
+    let p: Part = s
+        .ok(
+            Method::PUT,
+            &format!("/api/parts/{}", p.id),
+            &lib.admin,
+            json!({"instrument_ids": trumpet, "voices": ["1", "2"], "transposition": "Bb"}),
+        )
+        .await;
+    assert_eq!(
+        (p.voices.as_slice(), p.display_name.as_str()),
+        (["1", "2"].map(String::from).as_slice(), "Trumpet in B♭ 1 & 2")
+    );
+    // "&" separates voices, so a typed "3 & 4" is two voices.
+    let q: Part =
+        s.ok(Method::POST, &new_part, &lib.admin, json!({"instrument_ids": trumpet, "voices": ["3 & 4"]})).await;
+    assert_eq!(q.voices, ["3", "4"]);
+    // Ordered by name: the first voice, then the rest.
+    let score: Score = s.get(&format!("/api/scores/{}", lib.score), &lib.anna).await.json();
+    let names: Vec<&str> = score.parts.iter().map(|p| p.display_name.as_str()).collect();
+    assert_eq!(names, ["Trumpet 3 & 4", "Trumpet in B♭ 1 & 2", "Trumpet in B♭ 2"]);
+    let got: Part = s.get(&format!("/api/parts/{}", p.id), &lib.anna).await.json();
+    assert_eq!(got.voices, ["1", "2"], "members see the voices");
+    // Limits: at most 10 voices of at most 20 characters.
+    let many: Vec<String> = (1..=11).map(|i| i.to_string()).collect();
+    let bad = s.json(Method::POST, &new_part, &lib.admin, json!({"instrument_ids": trumpet, "voices": many})).await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    let bad = s
+        .json(Method::POST, &new_part, &lib.admin, json!({"instrument_ids": trumpet, "voices": ["x".repeat(21)]}))
+        .await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    // Found under each voice.
+    let anna = lib.anna.as_str();
+    assert_eq!(s.hits("trumpet%201", anna).await, 1);
+    assert_eq!(s.hits("trumpet%204", anna).await, 1);
+    let stored: Vec<(i64, String)> =
+        sqlx::query_as("SELECT position, voice FROM part_voices WHERE part_id = ?1 ORDER BY position")
+            .bind(p.id)
+            .fetch_all(&s.state.db.read)
+            .await
+            .unwrap();
+    assert_eq!(stored, [(0, "1".to_owned()), (1, "2".to_owned())], "stored relationally, in order");
+    // Deleting the part deletes its voices.
+    s.send(Method::DELETE, &format!("/api/parts/{}", p.id), Auth::Bearer(&lib.admin), &[], Body::empty()).await;
+    let left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM part_voices WHERE part_id = ?1")
+        .bind(p.id)
+        .fetch_one(&s.state.db.read)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
+}
+
 /// Data written before migration 0002: labels become custom names, numeric
 /// voices text, known key spellings codes; unknown keys stay and can be kept
-/// on update; the part search index is built on the first start.
+/// on update; the part search index is built on the first start. Migration
+/// 0005 then makes each old voice the only entry of the part's voice list.
 #[tokio::test]
 async fn migration_0002_keeps_old_parts() {
     let dir = tempfile::tempdir().unwrap();
@@ -813,20 +884,23 @@ async fn migration_0002_keeps_old_parts() {
     let s = Server { router: routes::app(state.clone(), None), state, _dir: dir, admin_invite: invite };
     let admin = s.admin().await;
     let score: Score = s.get("/api/scores/1", &admin).await.json();
-    type Row<'a> = (Option<&'a str>, Option<&'a str>, Option<&'a str>, &'a str);
+    type Row<'a> = (Option<&'a str>, Vec<&'a str>, Option<&'a str>, &'a str);
     let got: Vec<Row> = score
         .parts
         .iter()
-        .map(|p| (p.label.as_deref(), p.voice.as_deref(), p.transposition.as_deref(), p.display_name.as_str()))
+        .map(|p| {
+            let voices = p.voices.iter().map(String::as_str).collect();
+            (p.label.as_deref(), voices, p.transposition.as_deref(), p.display_name.as_str())
+        })
         .collect();
     assert_eq!(
         got,
         [
-            (Some("2nd Clarinet in Bb"), Some("2"), Some("Bb"), "2nd Clarinet in Bb"),
-            (None, None, Some("B"), "Clarinet in B"),
-            (Some("Horn"), None, Some("Eb"), "Horn"),
-            (Some("Horn 2"), Some("2"), Some("Es/F"), "Horn 2"),
-            (Some("Horn 3"), Some("3"), None, "Horn 3"),
+            (Some("2nd Clarinet in Bb"), vec!["2"], Some("Bb"), "2nd Clarinet in Bb"),
+            (None, vec![], Some("B"), "Clarinet in B"),
+            (Some("Horn"), vec![], Some("Eb"), "Horn"),
+            (Some("Horn 2"), vec!["2"], Some("Es/F"), "Horn 2"),
+            (Some("Horn 3"), vec!["3"], None, "Horn 3"),
         ]
     );
     // The unknown key can be kept, but not set anew.
@@ -835,7 +909,7 @@ async fn migration_0002_keeps_old_parts() {
             Method::PUT,
             "/api/parts/4",
             &admin,
-            json!({"label": "Horn 2", "instrument_ids": [2], "voice": "2", "transposition": "Es/F"}),
+            json!({"label": "Horn 2", "instrument_ids": [2], "voices": ["2"], "transposition": "Es/F"}),
         )
         .await;
     assert_eq!(keep.status, StatusCode::OK);

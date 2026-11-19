@@ -131,7 +131,8 @@ await a.getByLabel('Title', { exact: true }).fill('Florentiner Marsch');
 await a.getByLabel('Composer').fill('Julius Fučík');
 await a.getByLabel('Genre').fill('Concert');
 // Tags are chips: comma / Enter finish a tag, the input moves between chips.
-const tagField = a.locator('.tag-input');
+// The tags of the piece (part voices use the same chip input).
+const tagField = a.locator('.field.wide .tag-input');
 const tagChips = () => tagField.locator('.tag-chip .tag-text').allInnerTexts();
 const sameTags = async (expected) => JSON.stringify(await tagChips()) === JSON.stringify(expected);
 await tagField.locator('input.tag-entry').click();
@@ -162,11 +163,18 @@ await a.keyboard.type('Polka');
 await a.getByRole('button', { name: 'Next: parts' }).click();
 await a.getByRole('heading', { name: 'Parts of “Florentiner Marsch”' }).waitFor();
 const newPart = a.locator('form.new-part');
-// No custom name: the name comes from instrument, key and voice.
+// Voices are chips like tags (a-part-voices).
+const voiceEntry = (scope) => scope.locator('.field.voices input.tag-entry');
+const voiceChips = (scope) => scope.locator('.field.voices .tag-chip .tag-text').allInnerTexts();
+// No custom name: the name comes from instrument, key and voices.
 check(await newPart.getByLabel('Key').evaluate((e) => e.tagName) === 'SELECT'
   && (await newPart.getByLabel('Key').locator('option').allInnerTexts()).includes('B♭'), 'the key is chosen from a list (with ♭ glyphs)');
 await newPart.getByLabel('Key').selectOption('Bb');
-await newPart.getByLabel('Voice').fill('2');
+await voiceEntry(newPart).click();
+await a.keyboard.type('2');
+await a.keyboard.press('Enter');
+check(JSON.stringify(await voiceChips(newPart)) === '["2"]' && await newPart.getByRole('button', { name: '+ Add part' }).isVisible(),
+  'Enter turns the typed voice into a chip without submitting the form');
 // Keyboard: the search field has the focus, Enter ticks the first match, Escape applies.
 await newPart.getByRole('button', { name: '+ Add instruments' }).click();
 check(await a.evaluate(() => document.activeElement?.classList.contains('picker-search')), 'the picker focuses its search field on open');
@@ -185,7 +193,7 @@ await a.locator('.added-parts li', { hasText: 'Trumpet in B♭ 2' }).getByText(/
 check(true, 'a part without custom name is listed with its derived name');
 // A second part right away, this time without a PDF and with a custom name.
 check((await chips(newPart)).length === 0 && await newPart.getByLabel('Key').inputValue() === ''
-  && await newPart.getByLabel('Voice').inputValue() === '', 'the next part starts empty (instruments, key, voice)');
+  && (await voiceChips(newPart)).length === 0, 'the next part starts empty (instruments, key, voices)');
 await newPart.getByLabel('Custom name (optional)').fill('Solo Flute');
 await pick(a, newPart, '+ Add instruments', ['Flute'], 'outside');
 check((await chips(newPart)).some((c) => c.startsWith('Flute')), 'a click outside the picker applies the selection');
@@ -227,17 +235,26 @@ await saved(a.locator('.part-editor'));
 await a.reload();
 await a.locator('.part-editor .chip').first().waitFor();
 check((await chips(a.locator('.part-editor'))).length === 1, 'removing a part instrument is saved immediately');
-// Clearing the custom name brings the derived name back; key and voice are saved with "Save part".
+// Clearing the custom name brings the derived name back; key and voices are saved with "Save part".
 await a.locator('.part-editor').getByLabel('Custom name (optional)').fill('');
 await a.locator('.part-editor').getByLabel('Key').selectOption('C');
-await a.locator('.part-editor').getByLabel('Voice').fill('1a');
-check(await a.locator('.part-editor h3.part-title').innerText() === 'Flute in C 1a', 'the part editor previews the name live');
+await voiceEntry(a.locator('.part-editor')).click();
+await a.keyboard.type('1a&2,3');
+check(JSON.stringify(await voiceChips(a.locator('.part-editor'))) === '["1a","2"]', '"&" and comma finish a voice chip');
+await a.keyboard.press('Enter');
+await a.keyboard.press('Backspace');
+check(JSON.stringify(await voiceChips(a.locator('.part-editor'))) === '["1a","2"]', 'Backspace removes the voice chip before the input');
+await a.keyboard.type('1A');
+await a.keyboard.press('Enter');
+check(JSON.stringify(await voiceChips(a.locator('.part-editor'))) === '["1a","2"]'
+  && await a.locator('.part-editor .field.voices .tag-chip.flash').count() === 1, 'a duplicate voice (other case) is not added');
+check(await a.locator('.part-editor h3.part-title').innerText() === 'Flute in C 1a & 2', 'the part editor previews the name live, voices joined with " & "');
 await a.locator('.part-editor').getByRole('button', { name: 'Save part' }).click();
 await a.locator('.part-editor .ok', { hasText: 'Saved' }).waitFor();
 await a.reload();
-await a.getByText('Flute in C 1a · Florentiner Marsch').waitFor();
+await a.getByText('Flute in C 1a & 2 · Florentiner Marsch').waitFor();
 check(await a.locator('.part-editor').getByLabel('Key').inputValue() === 'C'
-  && await a.locator('.part-editor').getByLabel('Voice').inputValue() === '1a', 'key and free-text voice are stored');
+  && JSON.stringify(await voiceChips(a.locator('.part-editor'))) === '["1a","2"]', 'key and the free-text voices are stored in order');
 
 // Edit the piece from its card.
 await a.getByRole('button', { name: 'Done' }).click();
@@ -273,7 +290,7 @@ await a.keyboard.type('enc');
 check(await tagField.locator('ul.suggest').count() === 0, 'tags already chosen are not suggested');
 await a.keyboard.press('Escape');
 await shot(a, 'tag-suggestions');
-check(JSON.stringify(await a.locator('.part-editor h3.part-title').allInnerTexts()) === '["Flute in C 1a","Trumpet in B♭ 2"]',
+check(JSON.stringify(await a.locator('.part-editor h3.part-title').allInnerTexts()) === '["Flute in C 1a & 2","Trumpet in B♭ 2"]',
   'edit view lists both parts by name');
 await shot(a, 'edit-piece');
 await a.getByRole('button', { name: 'Done' }).click();

@@ -13,17 +13,18 @@ use sqlx::SqliteConnection;
 struct Row {
     id: Id,
     label: Option<String>,
-    voice: Option<String>,
+    voices: String,
     transposition: Option<String>,
     instruments: String,
 }
 
 /// Indexed text of a part: its shown name, the derived name when a custom
 /// name hides it, and the key code ("Bb"), which the glyph form "B♭" does
-/// not tokenise to.
-pub fn index_text(label: Option<&str>, instruments: &[&str], key: Option<&str>, voice: Option<&str>) -> String {
-    let derived = naming::derived_name(instruments, key, voice);
-    let mut text = naming::part_name(label, instruments, key, voice);
+/// not tokenise to. Every voice is its own token ("Clarinet 1 & 2" gives
+/// "1" and "2"), so "clarinet 2" finds the part (a-part-voices).
+pub fn index_text(label: Option<&str>, instruments: &[&str], key: Option<&str>, voices: &[String]) -> String {
+    let derived = naming::derived_name(instruments, key, voices);
+    let mut text = naming::part_name(label, instruments, key, voices);
     if text != derived {
         text.push(' ');
         text.push_str(&derived);
@@ -40,7 +41,8 @@ pub fn index_text(label: Option<&str>, instruments: &[&str], key: Option<&str>, 
 pub async fn reindex(conn: &mut SqliteConnection, part_ids: Option<&[Id]>) -> sqlx::Result<()> {
     let ids = part_ids.map(json_ids);
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT p.id, p.label, p.voice, p.transposition,
+        "SELECT p.id, p.label, p.transposition,
+                (SELECT json_group_array(json_array(position, voice)) FROM part_voices WHERE part_id = p.id) AS voices,
                 (SELECT json_group_array(i.name) FROM part_instruments pi JOIN instruments i ON i.id = pi.instrument_id
                  WHERE pi.part_id = p.id) AS instruments
          FROM parts p WHERE ?1 IS NULL OR p.id IN (SELECT value FROM json_each(?1))",
@@ -55,7 +57,8 @@ pub async fn reindex(conn: &mut SqliteConnection, part_ids: Option<&[Id]>) -> sq
     for r in rows {
         let names: Vec<String> = serde_json::from_str(&r.instruments).unwrap_or_default();
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
-        let text = index_text(r.label.as_deref(), &names, r.transposition.as_deref(), r.voice.as_deref());
+        let voices = crate::routes::library::voices_from_json(&r.voices);
+        let text = index_text(r.label.as_deref(), &names, r.transposition.as_deref(), &voices);
         sqlx::query("INSERT INTO part_fts (rowid, name) VALUES (?1, ?2)")
             .bind(r.id)
             .bind(text)
@@ -84,8 +87,10 @@ mod tests {
 
     #[test]
     fn index_text_has_derived_name_and_key_code() {
-        assert_eq!(index_text(None, &["Clarinet"], Some("Bb"), Some("2")), "Clarinet in B♭ 2 Bb");
-        assert_eq!(index_text(Some("Solo Cornet"), &["Trumpet"], Some("Bb"), None), "Solo Cornet Trumpet in B♭ Bb");
-        assert_eq!(index_text(None, &["Flute"], None, None), "Flute");
+        let v = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(index_text(None, &["Clarinet"], Some("Bb"), &v(&["2"])), "Clarinet in B♭ 2 Bb");
+        assert_eq!(index_text(Some("Solo Cornet"), &["Trumpet"], Some("Bb"), &[]), "Solo Cornet Trumpet in B♭ Bb");
+        assert_eq!(index_text(None, &["Flute"], None, &[]), "Flute");
+        assert_eq!(index_text(None, &["Klarinette"], None, &v(&["1", "2"])), "Klarinette 1 & 2");
     }
 }

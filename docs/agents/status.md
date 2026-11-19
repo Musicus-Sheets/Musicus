@@ -10,7 +10,7 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 
 | Requirement(s) | Topic | Notes for implementers |
 | --- | --- | --- |
-| R-ACL-005, R-ACL-006 | grants per voice / per programme / expiry | extend `part_visible!()` (d-access); new tables + migration |
+| R-ACL-005, R-ACL-006 | grants per voice / per programme / expiry | extend `part_visible!()` (d-access); new tables + migration; per voice: join `part_voices` (indexed on `voice`, a-part-voices) |
 | R-LIB-007 | extended score metadata | migration + `ScoreInput`/`Score` + `pages/forms.rs::ScoreFields` + FTS columns if searchable |
 | R-FILE-008 | MusicXML | new processor in `processors.rs`; `sniff_mime`; annotations need musical anchors (not page coords) — design first |
 | R-FILE-009 | GC of unreferenced blobs | must respect backup consistency (grace period), conflicts with R-FILE-004 resolved by "unreferenced only" |
@@ -62,7 +62,7 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 - Tag entry: the input is moved between chips only with an empty input (←/→/Home/End) or by clicking a chip; clicking between two chips (not on one) puts it at the end. Keystrokes typed in the very frame after a move could go to the old focus (refocus waits for `requestAnimationFrame`).
 - Keys stored before migration 0002 that were ambiguous ("B") or free text stay as they are; they are shown verbatim in names and as "Other: …" in the key list until a librarian picks a listed key (a-part-names).
 - `part_fts` is rebuilt on start only when its row count differs from `parts`; a change of the name format needs an explicit rebuild.
-- Immediate instrument save in the part editor sends the last saved label/voice/key; unsaved typing in those fields still needs `Save part` (a-assign-picker).
+- Immediate instrument save in the part editor sends the last saved label/voices/key; unsaved typing in those fields still needs `Save part` (a-assign-picker).
 - Uploads in the guided flow run in a task of the `NewPartForm` component; leaving the page via the navigation bar while one runs abandons waiting for it (`Finish` is disabled meanwhile). The browser usually completes the request anyway.
 - Assignment picker lists every candidate in the DOM (no virtualisation); fine for a few thousand entries. Score grants and the programme picker load all scores (`GET /api/scores`, full objects with parts).
 - A tap outside an open picker only closes it (backdrop); the tapped control needs a second tap (a-assign-picker). Leaving the page with the browser's back button while a picker is open drops the ticks.
