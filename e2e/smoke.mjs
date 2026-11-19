@@ -84,7 +84,7 @@ await a.getByRole('button', { name: 'Set password and log in' }).click();
 await a.getByRole('heading', { name: 'Library' }).waitFor();
 check(true, 'admin set a password via the invite link and is logged in');
 const nav = a.locator('header.topbar nav');
-for (const name of ['Library', 'Programmes', 'Instruments', 'Groups', 'Users']) {
+for (const name of ['Library', 'Programmes', 'Instruments', 'Groups', 'Import', 'Users']) {
   check(await nav.getByRole('link', { name, exact: true }).count() === 1, `admin navigation has ${name}`);
 }
 check(await nav.getByRole('link', { name: 'Manage' }).count() === 0, 'there is no Manage tab');
@@ -448,7 +448,8 @@ check(await m.locator('.part').count() === 1, 'anna sees exactly one part');
 const mnav = m.locator('header.topbar nav');
 check(await mnav.getByRole('link', { name: 'Instruments' }).count() === 1
   && await mnav.getByRole('link', { name: 'Groups' }).count() === 0
-  && await mnav.getByRole('link', { name: 'Users' }).count() === 0, 'member navigation: no Groups, no Users');
+  && await mnav.getByRole('link', { name: 'Users' }).count() === 0
+  && await mnav.getByRole('link', { name: 'Import' }).count() === 0, 'member navigation: no Groups, no Users, no Import');
 check(await m.getByRole('link', { name: 'Add piece' }).count() === 0
   && await m.getByRole('link', { name: 'Edit' }).count() === 0, 'member sees the library without management controls');
 await mnav.getByRole('link', { name: 'Instruments' }).click();
@@ -843,6 +844,65 @@ await a.getByRole('button', { name: 'Reset to automatic' }).click();
 await a.getByText('Back to the automatic detection').waitFor();
 const resetLayout = await m.evaluate(async (sha) => (await fetch(`/api/files/${sha}/layout`)).json(), systemsPart.layout.sha256);
 check(!resetLayout.pages[1].full_page && !resetLayout.pages[1].corrected, 'a page can be reset to the automatic detection');
+
+// --- Mass import: a folder with a German structure ---------------------------
+// Distinct copies of the test PDF (bytes appended after %%EOF), one twice.
+const importRoot = join(outDir, 'import-archive', 'Archiv');
+const pieceDir = join(importRoot, 'Märsche', '0412 Alte Kameraden - Teike');
+mkdirSync(pieceDir, { recursive: true });
+mkdirSync(join(importRoot, 'Zweitschrift'), { recursive: true });
+const copy = (tag) => Buffer.concat([readFileSync(pdfPath), Buffer.from(`\n%import-${tag}\n`)]);
+for (const name of ['Trompete 1+2 in B', 'Partitur', 'Direktion', 'Klar 2']) writeFileSync(join(pieceDir, `${name}.pdf`), copy(name));
+writeFileSync(join(importRoot, 'Zweitschrift', 'Trompete.pdf'), copy('Trompete 1+2 in B'));
+writeFileSync(join(importRoot, 'Inventar.txt'), 'not a PDF');
+check(await m.evaluate(async () => (await fetch('/api/import/batches')).status) === 403, 'members cannot use the import API (403)');
+await nav.getByRole('link', { name: 'Import' }).click();
+await a.getByRole('heading', { name: 'New import' }).waitFor();
+await a.locator('input[webkitdirectory]').setInputFiles(importRoot);
+await a.locator('.import-summary').waitFor();
+const newImport = a.locator('section.import-new');
+check((await newImport.innerText()).includes('5 PDF files') && (await newImport.innerText()).includes('1 other file is ignored')
+  && (await newImport.locator('select').first().locator('option:checked').innerText()).startsWith('Folder per piece')
+  && (await newImport.locator('select').nth(1).locator('option:checked').innerText()).startsWith('German (suggested)'),
+  'a selected folder: PDFs listed, other files ignored, preset and German naming suggested');
+check((await newImport.locator('.import-preview').innerText()).includes('Alte Kameraden')
+  && await newImport.locator('.import-preview .ichip.lvl-red', { hasText: 'Partitur' }).count() === 1,
+  'the live preview shows the pieces, unknown instruments red');
+await shot(a, 'import-preview');
+await a.getByRole('button', { name: 'Upload and review' }).click();
+await a.waitForURL(/\/import\/\d+$/, { timeout: 60000 });
+await a.locator('.import-piece').first().waitFor();
+check((await a.locator('.import-summary').innerText()).includes('1 skipped'), 'the same file twice in the folder is uploaded once');
+const staged = await a.locator('.import-parts img.thumb-small').first().getAttribute('src');
+check(await m.evaluate(async (u) => (await fetch(u)).status, staged) === 403, 'members cannot see staged files');
+const unknownBox = a.locator('section.unknown-instruments');
+for (const word of ['Partitur', 'Direktion']) {
+  await unknownBox.getByRole('button', { name: `Create instrument “${word}”` }).click();
+  await unknownBox.locator('li', { hasText: `“${word}”` }).waitFor({ state: 'detached' });
+}
+await unknownBox.getByRole('button', { name: 'Create instrument “Clarinet”' }).click();
+await unknownBox.waitFor({ state: 'detached' });
+check(true, 'Partitur, Direktion and the abbreviation "Klar" are resolved once in "Instruments to confirm"');
+// Voices are a list: "1+2" in the file name gives two voices; the librarian edits the list as text.
+check(await a.getByLabel(/^Voices of .*Trompete 1\+2 in B\.pdf$/).inputValue() === '1 & 2',
+  '"Trompete 1+2" is read as the voices 1 and 2');
+const klarVoices = a.getByLabel(/^Voices of .*Klar 2\.pdf$/);
+await klarVoices.fill('2, 3');
+await klarVoices.press('Tab');
+await a.locator('.import-parts strong', { hasText: 'Clarinet 2 & 3' }).waitFor();
+check(await klarVoices.inputValue() === '2 & 3', 'the voices of a part are edited in the review ("2, 3" ⇒ "Clarinet 2 & 3")');
+await shot(a, 'import-review');
+await a.getByRole('button', { name: 'Import all green (1)' }).click();
+await a.getByText('1 piece imported.').waitFor();
+await m.goto(`${base}/`);
+await m.getByPlaceholder('Search title, composer, tag, number…').fill('0412');
+await m.getByText('Alte Kameraden').waitFor();
+check(JSON.stringify(await m.locator('.score', { hasText: 'Alte Kameraden' }).locator('.part-label').allInnerTexts()) === '["Trumpet in B♭ 1 & 2"]',
+  'after the commit anna sees the imported trumpet part (German "in B" = B♭), and only that');
+await a.getByRole('button', { name: 'Undo import' }).click();
+await a.getByText('Undone: 1 pieces and 4 parts removed.').waitFor();
+check(true, 'the import can be undone');
+await a.setViewportSize({ width: 1280, height: 900 });
 
 // The admin does not see anna's annotations.
 const sets = await a.evaluate(async () => {

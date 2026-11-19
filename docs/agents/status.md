@@ -25,7 +25,7 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | R-SEC-009, R-SEC-010 | watermark, download audit log | watermark must not create blobs (conflict with R-FILE-004) |
 | R-OPS-009 | continuous replication (Litestream) | |
 
-| F-LIB-004 (R-LIB-016, R-LIB-019, R-LIB-020, R-LIB-021) | mass import workflow | parsers, review rules (`musicus_api::import`) and the server API (`routes/import.rs`, API-tested) exist; the web client page follows |
+| F-LIB-004 phase 2 | mass import extensions | pattern per subfolder (archives mixing structures; today: several batches), ZIP upload, server-side paging of the review for very large batches, CSV inventory and OCR sources (R-LIB-022), editing several instruments per part in the review (today one instrument via the select; more after the import in the part editor) |
 | R-LIB-022 | OCR / inventory list as import sources | add candidates with `Source::Ocr` / `Source::Inventory` to `PieceGuess` fields (a-import-shared) |
 
 Also not implemented (no requirement yet): user deletion, rate limiting beyond login, metrics.
@@ -47,6 +47,7 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 - System view: only synthetic PDFs in automated tests; real scores checked manually with `examples/layout_report.rs`
   (numbers in `layout.md`). Physical staff size depends on the device density (a-css-mm). Detection time on a
   Raspberry Pi not measured (R-PERF-008 estimate). R-READ-019 (layouts prefetched with a programme) not e2e-tested.
+- Import UI without e2e coverage: drag and drop of a folder (only the folder input is driven), resume after an interrupted upload (API-tested), bulk edit, pattern change, existing-piece confirmation, skip of single files, "Use for …" with an existing instrument (all API-tested). Hashing speed of very large archives in the browser not measured.
 - Client features without e2e coverage: eraser/stamps/text/undo (R-ANN-002, R-ANN-003), palm rejection (R-ANN-004), sets menu actions, migration banner, wake lock, fullscreen, programme next/previous navigation (R-READ-005); deleting pieces/parts/programmes/groups from the UI, user role changes and disable/enable (API-tested only).
 - Sharp rendering (a-device-pixels): painted = backing verified only in Chromium (real `--force-device-scale-factor`);
   Firefox and Safari (no `devicePixelContentBox`) not measured; real browser zoom (Ctrl +) and a real second screen are

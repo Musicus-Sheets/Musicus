@@ -17,6 +17,8 @@ use musicus_api::CurrentUser;
 use pages::{
     account::Account,
     groups::Groups,
+    import::Imports,
+    import_review::ImportReview,
     instruments::Instruments,
     layout_edit::LayoutEditor,
     library::Library,
@@ -65,6 +67,10 @@ pub enum Route {
         Instruments {},
         #[route("/groups")]
         Groups {},
+        #[route("/import")]
+        Imports {},
+        #[route("/import/:id")]
+        ImportReview { id: i64 },
         #[route("/users")]
         Users {},
         #[route("/account")]

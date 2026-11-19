@@ -1172,7 +1172,7 @@ async fn import_stages_reviews_commits_and_undoes() {
         (format!("{dir}/Klar 2.pdf"), klar.clone()),
         ("Florentiner Marsch - Julius Fučík/Flöte.pdf".into(), flute.clone()),
         ("0305 Böhmischer Traum/Trompete 2.pdf".into(), in_library.clone()),
-        ("0306 Kopie/Trompete.pdf".into(), trumpet.clone()),
+        ("Zweitschrift/Trompete.pdf".into(), trumpet.clone()),
         ("lose.pdf".into(), tiny_pdf(1, "loose")),
     ];
     let files: Vec<(&str, &[u8])> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
@@ -1180,7 +1180,7 @@ async fn import_stages_reviews_commits_and_undoes() {
     // Content already in the library or twice in the folder is skipped.
     assert_eq!(todo.files.duplicate, 2);
     assert_eq!(todo.upload.len(), 6);
-    assert!(!todo.upload.iter().any(|u| u.path.contains("Kopie") || u.path.contains("0305")));
+    assert!(!todo.upload.iter().any(|u| u.path.contains("Zweitschrift") || u.path.contains("0305")));
 
     // A file whose content differs from the announced hash is rejected.
     let first = &todo.upload[0];
@@ -1357,7 +1357,7 @@ async fn import_of_flat_numbered_files_groups_by_number_and_keeps_changes() {
     upload_all(&s, admin, &todo, &files).await;
     let review: ImportReview = s.get(&format!("/api/import/batches/{}", batch.id), admin).await.json();
     assert_eq!(review.pieces.len(), 2, "304 and 0304 are one piece");
-    let p304 = review.pieces.iter().find(|p| p.number.value.as_deref() == Some("304")).unwrap();
+    let p304 = review.pieces.iter().find(|p| p.number.value.as_deref() == Some("0304")).unwrap();
     assert_eq!((p304.title.level, p304.level), (Level::Red, Level::Red), "the title must be typed");
     // No key is assumed; in an English batch "B" is ambiguous and left empty.
     let k2 = part(p304, "Klarinette2");
@@ -1405,7 +1405,7 @@ async fn import_of_flat_numbered_files_groups_by_number_and_keeps_changes() {
         s.ok(Method::PUT, &format!("/api/import/batches/{}", batch.id), admin, json!({"language": "de"})).await;
     assert_eq!(changed.language, Language::De);
     let review: ImportReview = s.get(&format!("/api/import/batches/{}", batch.id), admin).await.json();
-    let p304 = review.pieces.iter().find(|p| p.number.value.as_deref() == Some("304")).unwrap();
+    let p304 = review.pieces.iter().find(|p| p.number.value.as_deref() == Some("0304")).unwrap();
     assert_eq!(p304.title.value.as_deref(), Some("Alte Kameraden"), "piece changes kept (same group)");
     assert_eq!(part(p304, "Klarinette in B").key.source, Some(Source::Librarian));
     let done: CommittedImport = s
@@ -1413,7 +1413,7 @@ async fn import_of_flat_numbered_files_groups_by_number_and_keeps_changes() {
         .await;
     assert_eq!(done.committed, [p304.id]);
     let found: Vec<Score> = s.get("/api/scores?q=alte", admin).await.json();
-    assert_eq!(found[0].archive_number.as_deref(), Some("304"));
+    assert_eq!(found[0].archive_number.as_deref(), Some("0304"), "the first path (in order) gives the number");
     let names: Vec<&str> = found[0].parts.iter().map(|p| p.display_name.as_str()).collect();
     assert_eq!(names, ["Klarinette 2", "Klarinette in B♭ 1 & 2"]);
     assert_eq!(found[0].parts[1].voices, ["1", "2"], "the commit fills the voice list");

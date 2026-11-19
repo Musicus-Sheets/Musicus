@@ -62,6 +62,7 @@ pub fn Library() -> Element {
                         option { value: "number", selected: by_number(), "Sort by archive number" }
                     }
                     if manage {
+                        Link { class: "button", to: Route::Imports {}, title: "Import a whole folder of PDF parts", "Import folder" }
                         Link { class: "button primary add", to: Route::NewScore {},
                             span { class: "plus", "aria-hidden": "true", "+" }
                             "Add piece"

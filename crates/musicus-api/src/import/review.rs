@@ -68,10 +68,14 @@ fn push_candidate(list: &mut Vec<Candidate>, value: &Option<String>, same: fn(&s
 /// Groups the paths into pieces: same archive number (ignoring leading
 /// zeros and separators) or, without number, same title and composer.
 /// Returns the pieces (by number, then title, natural order) and the paths
-/// the pattern does not match.
+/// the pattern does not match. Paths are taken in byte order: the first
+/// path gives the first (shown) candidate of each field.
 pub fn propose(pattern: &Pattern, language: Language, paths: &[String]) -> (Vec<Proposed>, Vec<String>) {
     let mut pieces: Vec<Proposed> = Vec::new();
     let mut unmatched = Vec::new();
+    // Path order, so preview and server pick the same first candidate.
+    let mut paths: Vec<&String> = paths.iter().collect();
+    paths.sort();
     for path in paths {
         let Some(f) = pattern.matches(path) else {
             unmatched.push(path.clone());
@@ -877,7 +881,7 @@ mod tests {
         let instr = instruments(&["Klarinette"]);
         let lib = Library { instruments: &instr, aliases: &[], scores: &[], groups: &[] };
         let r = review(&pieces[1], &PieceOverrides::default(), &lib);
-        assert_eq!(r.number.value.as_deref(), Some("304"));
+        assert_eq!(r.number.value.as_deref(), Some("0304"), "first path in order");
         assert_eq!((r.title.level, r.title.note.clone()), (Level::Red, Some(Note::TitleMissing)));
         assert_eq!(r.level, Level::Red);
         // Typed once for the piece: green.
@@ -1043,7 +1047,10 @@ mod tests {
         let instr = instruments(&["Trumpet", "Partitur"]);
         let lib = Library { instruments: &instr, aliases: &[], scores: &[], groups: &[] };
         let r = review(&pieces[0], &PieceOverrides::default(), &lib);
-        assert_eq!((r.title.level, r.title.others.clone()), (Level::Red, vec!["Marsch".to_string()]));
+        assert_eq!(
+            (r.title.level, r.title.value.as_deref(), r.title.others.clone()),
+            (Level::Red, Some("Marsch"), vec!["March".to_string()])
+        );
         assert!(matches!(r.title.note, Some(Note::Contradictory(_))));
         let fixed = review(&pieces[0], &PieceOverrides { title: Some("March".into()), ..Default::default() }, &lib);
         assert_eq!(fixed.level, Level::Green);

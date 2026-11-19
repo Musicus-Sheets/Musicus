@@ -21,7 +21,8 @@ pub fn is_admin() -> bool {
     current_role().is_some_and(Role::is_admin)
 }
 
-/// Frame of all pages except the reader: navigation bar plus content. Sends
+/// Frame of all pages except the reader: navigation bar plus content
+/// (Library, Programmes, Instruments; Groups and Import for librarians; Users for admins). Sends
 /// visitors without a session to the login page.
 #[component]
 pub fn Shell() -> Element {
@@ -56,6 +57,7 @@ pub fn Shell() -> Element {
                 Link { to: Route::Instruments {}, active_class: "active", "Instruments" }
                 if user.role.can_manage_library() {
                     Link { to: Route::Groups {}, active_class: "active", "Groups" }
+                    Link { to: Route::Imports {}, active_class: "active", "Import" }
                 }
                 if user.role.is_admin() {
                     Link { to: Route::Users {}, active_class: "active", "Users" }

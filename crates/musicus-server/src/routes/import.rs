@@ -248,6 +248,8 @@ pub async fn register_files(
         }
     }
 
+    // Of two paths with the same content, the first in path order is kept (deterministic).
+    files.sort_by(|a, b| a.0.cmp(&b.0));
     let mut tx = app.db.write.begin().await?;
     for (path, size, sha) in &files {
         let existing: Option<(Id, String, String)> =

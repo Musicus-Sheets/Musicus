@@ -19,6 +19,8 @@ Dioxus 0.7.10, features `web` + `router`; compiled to wasm32 by `dx`; assets `as
 | `/programmes/new`, `/programmes/:id/edit` | `pages::programme_edit::{NewProgramme, EditProgramme}` | Shell | (L) |
 | `/instruments` | `pages::instruments::Instruments` | Shell | everyone reads; L adds/edits/deletes |
 | `/groups` | `pages::groups::Groups` | Shell | (L); members of a group only editable by admins |
+| `/import` | `pages::import::Imports` | Shell | (L) batches + new import (a-import-page) |
+| `/import/:id` | `pages::import_review::ImportReview` | Shell | (L) review, commit, undo, resume |
 | `/users` | `pages::users::Users` | Shell | (A) |
 | `/account` | `pages::account::Account` | Shell | |
 | `/manage`, `/manage/:..segments` | redirect → `/` | — | old bookmarks of the removed Manage area |
@@ -27,7 +29,7 @@ Dioxus 0.7.10, features `web` + `router`; compiled to wasm32 by `dx`; assets `as
 (L) = page shown to librarians/admins only, (A) = admins only; others get `ui::NoAccess`. These are UI conveniences: the
 server checks every request (d-inline-management). Static segments (`new`) win over `:id` in the router.
 
-Navigation (`ui::Shell`): `Library`, `Programmes`, `Instruments` for all; `Groups` for librarian/admin; `Users` for admin;
+Navigation (`ui::Shell`): `Library`, `Programmes`, `Instruments` for all; `Groups` and `Import` for librarian/admin; `Users` for admin;
 then the display name (account) and `Log out`. Links use `active_class: "active"`.
 
 Server serves `index.html` for any non-`/api` path, so deep links work.
@@ -84,6 +86,13 @@ controls when `ui::can_manage()` / `ui::is_admin()`; members get exactly the mem
 - `groups.rs`: `Groups` + `GroupEditor` (members only if admin; instrument grants; score grants; create/delete group only admin). Each list is a `SavedList` → `AssignList`; every change (picker closed with new entries, × pressed) is sent at once as the full list (`PUT /api/groups/{id}/members|instrument-grants|score-grants`), controls disabled while it runs, `Saving…` → `Saved` (2.5 s) or error + previous list restored; no Save button.
 - `users.rs`: `Users` + `UserRow` (create → invite link shown + copy; role select; disable/enable; new invite).
 - `login.rs`, `account.rs`: forms over auth endpoints.
+
+## Mass import (`pages/import.rs`, `pages/import_review.rs`; a-import-page, a-import-hashing)
+
+- Folder selection: `FolderPicker` = `label.button` with hidden `input[type=file][webkitdirectory][multiple]` (`bridge::pick_folder(id)`) + `.dropzone` (`bridge::drop_folder(id)` awaited in a `use_future` loop; dropped folders walked recursively in JS). File objects stay in `bridge.js` `importFiles` (memory only, R-SEC-001); Rust holds `FolderFile {index, path, size}`. `Selection::new` strips the common root folder (`import::strip_common_root`, becomes the batch name) and keeps `*.pdf`.
+- New import: `detect` picks the preset (select shows matched counts per preset; a typed pattern shows as "Own pattern"); `suggest_language` over the part texts preselects German/English ("(suggested)"). Live preview recomputed on every render from `propose` + `review_piece` (instruments and aliases from the API, no pieces/groups ⇒ no existing-piece match), counts green/yellow/red/unmatched, first 12 pieces.
+- `send_folder(batch, selection, progress)`: SHA-256 of every file (`bridge::hash_import_file`, 4 MiB slices in WASM) ⇒ `POST /api/import/batches/{id}/files` ⇒ for every requested file `bridge::upload_import_file` (fetch PUT with the `File` as body: streamed by the browser) to `/api/import/files/{id}/content`; 401 ⇒ `/login`; failures counted ("select the folder again"). Resume on the review page: the same picker + `send_folder`; only missing files are uploaded.
+- Review: whole `ImportReview` in a signal; edits `PATCH /api/import/items` and replace the returned pieces (`merge_pieces`); the voices of a part are one text input showing the list joined with `naming::VOICE_SEPARATOR` ("1 & 2"); on change it is split at commas and sent as `PartOverrides.voices` (the API cleans and splits at "&"), tooltip `source_hint` (a-import-voices); alias/instrument creation, commit, undo and resume reload everything. Colours via `--lvl` CSS variable classes `lvl-green|yellow|red|done|skip`; chips `.ichip`.
 
 ## Assignment picker (`picker.rs`, a-assign-picker)
 

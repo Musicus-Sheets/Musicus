@@ -382,3 +382,89 @@ export async function copyText(text) {
     return false;
   }
 }
+
+// --- Mass import: files of a selected or dropped folder ----------------------
+// The File objects stay in this array (memory only, R-SEC-001); Rust gets
+// their paths and sizes, reads slices for hashing and asks for uploads by index.
+let importFiles = [];
+
+function keepFiles(list) {
+  importFiles = list;
+  return list.map((e) => [e.path, e.file.size]);
+}
+
+// Files chosen with <input type=file webkitdirectory>: [[path, size], …].
+export function pickFolder(inputId) {
+  const input = document.getElementById(inputId);
+  const files = input && input.files ? Array.from(input.files) : [];
+  const out = keepFiles(files.map((f) => ({ path: f.webkitRelativePath || f.name, file: f })));
+  if (input) input.value = '';
+  return out;
+}
+
+function readAllEntries(reader) {
+  return new Promise((resolve, reject) => {
+    const all = [];
+    const next = () => reader.readEntries((batch) => {
+      if (batch.length === 0) resolve(all);
+      else { all.push(...batch); next(); }
+    }, reject);
+    next();
+  });
+}
+
+async function walk(entry, out) {
+  if (entry.isFile) {
+    const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+    out.push({ path: entry.fullPath.replace(/^\/+/, ''), file });
+  } else if (entry.isDirectory) {
+    for (const child of await readAllEntries(entry.createReader())) await walk(child, out);
+  }
+}
+
+// Resolves with [[path, size], …] at the next drop of a folder (or files)
+// onto the element; dragging over it marks it with the class `drag`.
+export function dropFolder(zoneId) {
+  const zone = document.getElementById(zoneId);
+  if (!zone) return Promise.resolve([]);
+  if (!zone.dataset.dropReady) {
+    zone.dataset.dropReady = '1';
+    zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('drag'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('drag'));
+  }
+  return new Promise((resolve) => {
+    zone.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      zone.classList.remove('drag');
+      const entries = Array.from(e.dataTransfer.items || [])
+        .map((i) => (i.webkitGetAsEntry ? i.webkitGetAsEntry() : null))
+        .filter(Boolean);
+      const out = [];
+      for (const entry of entries) await walk(entry, out);
+      if (entries.length === 0) {
+        for (const f of Array.from(e.dataTransfer.files || [])) out.push({ path: f.name, file: f });
+      }
+      resolve(keepFiles(out));
+    }, { once: true });
+  });
+}
+
+// Bytes start..end of file `index` (for hashing in WebAssembly).
+export async function importSlice(index, start, end) {
+  return new Uint8Array(await importFiles[index].file.slice(start, end).arrayBuffer());
+}
+
+// Streams file `index` to `url` (PUT); resolves with [status, body text].
+export async function uploadImportFile(index, url) {
+  const r = await fetch(url, {
+    method: 'PUT',
+    credentials: 'same-origin',
+    headers: { 'x-musicus-csrf': '1', 'content-type': 'application/pdf' },
+    body: importFiles[index].file,
+  });
+  return [r.status, await r.text()];
+}
+
+export function clearImportFiles() {
+  importFiles = [];
+}
