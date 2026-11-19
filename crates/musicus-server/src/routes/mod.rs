@@ -4,6 +4,7 @@ pub mod annotations;
 pub mod auth;
 pub mod files;
 pub mod groups;
+pub mod import;
 pub mod library;
 pub mod programmes;
 pub mod users;
@@ -28,6 +29,9 @@ async fn health(axum::extract::State(app): axum::extract::State<AppState>) -> cr
     sqlx::query("SELECT 1").execute(&app.db.read).await?;
     Ok("ok")
 }
+
+/// Body limit of an import file list (20 000 paths with hashes).
+const IMPORT_LIST_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn api() -> Router<AppState> {
     Router::new()
@@ -65,6 +69,20 @@ pub fn api() -> Router<AppState> {
         .route("/files/{sha256}/thumbnail", get(files::get_thumbnail))
         .route("/files/{sha256}/layout", get(files::get_layout))
         .route("/files/{sha256}/layout/pages/{page}", put(files::put_correction).delete(files::delete_correction))
+        // Mass import (librarians)
+        .route("/import/batches", get(import::list_batches).post(import::create_batch))
+        .route("/import/batches/{id}", get(import::get_review).put(import::update_batch).delete(import::delete_batch))
+        .route(
+            "/import/batches/{id}/files",
+            post(import::register_files).layer(DefaultBodyLimit::max(IMPORT_LIST_BYTES)),
+        )
+        .route("/import/batches/{id}/commit", post(import::commit))
+        .route("/import/batches/{id}/undo", post(import::undo))
+        .route("/import/items", axum::routing::patch(import::update_items))
+        .route("/import/files/{id}", get(import::get_staged_file))
+        .route("/import/files/{id}/content", put(import::upload_content).layer(DefaultBodyLimit::disable()))
+        .route("/import/files/{id}/thumbnail", get(import::get_staged_thumbnail))
+        .route("/import/aliases", get(import::list_aliases).put(import::put_alias).delete(import::delete_alias))
         // Programmes
         .route("/programmes", get(programmes::list).post(programmes::create))
         .route("/programmes/{id}", get(programmes::get).put(programmes::update).delete(programmes::delete))

@@ -163,7 +163,7 @@ pub async fn delete_correction(
     Ok(axum::Json(effective_layout(&app, &sha256).await?))
 }
 
-async fn serve_blob(app: &App, sha256: &str, mime: &str, req: Request) -> ApiResult<Response> {
+pub(crate) async fn serve_blob(app: &App, sha256: &str, mime: &str, req: Request) -> ApiResult<Response> {
     let etag = format!("\"{sha256}\"");
     let cache_control = match app.settings.client_cache {
         ClientCache::None => "private, no-store",

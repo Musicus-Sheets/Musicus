@@ -365,6 +365,12 @@ pub fn fold(s: &str) -> String {
     out
 }
 
+/// The key under which an instrument word is stored as alias: its words
+/// folded, joined by single spaces ("Bass Klar." ⇒ "bass klar").
+pub fn alias_key(text: &str) -> String {
+    tokenize(text).iter().filter(|t| *t != "+").map(|t| fold(t)).collect::<Vec<_>>().join(" ")
+}
+
 /// Splits a part name into words: at spaces and punctuation, between a
 /// lower- and an upper-case letter (`KlarinetteEb`), and between letters and
 /// digits (`Klar2B`), but a digit followed by one lower-case letter stays
@@ -683,7 +689,7 @@ pub fn parse_part(text: &str, language: Language) -> PartText {
     // Unknown words become the (unknown) instrument when nothing else was found.
     if instruments.is_empty() && !rest.is_empty() {
         let text = rest.join(" ");
-        instruments.push(InstrumentText { alias: fold(&text), text, entry: None, level: Level::Red });
+        instruments.push(InstrumentText { alias: alias_key(&text), text, entry: None, level: Level::Red });
         rest.clear();
     }
     let key = match keys.len() {
@@ -861,6 +867,8 @@ mod tests {
             InstrumentText { text: "Alphorn".into(), alias: "alphorn".into(), entry: None, level: Level::Red }
         );
         assert_eq!(unknown.voices.values, ["1"]);
+        assert_eq!(alias_key(" Bass  Klar. "), "bass klar");
+        assert_eq!(parse_part("Bass Alphorn", Language::De).instruments[0].alias, "bass", "dictionary words first");
         let rest = parse_part("Trompete 1 Zusatz", Language::De);
         assert_eq!(rest.rest, ["Zusatz"]);
     }

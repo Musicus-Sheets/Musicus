@@ -25,7 +25,7 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | R-SEC-009, R-SEC-010 | watermark, download audit log | watermark must not create blobs (conflict with R-FILE-004) |
 | R-OPS-009 | continuous replication (Litestream) | |
 
-| F-LIB-004 (R-LIB-016, R-LIB-019, R-LIB-020, R-LIB-021) | mass import workflow | parsers and review rules exist in `musicus_api::import` (R-LIB-017, R-LIB-018 verified); staging, endpoints and UI follow |
+| F-LIB-004 (R-LIB-016, R-LIB-019, R-LIB-020, R-LIB-021) | mass import workflow | parsers, review rules (`musicus_api::import`) and the server API (`routes/import.rs`, API-tested) exist; the web client page follows |
 | R-LIB-022 | OCR / inventory list as import sources | add candidates with `Source::Ocr` / `Source::Inventory` to `PieceGuess` fields (a-import-shared) |
 
 Also not implemented (no requirement yet): user deletion, rate limiting beyond login, metrics.
@@ -73,3 +73,4 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 - Pinch zoom re-renders at up to `MAX_CANVAS_PIXELS` per canvas (crop cache ≤ 3 × that); while pinched the canvas
   position is not on whole device pixels (browser-controlled), so it is sharp but not strictly 1:1.
 - Thumbnails are blobs without a `files` row; never served except via their PDF's hash.
+- Import: `GET /api/import/batches/{id}` returns the whole review (no server paging); fine for a few thousand files, a very large batch should be split. `register_files` handles the whole list in one write transaction (one statement per new file, then `repropose`); 20 000 files per request. Files of a deleted or undone batch stay as blobs and `files` rows (no GC, R-FILE-009).

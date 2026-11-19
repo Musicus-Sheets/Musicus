@@ -388,7 +388,7 @@ pub async fn delete_score(State(app): State<AppState>, user: AuthUser, Path(id):
     Ok(StatusCode::NO_CONTENT)
 }
 
-struct CleanPart {
+pub(crate) struct CleanPart {
     label: Option<String>,
     /// JSON array of the cleaned voices, in order.
     voices: String,
@@ -400,7 +400,7 @@ struct CleanPart {
 /// Validates a part. The key must be one of `naming::KEYS` (common
 /// spellings are normalised); `stored_key` is the part's current key, which
 /// may be kept even if it is an older free-text value (a-part-names).
-fn clean_part(input: &PartInput, stored_key: Option<&str>) -> ApiResult<CleanPart> {
+pub(crate) fn clean_part(input: &PartInput, stored_key: Option<&str>) -> ApiResult<CleanPart> {
     if input.instrument_ids.len() > 20 {
         return Err(AppError::BadRequest("at most 20 instruments per part".into()));
     }
@@ -451,8 +451,18 @@ pub async fn create_part(
     user.require_librarian()?;
     let p = clean_part(&input, None)?;
     let mut tx = app.db.write.begin().await?;
+    let id = insert_part(&mut tx, score_id, p).await?;
+    part_index::reindex(&mut tx, Some(&[id])).await?;
+    tx.commit().await?;
+    one_part(&app, &user, id).await
+}
+
+/// Inserts a validated part with its instruments and voices in the caller's
+/// transaction (part form and import); 404 if the score does not exist.
+/// The caller re-indexes the part name (`part_index::reindex`).
+pub(crate) async fn insert_part(conn: &mut sqlx::SqliteConnection, score_id: Id, p: CleanPart) -> ApiResult<Id> {
     let exists: Option<i64> =
-        sqlx::query_scalar("SELECT 1 FROM scores WHERE id = ?1").bind(score_id).fetch_optional(&mut *tx).await?;
+        sqlx::query_scalar("SELECT 1 FROM scores WHERE id = ?1").bind(score_id).fetch_optional(&mut *conn).await?;
     if exists.is_none() {
         return Err(AppError::NotFound);
     }
@@ -464,17 +474,15 @@ pub async fn create_part(
     .bind(p.transposition)
     .bind(p.notes)
     .bind(now())
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut *conn)
     .await?;
     sqlx::query("INSERT OR IGNORE INTO part_instruments (part_id, instrument_id) SELECT ?1, value FROM json_each(?2)")
         .bind(id)
         .bind(p.instruments)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
-    set_voices(&mut tx, id, &p.voices).await?;
-    part_index::reindex(&mut tx, Some(&[id])).await?;
-    tx.commit().await?;
-    one_part(&app, &user, id).await
+    set_voices(&mut *conn, id, &p.voices).await?;
+    Ok(id)
 }
 
 /// Replaces the voices of a part by a JSON array, keeping its order.
@@ -559,11 +567,25 @@ pub async fn upload_file(
 }
 
 async fn store_upload(app: &App, part_id: Id, pending: &crate::blobs::PendingBlob) -> ApiResult<()> {
+    let mime = sniff_pending(pending).await?;
+    let file_id = store_file(app, pending, mime).await?;
+    let mut tx = app.db.write.begin().await?;
+    add_version(&mut tx, part_id, file_id).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The type of a received upload; only PDF is accepted (415 otherwise).
+pub(crate) async fn sniff_pending(pending: &crate::blobs::PendingBlob) -> ApiResult<&'static str> {
     let mut head = vec![0u8; 1024];
     let n = tokio::fs::File::open(&pending.tmp_path).await?.read(&mut head).await?;
-    let mime =
-        processors::sniff_mime(&head[..n]).ok_or(AppError::UnsupportedMediaType("only PDF files are supported"))?;
+    processors::sniff_mime(&head[..n]).ok_or(AppError::UnsupportedMediaType("only PDF files are supported"))
+}
 
+/// Stores a received upload as a blob with its `files` row (page count,
+/// thumbnail; known content is deduplicated) and wakes the layout worker
+/// for new files. Returns the `files.id`. Used by uploads and the import.
+pub(crate) async fn store_file(app: &App, pending: &crate::blobs::PendingBlob, mime: &'static str) -> ApiResult<Id> {
     let known: Option<Id> = sqlx::query_scalar("SELECT id FROM files WHERE sha256 = ?1")
         .bind(&pending.sha256)
         .fetch_optional(&app.db.read)
@@ -605,12 +627,16 @@ async fn store_upload(app: &App, part_id: Id, pending: &crate::blobs::PendingBlo
             id
         }
     };
+    Ok(file_id)
+}
 
-    let mut tx = app.db.write.begin().await?;
+/// Makes `file_id` the current version of the part (no new version if it
+/// already is), in the caller's transaction.
+pub(crate) async fn add_version(conn: &mut sqlx::SqliteConnection, part_id: Id, file_id: Id) -> ApiResult<()> {
     let latest: Option<(i64, Id)> =
         sqlx::query_as("SELECT version, file_id FROM part_files WHERE part_id = ?1 ORDER BY version DESC LIMIT 1")
             .bind(part_id)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut *conn)
             .await?;
     if latest.is_none_or(|(_, current)| current != file_id) {
         sqlx::query("INSERT INTO part_files (part_id, version, file_id, uploaded_at) VALUES (?1, ?2, ?3, ?4)")
@@ -618,10 +644,9 @@ async fn store_upload(app: &App, part_id: Id, pending: &crate::blobs::PendingBlo
             .bind(latest.map_or(1, |(v, _)| v + 1))
             .bind(file_id)
             .bind(now())
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await?;
     }
-    tx.commit().await?;
     Ok(())
 }
 

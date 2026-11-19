@@ -168,9 +168,51 @@ pub struct PartOverrides {
     /// Custom name; `Some("")` = derived name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    /// Do not import this file.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub skip: bool,
+    /// `Some(true)`: do not import this file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip: Option<bool>,
+}
+
+impl PieceOverrides {
+    /// Takes over every field `changes` sets (bulk edit, `PATCH /api/import/items`).
+    pub fn merge(&mut self, changes: &PieceOverrides) {
+        for (mine, theirs) in [
+            (&mut self.number, &changes.number),
+            (&mut self.title, &changes.title),
+            (&mut self.composer, &changes.composer),
+            (&mut self.arranger, &changes.arranger),
+            (&mut self.genre, &changes.genre),
+        ] {
+            if let Some(v) = theirs {
+                *mine = Some(v.trim().to_owned());
+            }
+        }
+        if changes.target.is_some() {
+            self.target = changes.target;
+        }
+    }
+}
+
+impl PartOverrides {
+    /// Takes over every field `changes` sets.
+    pub fn merge(&mut self, changes: &PartOverrides) {
+        if let Some(ids) = &changes.instrument_ids {
+            let mut ids = ids.clone();
+            ids.dedup();
+            self.instrument_ids = Some(ids);
+        }
+        if let Some(v) = &changes.voices {
+            self.voices = Some(naming::clean_voices(v));
+        }
+        for (mine, theirs) in [(&mut self.key, &changes.key), (&mut self.label, &changes.label)] {
+            if let Some(v) = theirs {
+                *mine = Some(v.trim().to_owned());
+            }
+        }
+        if changes.skip.is_some() {
+            self.skip = changes.skip;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -382,16 +424,23 @@ pub struct StagedFile {
     pub message: Option<String>,
 }
 
-/// Typical number of staves per system (median over all detected systems).
+/// Typical number of staves per system: the most frequent count among the
+/// detected systems of pages not shown whole (ties: the larger count). The
+/// server computes the same in SQL (`routes/import.rs`, `STAVES`).
 pub fn staves_per_system(pages: &[PageLayout]) -> Option<u32> {
-    let mut staves: Vec<u32> = pages
+    let mut counts: Vec<(u32, usize)> = Vec::new();
+    for n in pages
         .iter()
         .filter(|p| !p.full_page)
         .flat_map(|p| p.regions.iter().filter(|r| r.kind == RegionKind::System).map(|r| r.staves))
         .filter(|n| *n > 0)
-        .collect();
-    staves.sort_unstable();
-    staves.get(staves.len() / 2).copied()
+    {
+        match counts.iter_mut().find(|(c, _)| *c == n) {
+            Some((_, k)) => *k += 1,
+            None => counts.push((n, 1)),
+        }
+    }
+    counts.into_iter().max_by_key(|(n, k)| (*k, *n)).map(|(n, _)| n)
 }
 
 /// State of a proposed piece or part.
@@ -457,6 +506,22 @@ impl ReviewPiece {
     /// May be committed by itself (yellow allowed, red not)?
     pub fn can_commit(&self) -> bool {
         self.state == ItemState::Pending && self.level < Level::Red
+    }
+
+    /// The first thing that keeps the piece red (for messages).
+    pub fn blocking_note(&self) -> Option<Note> {
+        let fields = [&self.number, &self.title, &self.composer, &self.arranger, &self.genre];
+        let red_field = fields.iter().find(|f| f.level == Level::Red).and_then(|f| f.note.clone());
+        let red_part = self.parts.iter().filter(|p| !p.skip && p.level == Level::Red).find_map(|p| {
+            p.instruments
+                .iter()
+                .find(|i| i.level == Level::Red)
+                .and_then(|i| i.note.clone())
+                .or_else(|| (p.key.level == Level::Red).then(|| p.key.note.clone()).flatten())
+                .or_else(|| (p.voices.level == Level::Red).then(|| p.voices.note.clone()).flatten())
+                .or_else(|| p.notes.first().cloned())
+        });
+        red_field.or(red_part).or_else(|| self.notes.first().cloned())
     }
 
     /// Where the parts go: an existing piece or a new one.
@@ -719,7 +784,7 @@ fn review_part(p: PartInput, extra_readers: &[&Group], lib: &Library) -> ReviewP
         readers,
         notes,
         level,
-        skip: p.overrides.skip,
+        skip: p.overrides.skip == Some(true),
         state: p.state,
         part_id: p.part_id,
     }
@@ -920,8 +985,54 @@ mod tests {
         assert_eq!((confirmed.level, confirmed.score.as_ref().map(|s| s.id)), (Level::Green, Some(7)));
         assert_eq!(confirmed.parts[0].readers, ["Conductors", "Tubas"]);
         let new = review(&pieces[0], &PieceOverrides { target: Some(Target::New), ..Default::default() }, &lib);
+        assert_eq!(new.suggestion.as_ref().map(|s| s.id), Some(7), "still shown");
         assert_eq!((new.level, new.effective_target()), (Level::Green, Target::New));
         assert_eq!(new.parts[0].readers, ["Tubas"]);
+    }
+
+    #[test]
+    fn changes_are_merged() {
+        let mut piece = PieceOverrides { title: Some("A".into()), ..Default::default() };
+        piece.merge(&PieceOverrides { genre: Some(" March ".into()), target: Some(Target::New), ..Default::default() });
+        assert_eq!(
+            (piece.title.as_deref(), piece.genre.as_deref(), piece.target),
+            (Some("A"), Some("March"), Some(Target::New))
+        );
+        let mut part = PartOverrides { key: Some("Bb".into()), skip: Some(true), ..Default::default() };
+        part.merge(&PartOverrides { instrument_ids: Some(vec![3, 3]), skip: Some(false), ..Default::default() });
+        assert_eq!((part.key.as_deref(), part.instrument_ids, part.skip), (Some("Bb"), Some(vec![3]), Some(false)));
+        let json =
+            serde_json::to_string(&PieceOverrides { target: Some(Target::Existing(5)), ..Default::default() }).unwrap();
+        assert_eq!(json, r#"{"target":{"existing":5}}"#);
+    }
+
+    #[test]
+    fn typical_staves() {
+        use crate::layout::Region;
+        let region = |kind, staves| Region {
+            kind,
+            y0: 0.0,
+            y1: 0.1,
+            ink_y0: 0.0,
+            ink_y1: 0.1,
+            x0: 0.0,
+            x1: 1.0,
+            staves,
+            staff_space: 0.01,
+        };
+        let page = |staves: &[u32], full_page| PageLayout {
+            width_mm: 210.0,
+            height_mm: 297.0,
+            confidence: 1.0,
+            full_page,
+            regions: std::iter::once(region(RegionKind::Header, 0))
+                .chain(staves.iter().map(|n| region(RegionKind::System, *n)))
+                .collect(),
+            corrected: false,
+        };
+        assert_eq!(staves_per_system(&[page(&[1, 1, 2], false), page(&[2, 2, 2], false), page(&[9], true)]), Some(2));
+        assert_eq!(staves_per_system(&[page(&[1, 2], false)]), Some(2), "tie: the larger");
+        assert_eq!(staves_per_system(&[page(&[], false)]), None);
     }
 
     #[test]
@@ -961,7 +1072,9 @@ mod tests {
             PartOverrides { key: Some("in B-flat".into()), voices: Some(vec!["2".into()]), ..Default::default() };
         let r = part(trumpet, file(1), &over);
         assert_eq!((r.display_name.as_str(), r.level), ("Trumpet in B♭ 2", Level::Green));
-        let two = PartOverrides { voices: Some(vec![" 1 & 2".into(), "1".into()]), ..Default::default() };
+        let mut two = PartOverrides::default();
+        two.merge(&PartOverrides { voices: Some(vec![" 1 & 2".into(), "1".into()]), ..Default::default() });
+        assert_eq!(two.voices, Some(vec!["1".to_string(), "2".to_string()]), "cleaned on merge");
         let r = part(trumpet, file(1), &two);
         assert_eq!(r.voices.values, ["1", "2"], "cleaned");
         assert_eq!((r.display_name.as_str(), r.voices.source), ("Trumpet 1 & 2", Some(Source::Librarian)));

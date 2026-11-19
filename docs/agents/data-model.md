@@ -1,4 +1,4 @@
-# Data model (SQLite, `crates/musicus-server/migrations/0001_init.sql`, `0002_part_names.sql`, `0003_system_layouts.sql`, `0004_layout_corrections.sql`, `0005_part_voices.sql`, `0006_archive_number.sql`)
+# Data model (SQLite, `crates/musicus-server/migrations/0001_init.sql`, `0002_part_names.sql`, `0003_system_layouts.sql`, `0004_layout_corrections.sql`, `0005_part_voices.sql`, `0006_archive_number.sql`, `0007_import.sql`)
 
 Times = Unix seconds (`db::now()`); dates = `YYYY-MM-DD` text; booleans = INTEGER 0/1; JSON arrays as TEXT.
 Migrations: applied at start by `sqlx::migrate!` (R-OPS-004). NEVER edit an applied migration (checksum mismatch aborts start-up); add `000N_<name>.sql`. Update this file in the same commit.
@@ -25,6 +25,10 @@ Migrations: applied at start by `sqlx::migrate!` (R-OPS-004). NEVER edit an appl
 | `part_files` | PK (`part_id`, `version`), `file_id` FK, `uploaded_at` | WITHOUT ROWID; idx file; current = MAX(version) | R-FILE-002 |
 | `group_instrument_grants` | PK (`group_id`, `instrument_id`) | WITHOUT ROWID; idx instrument | R-ACL-001 |
 | `group_score_grants` | PK (`group_id`, `score_id`) | WITHOUT ROWID; idx score | R-ACL-001 |
+| `import_batches` | `id`, `name` (selected folder), `pattern`, `language` CHECK de/en, `created_by` FK users SET NULL, `created_at`, `updated_at` | (0007) | R-LIB-016, R-LIB-017 |
+| `import_files` | `id`, `batch_id` FK cascade, `path` (below the folder), `size_bytes`, `sha256` (from the browser), `state` CHECK pending/uploaded/duplicate/failed, `file_id` FK files NULL, `message` | UNIQUE (`batch_id`, `path`); idx sha256, file_id. A staged file = `files` row without `part_files` ⇒ invisible through `/api/files` (readable_file needs a part) | R-LIB-016 |
+| `import_items` | `id`, `batch_id` FK cascade, `kind` CHECK piece/part, `piece_id` FK import_items cascade (parts), `file_id` FK import_files cascade (parts), `key` (piece: grouping key `n:…`/`t:…`; part: path), `position`, `proposal` JSON `PieceGuess`/`PartGuess`, `overrides` JSON `PieceOverrides`/`PartOverrides` default `'{}'`, `state` CHECK pending/committed, `score_id` FK scores SET NULL, `part_id` FK parts SET NULL, `created_score` 0/1, `committed_at` | idx (batch_id, kind), piece_id, file_id. Never resolved in SQL: the review resolves on read (a-import-shared) | R-LIB-017, R-LIB-019, R-LIB-021 |
+| `instrument_aliases` | `alias` PK (folded words, `parts::alias_key`), `instrument_id` FK instruments CASCADE, `created_by` FK users SET NULL, `created_at` | WITHOUT ROWID | R-LIB-020 |
 | `programmes` | `id`, `title`, `date`, `notes`, `created_at` | | R-PROG-001 |
 | `programme_items` | PK (`programme_id`, `position`), `score_id` FK cascade | WITHOUT ROWID; position = index in `IdList` | R-PROG-001 |
 | `annotation_sets` | `id`, `user_id` FK cascade, `part_id` FK cascade, `file_id` FK (file version), `name`, `programme_id` FK SET NULL, `is_default`, `created_at`, `updated_at` | UNIQUE (`user_id`, `part_id`, `name`) — case-sensitive | R-ANN-008, R-ANN-016 |
@@ -54,7 +58,7 @@ Existing `label` ⇒ custom name (blank ⇒ NULL); numeric `voice` ⇒ text; `tr
 
 ## Deletion semantics
 
-Delete score ⇒ parts ⇒ part_files, part_instruments, part_voices, annotation_sets ⇒ annotation_pages (cascade); programme_items referencing the score cascade. `files` rows and blobs remain (INV-4). Delete user ⇒ not exposed via API (only disable). Delete group ⇒ memberships and grants cascade. Delete programme ⇒ items cascade, `annotation_sets.programme_id` set NULL.
+Delete score ⇒ parts ⇒ part_files, part_instruments, part_voices, annotation_sets ⇒ annotation_pages (cascade); programme_items referencing the score cascade. `files` rows and blobs remain (INV-4). Delete user ⇒ not exposed via API (only disable). Delete group ⇒ memberships and grants cascade. Delete programme ⇒ items cascade, `annotation_sets.programme_id` set NULL. Delete import batch ⇒ its files and items cascade (pieces, parts, `files` rows and blobs stay). Delete instrument ⇒ its aliases cascade. Delete score/part ⇒ `import_items.score_id`/`part_id` set NULL (the item stays committed; undo skips it).
 
 ## Data directory
 

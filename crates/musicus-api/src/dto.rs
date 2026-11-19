@@ -438,6 +438,162 @@ pub struct PageConflict {
     pub current_revision: i64,
 }
 
+// ---------------------------------------------------------------------------
+// Mass import (librarians; F-LIB-004). Parsing and review rules: `crate::import`.
+// ---------------------------------------------------------------------------
+
+/// `POST /api/import/batches`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct NewImportBatch {
+    /// Name of the selected folder.
+    pub name: String,
+    pub pattern: String,
+    pub language: crate::import::Language,
+}
+
+/// `PUT /api/import/batches/{id}`: absent fields stay. A new pattern or
+/// language reads the file names again (changes to pieces whose grouping
+/// changes are lost; changes to parts are kept by path).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct UpdateImportBatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<crate::import::Language>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct ImportFileCounts {
+    pub total: i64,
+    pub pending: i64,
+    pub uploaded: i64,
+    pub duplicate: i64,
+    pub failed: i64,
+    /// Files the pattern does not match (not part of any piece).
+    pub unmatched: i64,
+}
+
+/// An import batch (without its rows).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ImportBatch {
+    pub id: Id,
+    pub name: String,
+    pub pattern: String,
+    pub language: crate::import::Language,
+    pub created_at: i64,
+    pub created_by: Option<String>,
+    pub files: ImportFileCounts,
+    pub pieces: i64,
+    pub committed: i64,
+}
+
+/// One file of the selected folder, as checked by the browser.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ImportFileInput {
+    /// Path below the selected folder, `/`-separated.
+    pub path: String,
+    pub size_bytes: i64,
+    /// SHA-256 of the content, lower-case hex.
+    pub sha256: String,
+}
+
+/// `POST /api/import/batches/{id}/files`: the file list (all of it, or
+/// again after an interruption).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct RegisterImportFiles {
+    pub files: Vec<ImportFileInput>,
+}
+
+/// A file the server still needs: `PUT /api/import/files/{id}/content`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ImportUpload {
+    pub id: Id,
+    pub path: String,
+}
+
+/// Answer to [`RegisterImportFiles`].
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct RegisteredImportFiles {
+    /// Files to upload (content not on the server yet).
+    pub upload: Vec<ImportUpload>,
+    pub files: ImportFileCounts,
+}
+
+/// `GET /api/import/batches/{id}`: everything the review shows.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ImportReview {
+    pub batch: ImportBatch,
+    pub pieces: Vec<crate::import::review::ReviewPiece>,
+    /// Files the pattern does not match.
+    pub unmatched: Vec<crate::import::review::StagedFile>,
+    /// Files skipped because their content is already in the library or the batch.
+    pub duplicates: Vec<crate::import::review::StagedFile>,
+}
+
+/// `PATCH /api/import/items`: changes of the librarian, merged into the
+/// stored ones (fields that are `None` stay). `reset` first drops all
+/// earlier changes of these items. Piece changes apply to piece ids, part
+/// changes to part ids (several at once = bulk edit).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct UpdateImportItems {
+    pub ids: Vec<Id>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub piece: Option<crate::import::review::PieceOverrides>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part: Option<crate::import::review::PartOverrides>,
+    #[serde(default)]
+    pub reset: bool,
+}
+
+/// `POST /api/import/batches/{id}/commit`: these pieces (each must not be
+/// red), or with `None` every green piece.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct CommitImport {
+    #[serde(default)]
+    pub piece_ids: Option<Vec<Id>>,
+}
+
+/// A piece the commit did not create, and why.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ImportItemError {
+    pub id: Id,
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct CommittedImport {
+    /// Piece items committed now.
+    pub committed: Vec<Id>,
+    pub errors: Vec<ImportItemError>,
+}
+
+/// Answer to `POST /api/import/batches/{id}/undo`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct UndoneImport {
+    /// Pieces deleted (created by the batch).
+    pub pieces: i64,
+    /// Parts deleted (incl. parts added to existing pieces).
+    pub parts: i64,
+}
+
+/// A stored instrument alias (`GET /api/import/aliases`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct InstrumentAlias {
+    /// Folded word(s) as found in file names, e.g. "klar".
+    pub alias: String,
+    pub instrument_id: Id,
+    pub instrument_name: String,
+}
+
+/// `PUT /api/import/aliases`: map a file-name word to an instrument.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct InstrumentAliasInput {
+    pub alias: String,
+    pub instrument_id: Id,
+}
+
 fn double_option<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: Deserializer<'de>,
