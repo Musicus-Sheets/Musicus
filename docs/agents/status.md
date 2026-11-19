@@ -25,6 +25,9 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | R-SEC-009, R-SEC-010 | watermark, download audit log | watermark must not create blobs (conflict with R-FILE-004) |
 | R-OPS-009 | continuous replication (Litestream) | |
 
+| F-LIB-004 (R-LIB-016, R-LIB-019, R-LIB-020, R-LIB-021) | mass import workflow | parsers and review rules exist in `musicus_api::import` (R-LIB-017, R-LIB-018 verified); staging, endpoints and UI follow |
+| R-LIB-022 | OCR / inventory list as import sources | add candidates with `Source::Ocr` / `Source::Inventory` to `PieceGuess` fields (a-import-shared) |
+
 Also not implemented (no requirement yet): user deletion, rate limiting beyond login, metrics.
 
 ## Deviations from the original design (see `background.md` §7)
