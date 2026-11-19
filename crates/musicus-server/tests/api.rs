@@ -919,6 +919,59 @@ async fn migration_0002_keeps_old_parts() {
     // Index built on start: old parts are found by their (derived) names.
     assert_eq!(s.get("/api/scores?q=clarinet", &admin).await.json::<Vec<Score>>().len(), 1);
     assert_eq!(s.get("/api/scores?q=horn%203", &admin).await.json::<Vec<Score>>().len(), 1);
+    // Migration 0006 rebuilt the score index: old titles are still found.
+    assert_eq!(s.get("/api/scores?q=old%20mar", &admin).await.json::<Vec<Score>>().len(), 1);
+    assert_eq!(score.archive_number, None);
+}
+
+#[tokio::test]
+async fn archive_numbers_are_free_text_searchable_and_not_unique() {
+    let s = Server::start().await;
+    let lib = library(&s).await;
+    let a: Score = s
+        .ok(Method::POST, "/api/scores", &lib.admin, json!({"title": "Alte Kameraden", "archive_number": " 0304 "}))
+        .await;
+    assert_eq!(a.archive_number.as_deref(), Some("0304"), "trimmed");
+    // Not unique: a second piece may carry the same number (gaps and typos in real archives).
+    let b: Score =
+        s.ok(Method::POST, "/api/scores", &lib.admin, json!({"title": "Second copy", "archive_number": "0304"})).await;
+    assert_eq!(b.archive_number.as_deref(), Some("0304"));
+    for q in ["0304", "304", "alte%200304"] {
+        assert!(s.hits(q, &lib.admin).await >= 1, "{q}");
+    }
+    assert_eq!(s.hits("304", &lib.admin).await, 2);
+    // Numbers with separators are found without them too.
+    let c: Score = s
+        .ok(
+            Method::PUT,
+            &format!("/api/scores/{}", b.id),
+            &lib.admin,
+            json!({"title": "Second copy", "archive_number": "A-12"}),
+        )
+        .await;
+    assert_eq!(c.archive_number.as_deref(), Some("A-12"));
+    assert_eq!(s.hits("A12", &lib.admin).await, 1);
+    assert_eq!(s.hits("a-12", &lib.admin).await, 1);
+    assert_eq!(s.hits("304", &lib.admin).await, 1, "the old number is gone from the index");
+    // Blank = none; too long = 400.
+    let cleared: Score = s
+        .ok(Method::PUT, &format!("/api/scores/{}", c.id), &lib.admin, json!({"title": "x", "archive_number": " "}))
+        .await;
+    assert_eq!(cleared.archive_number, None);
+    let long =
+        s.json(Method::POST, "/api/scores", &lib.admin, json!({"title": "x", "archive_number": "9".repeat(41)})).await;
+    assert_eq!(long.status, StatusCode::BAD_REQUEST);
+    // Members see the number of the pieces they can read, and find them by it.
+    s.ok::<Score>(
+        Method::PUT,
+        &format!("/api/scores/{}", lib.score),
+        &lib.admin,
+        json!({"title": "Florentiner Marsch", "composer": "Julius Fučík", "archive_number": "17"}),
+    )
+    .await;
+    let mine: Vec<Score> = s.get("/api/scores?q=17", &lib.anna).await.json();
+    assert_eq!(mine.iter().map(|s| s.archive_number.as_deref()).collect::<Vec<_>>(), [Some("17")]);
+    assert_eq!(s.hits("304", &lib.anna).await, 0, "no parts of Alte Kameraden for anna");
 }
 
 #[tokio::test]

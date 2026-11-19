@@ -143,6 +143,9 @@ input.search { width: 100%; max-width: 420px; }
 .tag { font-size: 0.75rem; padding: 0.1rem 0.5rem; border-radius: 99px; background: var(--bg);
   border: 1px solid var(--border); color: var(--muted); }
 .tag.genre { color: var(--accent); }
+.archive-number { display: inline-block; margin-right: 0.5rem; padding: 0.05rem 0.4rem; border: 1px solid var(--border);
+  border-radius: 4px; font-size: 0.8rem; font-variant-numeric: tabular-nums; color: var(--muted); vertical-align: 0.15rem; }
+select.sort { width: auto; }
 .tag.warn { color: var(--warn); }
 /* Tag entry (tag_input.rs): chips like .tag, one text input as caret */
 .field { display: flex; flex-direction: column; gap: 0.25rem; }

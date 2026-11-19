@@ -10,6 +10,7 @@ Crate `crates/musicus-api`: deps serde + postcard only, no I/O, compiles for nat
 - 409 on page save: body `PageConflict {current_revision}` (not ApiError).
 - Whole-list replacement uses `IdList {ids}` with PUT (idempotent).
 - `UpdateUser`, `UpdateAnnotationSet`: absent fields = unchanged. `UpdateAnnotationSet.programme_id: Option<Option<Id>>` via `double_option`: absent = unchanged, `null` = unlink, number = link (unit test `programme_link_distinguishes_absent_and_null`).
+- `ScoreInput.archive_number`: blank ⇒ None (`blank_is_none`); `Score.archive_number` (`#[serde(default)]`).
 - `Score.parts` contains only parts readable by the requester, sorted by `naming::natural_cmp` of `display_name`; `Part.file` = current `FileVersion` or None.
 - `Part {label: Option (custom name), display_name (always set: custom or derived), voices: Vec<String> (stored order, maybe empty), transposition: Option<String> (key code or legacy text)}`. `PartInput.label`/`transposition`: blank ⇒ None (`blank_is_none`); `voices` (missing/null ⇒ `[]`) is a list whose entries may be JSON strings or numbers, cleaned by `naming::clean_voices` during deserialisation (`voice_list`; test `part_input_accepts_blank_label_and_numeric_voices`). The old single `voice` field is gone (clean switch, nothing released; serde ignores it like any unknown field, a-part-voices).
 - `AnnotationSet.file_sha256/file_version` = the version the set is bound to (compare with `Part.file.version` to detect outdated sets); `pages` = saved pages with revisions.
@@ -27,6 +28,7 @@ Adding an endpoint: request/response structs here → handler in server → clie
 - `KEYS: &[Key {code, name, option}]` in selection order: Bb B♭, Eb E♭, F, C, A, D, G, E, Ab A♭, Db D♭, Gb G♭, H B♮ (option "B♮ (H)"). None = concert pitch. `key(code)`, `key_name(code)` (unknown ⇒ unchanged).
 - `parse_key(text)`: unambiguous spellings ⇒ code (mirrors migration 0002); "B" ⇒ None (B♭ in German). `normalize_key` = exact code or `parse_key` (server input).
 - `natural_cmp`: case-insensitive, digit runs by value.
+- Archive numbers (a-archive-number, R-LIB-015): `archive_key(n)` = letters/digits lower case, leading zeros of a leading number dropped ("0304"/"304" ⇒ "304", "A-12" ⇒ "a12"), for matching; `archive_search_text(n)` = forms indexed by the search ("0304 304", "A-12 A12").
 - The server computes `display_name` (it has the instrument names); the client calls `part_name` only for the live preview in forms.
 
 ## Ink format (`ink.rs`) — d-ink-format, R-ANN-005..007

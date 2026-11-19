@@ -234,6 +234,10 @@ pub struct ScoreInput {
     pub tags: Vec<String>,
     #[serde(default)]
     pub notes: Option<String>,
+    /// Number of the piece in the paper archive, free text ("0304", "A-12").
+    /// Blank = none. Not unique (a-archive-number).
+    #[serde(default, deserialize_with = "blank_is_none")]
+    pub archive_number: Option<String>,
 }
 
 /// A score with the parts the requesting user may read.
@@ -247,6 +251,9 @@ pub struct Score {
     pub genre: Option<String>,
     pub tags: Vec<String>,
     pub notes: Option<String>,
+    /// Number in the paper archive (see [`ScoreInput::archive_number`]).
+    #[serde(default)]
+    pub archive_number: Option<String>,
     pub parts: Vec<Part>,
 }
 
@@ -467,6 +474,16 @@ mod tests {
         let p: PartInput = serde_json::from_str(r#"{"instrument_ids":[]}"#).unwrap();
         assert!(p.voices.is_empty());
         assert!(serde_json::from_str::<PartInput>(r#"{"instrument_ids":[],"voices":"1"}"#).is_err(), "a list");
+    }
+
+    #[test]
+    fn score_input_trims_the_archive_number() {
+        let s: ScoreInput = serde_json::from_str(r#"{"title":"x","archive_number":" 0304 "}"#).unwrap();
+        assert_eq!(s.archive_number.as_deref(), Some("0304"));
+        let s: ScoreInput = serde_json::from_str(r#"{"title":"x","archive_number":"  "}"#).unwrap();
+        assert_eq!(s.archive_number, None);
+        let s: ScoreInput = serde_json::from_str(r#"{"title":"x"}"#).unwrap();
+        assert_eq!(s.archive_number, None);
     }
 
     #[test]

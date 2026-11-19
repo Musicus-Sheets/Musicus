@@ -130,6 +130,7 @@ await a.getByRole('heading', { name: 'Add piece' }).waitFor();
 await a.getByLabel('Title', { exact: true }).fill('Florentiner Marsch');
 await a.getByLabel('Composer').fill('Julius Fučík');
 await a.getByLabel('Genre').fill('Concert');
+await a.getByLabel('Archive number').fill(' 0304 ');
 // Tags are chips: comma / Enter finish a tag, the input moves between chips.
 // The tags of the piece (part voices use the same chip input).
 const tagField = a.locator('.field.wide .tag-input');
@@ -456,15 +457,20 @@ check(await m.getByRole('button', { name: 'Delete' }).count() === 0
   && await m.getByPlaceholder('Instrument, e.g. Trumpet').count() === 0, 'member sees the instruments read-only');
 await mnav.getByRole('link', { name: 'Library' }).click();
 
-await m.getByPlaceholder('Search title, composer, tag…').fill('fucik');
+await m.getByPlaceholder('Search title, composer, tag, number…').fill('fucik');
 await m.waitForTimeout(600);
 check(await m.getByText('Florentiner Marsch').count() === 1, 'search without diacritics finds Fučík');
-await m.getByPlaceholder('Search title, composer, tag…').fill('trumpet 2');
+await m.getByPlaceholder('Search title, composer, tag, number…').fill('trumpet 2');
 await m.waitForTimeout(600);
 check(await m.getByText('Florentiner Marsch').count() === 1, 'search finds a piece by the derived name of the own part');
-await m.getByPlaceholder('Search title, composer, tag…').fill('flute');
+await m.getByPlaceholder('Search title, composer, tag, number…').fill('flute');
 await m.waitForTimeout(600);
 check(await m.getByText('Florentiner Marsch').count() === 0, 'search ignores parts the member cannot read');
+await m.getByPlaceholder('Search title, composer, tag, number…').fill('304');
+await m.waitForTimeout(600);
+check(await m.getByText('Florentiner Marsch').count() === 1 && await m.locator('.archive-number', { hasText: 'No. 0304' }).count() === 1,
+  'the archive number is shown (trimmed) and found without its leading zero');
+await m.getByPlaceholder('Search title, composer, tag, number…').fill('');
 
 await m.getByRole('link', { name: 'Programmes' }).click();
 check(await m.getByRole('link', { name: 'New programme' }).count() === 0, 'member cannot create programmes');

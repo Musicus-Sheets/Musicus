@@ -31,6 +31,15 @@ pub struct ScoreRow {
     genre: Option<String>,
     tags: String,
     notes: Option<String>,
+    archive_number: Option<String>,
+}
+
+/// Columns of [`ScoreRow`] for `SELECT … FROM scores s`.
+#[macro_export]
+macro_rules! score_columns {
+    () => {
+        "s.id, s.title, s.subtitle, s.composer, s.arranger, s.genre, s.tags, s.notes, s.archive_number"
+    };
 }
 
 #[derive(sqlx::FromRow)]
@@ -150,6 +159,7 @@ pub async fn with_parts(app: &App, user: &AuthUser, rows: Vec<ScoreRow>) -> ApiR
             genre: r.genre,
             tags: serde_json::from_str(&r.tags).unwrap_or_default(),
             notes: r.notes,
+            archive_number: r.archive_number,
         })
         .collect())
 }
@@ -158,7 +168,9 @@ pub async fn with_parts(app: &App, user: &AuthUser, rows: Vec<ScoreRow>) -> ApiR
 /// all, members those with at least one readable part.
 pub async fn scores_by_ids(app: &App, user: &AuthUser, ids: &[Id]) -> ApiResult<Vec<Score>> {
     let rows: Vec<ScoreRow> = sqlx::query_as(concat!(
-        "SELECT s.id, s.title, s.subtitle, s.composer, s.arranger, s.genre, s.tags, s.notes FROM scores s
+        "SELECT ",
+        score_columns!(),
+        " FROM scores s
          WHERE s.id IN (SELECT value FROM json_each(?3))
            AND (?2 = 1 OR EXISTS (SELECT 1 FROM parts p WHERE p.score_id = s.id AND ",
         part_visible!(),
@@ -206,7 +218,9 @@ pub async fn list_scores(
     Query(query): Query<ScoreQuery>,
 ) -> ApiResult<Json<Vec<Score>>> {
     let rows: Vec<ScoreRow> = sqlx::query_as(concat!(
-        "SELECT s.id, s.title, s.subtitle, s.composer, s.arranger, s.genre, s.tags, s.notes FROM scores s
+        "SELECT ",
+        score_columns!(),
+        " FROM scores s
          WHERE (?3 IS NULL OR s.id IN (
                   SELECT sid FROM (
                       SELECT t.value AS term, score_fts.rowid AS sid FROM json_each(?3) t CROSS JOIN score_fts
@@ -261,7 +275,7 @@ pub async fn get_score(State(app): State<AppState>, user: AuthUser, Path(id): Pa
     scores_by_ids(&app, &user, &[id]).await?.pop().map(Json).ok_or(AppError::NotFound)
 }
 
-struct CleanScore {
+pub(crate) struct CleanScore {
     title: String,
     subtitle: Option<String>,
     composer: Option<String>,
@@ -269,9 +283,11 @@ struct CleanScore {
     genre: Option<String>,
     tags: String,
     notes: Option<String>,
+    archive_number: Option<String>,
 }
 
-fn clean_score(input: &ScoreInput) -> ApiResult<CleanScore> {
+/// Validates score details (also used by the import).
+pub(crate) fn clean_score(input: &ScoreInput) -> ApiResult<CleanScore> {
     let mut tags: Vec<String> = Vec::new();
     for tag in &input.tags {
         let tag = required("tag", tag, 40)?;
@@ -290,7 +306,31 @@ fn clean_score(input: &ScoreInput) -> ApiResult<CleanScore> {
         genre: optional("genre", input.genre.as_deref(), 60)?,
         tags: serde_json::to_string(&tags).expect("tags serialise"),
         notes: optional("notes", input.notes.as_deref(), 4000)?,
+        archive_number: optional("archive number", input.archive_number.as_deref(), 40)?,
     })
+}
+
+/// Inserts a validated score in the caller's transaction (piece editor and import).
+pub(crate) async fn insert_score(conn: &mut sqlx::SqliteConnection, s: CleanScore) -> ApiResult<Id> {
+    let search = s.archive_number.as_deref().map(naming::archive_search_text);
+    let now = now();
+    Ok(sqlx::query_scalar(
+        "INSERT INTO scores (title, subtitle, composer, arranger, genre, tags, notes, archive_number, archive_search,
+                             created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10) RETURNING id",
+    )
+    .bind(s.title)
+    .bind(s.subtitle)
+    .bind(s.composer)
+    .bind(s.arranger)
+    .bind(s.genre)
+    .bind(s.tags)
+    .bind(s.notes)
+    .bind(s.archive_number)
+    .bind(search)
+    .bind(now)
+    .fetch_one(&mut *conn)
+    .await?)
 }
 
 pub async fn create_score(
@@ -300,21 +340,9 @@ pub async fn create_score(
 ) -> ApiResult<Json<Score>> {
     user.require_librarian()?;
     let s = clean_score(&input)?;
-    let now = now();
-    let id: Id = sqlx::query_scalar(
-        "INSERT INTO scores (title, subtitle, composer, arranger, genre, tags, notes, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8) RETURNING id",
-    )
-    .bind(s.title)
-    .bind(s.subtitle)
-    .bind(s.composer)
-    .bind(s.arranger)
-    .bind(s.genre)
-    .bind(s.tags)
-    .bind(s.notes)
-    .bind(now)
-    .fetch_one(&app.db.write)
-    .await?;
+    let mut conn = app.db.write.acquire().await?;
+    let id = insert_score(&mut conn, s).await?;
+    drop(conn);
     get_score(State(app), user, Path(id)).await
 }
 
@@ -328,7 +356,7 @@ pub async fn update_score(
     let s = clean_score(&input)?;
     let done = sqlx::query(
         "UPDATE scores SET title = ?2, subtitle = ?3, composer = ?4, arranger = ?5, genre = ?6, tags = ?7,
-                           notes = ?8, updated_at = ?9 WHERE id = ?1",
+                           notes = ?8, archive_number = ?9, archive_search = ?10, updated_at = ?11 WHERE id = ?1",
     )
     .bind(id)
     .bind(s.title)
@@ -338,6 +366,8 @@ pub async fn update_score(
     .bind(s.genre)
     .bind(s.tags)
     .bind(s.notes)
+    .bind(s.archive_number.clone())
+    .bind(s.archive_number.as_deref().map(naming::archive_search_text))
     .bind(now())
     .execute(&app.db.write)
     .await?;

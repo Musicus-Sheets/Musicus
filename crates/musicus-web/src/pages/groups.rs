@@ -122,8 +122,11 @@ fn GroupEditor(
     let score_choices: Vec<Choice> = scores
         .iter()
         .map(|s| {
-            let extra =
-                [s.subtitle.as_deref(), s.arranger.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" ");
+            let extra = [s.subtitle.as_deref(), s.arranger.as_deref(), s.archive_number.as_deref()]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" ");
             Choice::new(s.id, s.title.clone(), s.composer.clone().unwrap_or_default(), &extra)
         })
         .collect();

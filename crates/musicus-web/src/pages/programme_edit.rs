@@ -116,8 +116,11 @@ fn ProgrammeEditor(id: Option<i64>) -> Element {
                     format!("{detail} · already in the programme")
                 };
             }
-            let extra =
-                [s.subtitle.as_deref(), s.arranger.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" ");
+            let extra = [s.subtitle.as_deref(), s.arranger.as_deref(), s.archive_number.as_deref()]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" ");
             Choice::new(s.id, s.title.clone(), detail, &extra)
         })
         .collect();

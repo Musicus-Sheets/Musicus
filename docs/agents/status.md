@@ -11,7 +11,7 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | Requirement(s) | Topic | Notes for implementers |
 | --- | --- | --- |
 | R-ACL-005, R-ACL-006 | grants per voice / per programme / expiry | extend `part_visible!()` (d-access); new tables + migration; per voice: join `part_voices` (indexed on `voice`, a-part-voices) |
-| R-LIB-007 | extended score metadata | migration + `ScoreInput`/`Score` + `pages/forms.rs::ScoreFields` + FTS columns if searchable |
+| R-LIB-007 | extended score metadata (the archive number is done: R-LIB-015) | migration + `ScoreInput`/`Score` + `pages/forms.rs::ScoreFields` + FTS columns if searchable (FTS5 needs drop + recreate + rebuild, see 0006) |
 | R-FILE-008 | MusicXML | new processor in `processors.rs`; `sniff_mime`; annotations need musical anchors (not page coords) — design first |
 | R-FILE-009 | GC of unreferenced blobs | must respect backup consistency (grace period), conflicts with R-FILE-004 resolved by "unreferenced only" |
 | R-READ-007, R-READ-008 | half-page turns, conductor push | half-page turns kept as a page-view option (the system view covers the need on small tablets, see R-READ-007 notes); conductor push needs server push (SSE/WebSocket) — new component, ask user |

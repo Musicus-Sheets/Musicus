@@ -22,6 +22,7 @@ pub struct ScoreDraft {
     pub genre: String,
     pub tags: Vec<String>,
     pub notes: String,
+    pub archive_number: String,
 }
 
 impl ScoreDraft {
@@ -35,6 +36,7 @@ impl ScoreDraft {
             genre: text(&s.genre),
             tags: s.tags.clone(),
             notes: text(&s.notes),
+            archive_number: text(&s.archive_number),
         }
     }
 
@@ -47,6 +49,7 @@ impl ScoreDraft {
             genre: none_if_empty(self.genre.clone()),
             tags: self.tags.clone(),
             notes: none_if_empty(self.notes.clone()),
+            archive_number: none_if_empty(self.archive_number.clone()),
         }
     }
 }
@@ -77,6 +80,9 @@ pub fn ScoreFields(draft: Signal<ScoreDraft>) -> Element {
             label { "Genre"
                 input { placeholder: "March, polka, concert…", value: "{d.genre}",
                     oninput: move |e| draft.write().genre = e.value() } }
+            label { "Archive number"
+                input { placeholder: "e.g. 0304", value: "{d.archive_number}", maxlength: 40,
+                    oninput: move |e| draft.write().archive_number = e.value() } }
             div { class: "field wide",
                 span { id: "{tags_label}", class: "field-label", "Tags" }
                 TagInput { tags: draft.map_mut(|d| &d.tags, |d| &mut d.tags), labelledby: tags_label.clone(), placeholder: "e.g. Christmas, Encore", suggestions: known }
