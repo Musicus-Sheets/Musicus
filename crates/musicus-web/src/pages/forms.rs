@@ -1,5 +1,5 @@
 //! Form pieces shared by the editing views of the library: score details,
-//! the instrument picker, the key / voice / custom name fields of a part, the editor of an existing part and the form that
+//! the instrument picker, the key / voices / custom name fields of a part, the editor of an existing part and the form that
 //! adds a part together with its PDF.
 
 use crate::{
@@ -139,31 +139,34 @@ pub fn InstrumentPicker(
 }
 
 /// Live name of a part being edited: the custom name, or the name derived
-/// from the chosen instruments, key and voice (the server's rule,
-/// `musicus_api::naming`, a-part-names).
-pub fn preview_name(instruments: &[Instrument], selected: &[i64], label: &str, key: &str, voice: &str) -> String {
+/// from the chosen instruments, key and voices (the server's rule,
+/// `musicus_api::naming`, a-part-names, a-part-voices).
+pub fn preview_name(instruments: &[Instrument], selected: &[i64], label: &str, key: &str, voices: &[String]) -> String {
     let names: Vec<&str> = instruments.iter().filter(|i| selected.contains(&i.id)).map(|i| i.name.as_str()).collect();
-    naming::part_name(Some(label), &names, Some(key), Some(voice))
+    naming::part_name(Some(label), &names, Some(key), voices)
 }
 
-/// Key, voice and custom name of a part. The key is chosen from
-/// `naming::KEYS`; an older free-text key of an existing part (`legacy`)
+/// Key, voices and custom name of a part. The voices are chips
+/// (`TagInput`, a-part-voices): comma, "&" or Enter finish one. The key is
+/// chosen from `naming::KEYS`; an older free-text key of an existing part (`legacy`)
 /// is offered as "Other: …" so saving keeps it. The custom name's
 /// placeholder shows the derived name.
 #[component]
 pub fn PartFields(
     label: Signal<String>,
-    voice: Signal<String>,
+    voices: Signal<Vec<String>>,
     transposition: Signal<String>,
     /// Derived name for the placeholder of the custom name.
     derived: String,
     #[props(default)] legacy: Option<String>,
 ) -> Element {
-    let (mut label, mut voice, mut key) = (label, voice, transposition);
+    let (mut label, mut key) = (label, transposition);
     let current = key();
+    let voices_label = use_hook(|| format!("voices-label-{}", crate::picker::unique_id()));
     // Nothing chosen yet: an example instead of "Unnamed part".
+    let none: &[&str] = &[];
     let placeholder =
-        if derived == naming::derived_name(&[], None, None) { "e.g. Solo Cornet".to_owned() } else { derived };
+        if derived == naming::derived_name(&[], None, none) { "e.g. Solo Cornet".to_owned() } else { derived };
     rsx! {
         div { class: "part-fields",
             label { class: "key", "Key"
@@ -177,8 +180,11 @@ pub fn PartFields(
                     }
                 }
             }
-            label { class: "short", "Voice"
-                input { placeholder: "e.g. 2, 1a", value: "{voice}", maxlength: 20, oninput: move |e| voice.set(e.value()) } }
+            div { class: "field voices",
+                span { id: "{voices_label}", class: "field-label", "Voices" }
+                TagInput { tags: voices, labelledby: voices_label.clone(), placeholder: "e.g. 1, 2 or Solo", noun: "voice",
+                    separators: ",&", maxlength: naming::MAX_VOICE_CHARS as u32 }
+            }
             label { class: "grow", "Custom name (optional)"
                 input { placeholder: "{placeholder}", value: "{label}", maxlength: 120, oninput: move |e| label.set(e.value()) } }
         }
@@ -208,7 +214,7 @@ pub fn pages(n: i64) -> String {
     if n == 1 { "1 page".into() } else { format!("{n} pages") }
 }
 
-/// Editor of an existing part: label, voice and key (saved with "Save
+/// Editor of an existing part: label, voices and key (saved with "Save
 /// part"), instruments (saved as soon as they change), the PDF (upload /
 /// replace, version history) and deletion.
 #[component]
@@ -221,7 +227,7 @@ pub fn PartEditor(
 ) -> Element {
     let id = part.id;
     let label = use_signal(|| part.label.clone().unwrap_or_default());
-    let voice = use_signal(|| part.voice.clone().unwrap_or_default());
+    let voices = use_signal(|| part.voices.clone());
     let transposition = use_signal(|| part.transposition.clone().unwrap_or_default());
     // A key stored before the key list existed, kept selectable.
     let legacy = part.transposition.clone().filter(|k| naming::key(k).is_none());
@@ -231,7 +237,7 @@ pub fn PartEditor(
     let mut saved = use_signal(|| PartInput {
         label: part.label.clone(),
         instrument_ids: part.instrument_ids.clone(),
-        voice: part.voice.clone(),
+        voices: part.voices.clone(),
         transposition: part.transposition.clone(),
         notes: part.notes.clone(),
     });
@@ -248,7 +254,7 @@ pub fn PartEditor(
         let input = PartInput {
             label: none_if_empty(label()),
             instrument_ids: selected(),
-            voice: none_if_empty(voice()),
+            voices: voices(),
             transposition: none_if_empty(transposition()),
             notes: saved().notes,
         };
@@ -320,15 +326,15 @@ pub fn PartEditor(
         Some(Ok(list)) => list.clone(),
         _ => Vec::new(),
     };
-    let name = preview_name(&instruments, &selected.read(), &label.read(), &transposition.read(), &voice.read());
-    let derived = preview_name(&instruments, &selected.read(), "", &transposition.read(), &voice.read());
+    let name = preview_name(&instruments, &selected.read(), &label.read(), &transposition.read(), &voices.read());
+    let derived = preview_name(&instruments, &selected.read(), "", &transposition.read(), &voices.read());
     rsx! {
         form { class: "part-editor", onsubmit: save, oninput: move |_| status.set(None),
             h3 { class: "part-title", "{name}" }
             div { class: "field-label", "Instruments (saved right away)" }
             InstrumentPicker { instruments: instruments.clone(), selected, onsave: save_instruments,
                 busy: instrument_busy(), status: instrument_status() }
-            PartFields { label, voice, transposition, derived, legacy }
+            PartFields { label, voices, transposition, derived, legacy }
             div { class: "part-file",
                 match &part.file {
                     Some(f) => rsx! {
@@ -394,7 +400,7 @@ pub enum Upload {
 #[component]
 pub fn NewPartForm(score_id: i64, instruments: Vec<Instrument>, onstate: EventHandler<(Part, Upload)>) -> Element {
     let mut label = use_signal(String::new);
-    let mut voice = use_signal(String::new);
+    let mut voices = use_signal(Vec::<String>::new);
     let mut transposition = use_signal(String::new);
     let mut selected = use_signal(Vec::<i64>::new);
     let mut file = use_signal(|| None::<dioxus::html::FileData>);
@@ -410,7 +416,7 @@ pub fn NewPartForm(score_id: i64, instruments: Vec<Instrument>, onstate: EventHa
         let input = PartInput {
             label: none_if_empty(label()),
             instrument_ids: selected(),
-            voice: none_if_empty(voice()),
+            voices: voices(),
             transposition: none_if_empty(transposition()),
             notes: None,
         };
@@ -426,7 +432,7 @@ pub fn NewPartForm(score_id: i64, instruments: Vec<Instrument>, onstate: EventHa
         error.set(None);
         let chosen = file.take();
         label.set(String::new());
-        voice.set(String::new());
+        voices.set(Vec::new());
         transposition.set(String::new());
         // Start the next part from scratch: a leftover tick would grant it to the wrong group.
         selected.set(Vec::new());
@@ -447,13 +453,13 @@ pub fn NewPartForm(score_id: i64, instruments: Vec<Instrument>, onstate: EventHa
         }
     };
     let file_name = file.read().as_ref().map(|f| f.name());
-    let name = preview_name(&instruments, &selected.read(), &label.read(), &transposition.read(), &voice.read());
-    let derived = preview_name(&instruments, &selected.read(), "", &transposition.read(), &voice.read());
+    let name = preview_name(&instruments, &selected.read(), &label.read(), &transposition.read(), &voices.read());
+    let derived = preview_name(&instruments, &selected.read(), "", &transposition.read(), &voices.read());
     rsx! {
         form { class: "new-part", onsubmit: add,
             div { class: "field-label", "Instruments" }
             InstrumentPicker { instruments: instruments.clone(), selected }
-            PartFields { label, voice, transposition, derived: derived.clone() }
+            PartFields { label, voices, transposition, derived: derived.clone() }
             p { class: "part-name-preview", "aria-live": "polite",
                 span { class: "muted", "Shown as: " }
                 strong { "{name}" }

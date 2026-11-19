@@ -1,4 +1,4 @@
-# Data model (SQLite, `crates/musicus-server/migrations/0001_init.sql`, `0002_part_names.sql`, `0003_system_layouts.sql`, `0004_layout_corrections.sql`)
+# Data model (SQLite, `crates/musicus-server/migrations/0001_init.sql`, `0002_part_names.sql`, `0003_system_layouts.sql`, `0004_layout_corrections.sql`, `0005_part_voices.sql`)
 
 Times = Unix seconds (`db::now()`); dates = `YYYY-MM-DD` text; booleans = INTEGER 0/1; JSON arrays as TEXT.
 Migrations: applied at start by `sqlx::migrate!` (R-OPS-004). NEVER edit an applied migration (checksum mismatch aborts start-up); add `000N_<name>.sql`. Update this file in the same commit.
@@ -16,8 +16,9 @@ Migrations: applied at start by `sqlx::migrate!` (R-OPS-004). NEVER edit an appl
 | `files` | `id`, `sha256` UNIQUE, `mime`, `size_bytes`, `page_count` NULL if unknown, `thumbnail_sha256` NULL, `created_at` | one row per blob (thumbnails are blobs without own row) | R-FILE-004 |
 | `scores` | `id`, `title`, `subtitle`, `composer`, `arranger`, `genre`, `tags` JSON array TEXT default `'[]'`, `notes`, `created_at`, `updated_at` | | R-LIB-001 |
 | `score_fts` | FTS5 external content (`content='scores'`), cols title, subtitle, composer, arranger, genre, tags; `tokenize='unicode61 remove_diacritics 2'` | kept in sync by triggers `scores_fts_insert/delete/update` | R-LIB-004 |
-| `parts` | `id`, `score_id` FK cascade, `label` TEXT NULL = custom name (NULL ⇒ derived name, a-part-names), `voice` TEXT NULL (free text ≤20), `transposition` TEXT NULL = key code of `musicus_api::naming::KEYS` (Bb, Eb, F, C, A, D, G, E, Ab, Db, Gb, H) or an older free-text value, `notes`, `created_at` | idx score; 0002 rebuilt `label`/`voice` with ADD/DROP/RENAME COLUMN (column order: id, score_id, transposition, notes, created_at, label, voice) | R-LIB-002, R-LIB-010, R-LIB-011 |
-| `part_fts` | FTS5 standalone, col `name` = `part_index::index_text` (shown name + derived name if custom + key code), rowid = part id; `unicode61 remove_diacritics 2` | written by the server (`part_index::reindex`) on part create/update and instrument rename; trigger `parts_fts_delete` removes rows; rebuilt on start if row count ≠ parts | R-LIB-004, R-LIB-010 |
+| `parts` | `id`, `score_id` FK cascade, `label` TEXT NULL = custom name (NULL ⇒ derived name, a-part-names), `transposition` TEXT NULL = key code of `musicus_api::naming::KEYS` (Bb, Eb, F, C, A, D, G, E, Ab, Db, Gb, H) or an older free-text value, `notes`, `created_at` | idx score; 0002 rebuilt `label`/`voice` with ADD/DROP/RENAME COLUMN; 0005 dropped `voice` (now `part_voices`); column order: id, score_id, transposition, notes, created_at, label | R-LIB-002, R-LIB-010, R-LIB-011 |
+| `part_voices` | PK (`part_id`, `position` 0-based), `voice` TEXT NOT NULL COLLATE NOCASE (≤20 chars, checked by the server), UNIQUE (`part_id`, `voice`) | WITHOUT ROWID; part FK cascade; idx `voice` (for a later grant per voice, R-ACL-005 proposed; not used by `part_visible!()` yet); written by `library::set_voices` (delete + `json_each` insert, key = position); read as `json_group_array(json_array(position, voice))` and sorted in Rust (`library::voices_from_json`) (0005, a-part-voices) | R-LIB-002, R-LIB-010 |
+| `part_fts` | FTS5 standalone, col `name` = `part_index::index_text` (shown name + derived name if custom + key code; each voice is its own token, "1 & 2" ⇒ `1`, `2`), rowid = part id; `unicode61 remove_diacritics 2` | written by the server (`part_index::reindex`) on part create/update and instrument rename; trigger `parts_fts_delete` removes rows; rebuilt on start if row count ≠ parts | R-LIB-004, R-LIB-010 |
 | `part_instruments` | PK (`instrument_id`, `part_id`) | WITHOUT ROWID; idx part; instrument FK RESTRICT (in use ⇒ 409) | R-LIB-002, R-LIB-003 |
 | `file_layouts` | `file_id` PK FK files cascade, `algorithm` (detection version), `state` CHECK done/failed, `pages` TEXT = JSON `Vec<musicus_api::layout::PageLayout>` (`[]` if failed), `updated_at` | written only by `layout::worker` (upsert); no row = pending (0003) | R-READ-010 |
 | `layout_corrections` | PK (`file_id`, `page`) 0-based, `data` TEXT = JSON `PageCorrection {full_page, bounds, kinds}`, `updated_by` FK users SET NULL, `updated_at` | WITHOUT ROWID; file FK cascade; applied on read, never touched by the worker (0004) | R-READ-016 |
@@ -47,9 +48,13 @@ Bind `?1` = user id, `?2` = `access::librarian_flag(user)`; further params start
 
 Existing `label` ⇒ custom name (blank ⇒ NULL); numeric `voice` ⇒ text; `transposition`: blank ⇒ NULL, unambiguous spellings (case-insensitive, optional `in ` prefix: bb/b♭/b-flat/b flat/bflat, eb/…/es, ab/…/as, db/…/des, gb/…/ges, f, c, a, d, g, e, h/b♮/b natural) ⇒ code; everything else (e.g. `B`, ambiguous German/English, or `Es/F`) unchanged and kept on update. Mirrors `naming::parse_key`; test `migration_0002_keeps_old_parts` (R-LIB-012).
 
+## Migration 0005 (voices)
+
+`part_voices` created; each non-blank `parts.voice` becomes the only entry (position 0, trimmed, not split: "1+2" stays one voice; nothing was released, so no conversion); `parts.voice` dropped; `part_fts` emptied so the start-up rebuild re-indexes all parts. Test `migration_0002_keeps_old_parts` runs through it (voices `["2"]`, `[]`).
+
 ## Deletion semantics
 
-Delete score ⇒ parts ⇒ part_files, part_instruments, annotation_sets ⇒ annotation_pages (cascade); programme_items referencing the score cascade. `files` rows and blobs remain (INV-4). Delete user ⇒ not exposed via API (only disable). Delete group ⇒ memberships and grants cascade. Delete programme ⇒ items cascade, `annotation_sets.programme_id` set NULL.
+Delete score ⇒ parts ⇒ part_files, part_instruments, part_voices, annotation_sets ⇒ annotation_pages (cascade); programme_items referencing the score cascade. `files` rows and blobs remain (INV-4). Delete user ⇒ not exposed via API (only disable). Delete group ⇒ memberships and grants cascade. Delete programme ⇒ items cascade, `annotation_sets.programme_id` set NULL.
 
 ## Data directory
 

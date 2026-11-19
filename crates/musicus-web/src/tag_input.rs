@@ -1,8 +1,10 @@
 //! Tag entry as chips (a-tag-input): every finished tag is an atomic chip
 //! styled like the library's tags, with a remove button; one text input
-//! sits before, between or after the chips and stands for the caret.
+//! sits before, between or after the chips and stands for the caret. The
+//! same component edits the voices of a part (a-part-voices): `noun` names
+//! the entries ("Remove voice 2") and `separators` adds "&" as separator.
 //!
-//! - A comma, Enter (never submits the form), Tab and leaving the field
+//! - A comma (or another of `separators`), Enter (never submits the form), Tab and leaving the field
 //!   turn the typed text into a chip; text is trimmed, empty text ignored,
 //!   a tag that exists already (ignoring case) is not added again but its
 //!   chip flashes.
@@ -22,9 +24,9 @@ use dioxus::html::Key;
 use dioxus::prelude::*;
 use wasm_bindgen::JsCast;
 
-/// Splits comma separated text into trimmed, non-empty tags.
-pub fn split_tags(s: &str) -> Vec<String> {
-    s.split(',').map(str::trim).filter(|t| !t.is_empty()).map(str::to_owned).collect()
+/// Splits text at any of the separator characters into trimmed, non-empty tags.
+pub fn split_tags(s: &str, separators: &str) -> Vec<String> {
+    s.split(|c| separators.contains(c)).map(str::trim).filter(|t| !t.is_empty()).map(str::to_owned).collect()
 }
 
 /// Caret of the input: (selection start, selection end, text length).
@@ -53,8 +55,19 @@ pub fn TagInput(
     /// Known tags offered while typing (a-tag-suggest).
     #[props(default)]
     suggestions: Vec<String>,
+    /// What one entry is called in the remove buttons ("Remove tag X").
+    #[props(default = "tag".to_string())]
+    noun: String,
+    /// Characters that finish an entry like a comma does.
+    #[props(default = ",".to_string())]
+    separators: String,
+    /// Maximum length of one entry while typing.
+    #[props(default)]
+    maxlength: Option<u32>,
 ) -> Element {
     let mut tags = tags;
+    // Fixed for the lifetime of the field; a signal so the closures stay `Copy`.
+    let separators = use_signal(|| separators.clone());
     let uid = use_hook(unique_id);
     let id = format!("tag-entry-{uid}");
     let mut text = use_signal(String::new);
@@ -76,7 +89,7 @@ pub fn TagInput(
     // Inserts tags at the input's place; duplicates make the existing chip flash.
     let mut add = move |words: Vec<String>| {
         let mut at = cursor.peek().min(tags.peek().len());
-        for w in words.iter().flat_map(|w| split_tags(w)) {
+        for w in words.iter().flat_map(|w| split_tags(w, &separators.peek())) {
             let existing = tags.peek().iter().find(|t| t.to_lowercase() == w.to_lowercase()).cloned();
             match existing {
                 Some(t) => {
@@ -129,13 +142,16 @@ pub fn TagInput(
     let flashes = move |t: &str| flashing.as_deref() == Some(t.to_lowercase().as_str());
     // Chips before and after the input are two keyed lists around a fixed
     // input element: adding or moving chips never moves the focused input.
+    let noun_chips = noun.clone();
     let chip = move |t: &String| {
         let (t_click, t_remove) = (t.clone(), t.clone());
+        let noun = noun_chips.clone();
         let (id_click, id_remove) = (id_for_chips.clone(), id_for_chips.clone());
         rsx! {
             Chip {
                 key: "{t.to_lowercase()}",
                 text: t.clone(),
+                noun,
                 flash: flashes(t),
                 onselect: move |_| {
                     commit();
@@ -196,6 +212,7 @@ pub fn TagInput(
                     "aria-controls": "{list_id}",
                     "aria-activedescendant": match active() { Some(i) if shown => format!("{list_id}-{i}"), _ => String::new() },
                     placeholder: if n == 0 { placeholder.clone() } else { String::new() },
+                    maxlength: maxlength.map(|m| m.to_string()),
                     value: "{text}",
                     onclick: move |e| e.stop_propagation(),
                     onblur: move |_| commit(),
@@ -203,11 +220,12 @@ pub fn TagInput(
                         open.set(true);
                         active.set(None);
                         let v = e.value();
-                        if v.contains(',') {
+                        let seps = separators.peek().clone();
+                        if v.contains(|c| seps.contains(c)) {
                             // Several characters at once with a comma: pasted (or a
                             // suggestion of the keyboard) — take all of it.
                             let pasted = v.chars().count() > text.peek().chars().count() + 1;
-                            let mut parts: Vec<String> = v.split(',').map(str::to_owned).collect();
+                            let mut parts: Vec<String> = v.split(|c| seps.contains(c)).map(str::to_owned).collect();
                             let rest = if pasted { String::new() } else { parts.pop().unwrap_or_default() };
                             add(parts);
                             text.set(rest.trim_start().to_owned());
@@ -225,7 +243,7 @@ pub fn TagInput(
                         let n = tags.peek().len();
                         let pos = cursor.peek().min(n);
                         match e.key() {
-                            Key::Character(c) if c == "," => {
+                            Key::Character(c) if c.chars().count() == 1 && separators.peek().contains(c.as_str()) => {
                                 e.prevent_default();
                                 commit();
                             }
@@ -282,7 +300,7 @@ pub fn TagInput(
 
 /// One finished tag: not editable; a click selects the place after it.
 #[component]
-fn Chip(text: String, flash: bool, onselect: EventHandler<()>, onremove: EventHandler<()>) -> Element {
+fn Chip(text: String, noun: String, flash: bool, onselect: EventHandler<()>, onremove: EventHandler<()>) -> Element {
     rsx! {
         span {
             class: if flash { "tag tag-chip flash" } else { "tag tag-chip" },
@@ -294,8 +312,8 @@ fn Chip(text: String, flash: bool, onselect: EventHandler<()>, onremove: EventHa
             button {
                 r#type: "button",
                 class: "tag-remove",
-                title: "Remove tag {text}",
-                "aria-label": "Remove tag {text}",
+                title: "Remove {noun} {text}",
+                "aria-label": "Remove {noun} {text}",
                 onclick: move |e| {
                     e.stop_propagation();
                     onremove.call(());

@@ -253,14 +253,17 @@ pub struct Score {
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct PartInput {
     /// Custom name, e.g. "Solo Cornet". Empty or missing: the name is
-    /// derived from instruments, key and voice (`naming::part_name`).
+    /// derived from instruments, key and voices (`naming::part_name`).
     #[serde(default, deserialize_with = "blank_is_none")]
     pub label: Option<String>,
     pub instrument_ids: Vec<Id>,
-    /// Voice / chair, free text: "2" for "2nd Trumpet", also "1a", "Solo".
-    /// A JSON number is accepted too.
-    #[serde(default, deserialize_with = "text_or_number")]
-    pub voice: Option<String>,
+    /// Voices / chairs the part contains, in order, each free text: `["2"]`
+    /// for "2nd Trumpet", `["1", "2"]` for "Trumpet 1 & 2", also "1a",
+    /// "Solo". A JSON number is accepted per entry. Cleaned on input with
+    /// `naming::clean_voices` (trimmed, split at "&", empty entries and
+    /// duplicates ignoring case dropped, order kept).
+    #[serde(default, deserialize_with = "voice_list")]
+    pub voices: Vec<String>,
     /// Key of a transposing instrument: a code of `naming::KEYS` ("Bb",
     /// "Eb", "F", …); common spellings ("B-flat", "in Es") are normalised.
     /// `None` = concert pitch.
@@ -279,7 +282,8 @@ pub struct Part {
     /// The name to show everywhere: `label` or the derived name.
     pub display_name: String,
     pub instrument_ids: Vec<Id>,
-    pub voice: Option<String>,
+    /// Voices in their stored order (table `part_voices`), possibly empty.
+    pub voices: Vec<String>,
     /// Key code (see `naming::KEYS`); older data may hold other text.
     pub transposition: Option<String>,
     pub notes: Option<String>,
@@ -292,19 +296,23 @@ fn blank_is_none<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::E
     Ok(v.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()))
 }
 
-fn text_or_number<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+fn voice_list<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> {
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum TextOrNumber {
         Text(String),
         Number(i64),
     }
-    let v: Option<TextOrNumber> = Option::deserialize(d)?;
-    Ok(match v {
-        Some(TextOrNumber::Text(s)) => Some(s.trim().to_owned()).filter(|s| !s.is_empty()),
-        Some(TextOrNumber::Number(n)) => Some(n.to_string()),
-        None => None,
-    })
+    let v: Option<Vec<TextOrNumber>> = Option::deserialize(d)?;
+    let raw: Vec<String> = v
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| match e {
+            TextOrNumber::Text(s) => s,
+            TextOrNumber::Number(n) => n.to_string(),
+        })
+        .collect();
+    Ok(crate::naming::clean_voices(&raw))
 }
 
 /// One uploaded file version of a part. Files are immutable and addressed
@@ -447,12 +455,18 @@ mod tests {
     }
 
     #[test]
-    fn part_input_accepts_blank_label_and_numeric_voice() {
+    fn part_input_accepts_blank_label_and_numeric_voices() {
         let p: PartInput =
-            serde_json::from_str(r#"{"label":"  ","instrument_ids":[1],"voice":2,"transposition":""}"#).unwrap();
-        assert_eq!((p.label, p.voice, p.transposition), (None, Some("2".into()), None));
-        let p: PartInput = serde_json::from_str(r#"{"instrument_ids":[],"voice":" 1a "}"#).unwrap();
-        assert_eq!((p.label, p.voice), (None, Some("1a".into())));
+            serde_json::from_str(r#"{"label":"  ","instrument_ids":[1],"voices":[2],"transposition":""}"#).unwrap();
+        assert_eq!((p.label, p.voices, p.transposition), (None, vec!["2".to_owned()], None));
+        let p: PartInput =
+            serde_json::from_str(r#"{"instrument_ids":[],"voices":[" 1a ", 2, "", "1A", "2"]}"#).unwrap();
+        assert_eq!((p.label, p.voices), (None, vec!["1a".to_owned(), "2".to_owned()]));
+        let p: PartInput = serde_json::from_str(r#"{"instrument_ids":[],"voices":null}"#).unwrap();
+        assert!(p.voices.is_empty());
+        let p: PartInput = serde_json::from_str(r#"{"instrument_ids":[]}"#).unwrap();
+        assert!(p.voices.is_empty());
+        assert!(serde_json::from_str::<PartInput>(r#"{"instrument_ids":[],"voices":"1"}"#).is_err(), "a list");
     }
 
     #[test]

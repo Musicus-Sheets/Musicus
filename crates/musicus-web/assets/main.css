@@ -249,6 +249,10 @@ input.picker-search { margin: 0.6rem 0.6rem 0.3rem; width: auto; }
 .part-fields label.grow { flex: 1 1 14rem; }
 .part-fields label.short { width: 7rem; }
 .part-fields label.key { width: 12rem; }
+.part-fields .field.voices { flex: 0 1 14rem; min-width: 9rem; }
+.part-fields .field.voices .field-label { margin-top: 0; }
+/* Short voices: keep typing on the same line as the chips. */
+.part-fields .field.voices .tag-entry-wrap.end { flex-basis: 3rem; }
 .part-fields label select { width: 100%; }
 h3.part-title { margin: 0; font-size: 1.05rem; }
 .part-name-preview { margin: 0; }

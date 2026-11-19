@@ -38,7 +38,7 @@ struct PartRow {
     id: Id,
     score_id: Id,
     label: Option<String>,
-    voice: Option<String>,
+    voices: String,
     transposition: Option<String>,
     notes: Option<String>,
     instruments: String,
@@ -70,20 +70,27 @@ impl From<PartRow> for Part {
         instrument_ids.sort_unstable();
         let names: Vec<String> = serde_json::from_str(&r.instrument_names).unwrap_or_default();
         let names: Vec<&str> = names.iter().map(String::as_str).collect();
-        let display_name =
-            naming::part_name(r.label.as_deref(), &names, r.transposition.as_deref(), r.voice.as_deref());
+        let voices = voices_from_json(&r.voices);
+        let display_name = naming::part_name(r.label.as_deref(), &names, r.transposition.as_deref(), &voices);
         Part {
             id: r.id,
             score_id: r.score_id,
             label: r.label,
             display_name,
             instrument_ids,
-            voice: r.voice,
+            voices,
             transposition: r.transposition,
             notes: r.notes,
             file,
         }
     }
+}
+
+/// Voices from `VOICES_JSON` (`[[position, voice], …]`) in stored order.
+pub fn voices_from_json(json: &str) -> Vec<String> {
+    let mut v: Vec<(i64, String)> = serde_json::from_str(json).unwrap_or_default();
+    v.sort_by_key(|(position, _)| *position);
+    v.into_iter().map(|(_, voice)| voice).collect()
 }
 
 /// Parts the user may read, restricted to some scores or to one part.
@@ -94,7 +101,8 @@ pub async fn visible_parts(
     part_id: Option<Id>,
 ) -> ApiResult<Vec<Part>> {
     let rows: Vec<PartRow> = sqlx::query_as(concat!(
-        "SELECT p.id, p.score_id, p.label, p.voice, p.transposition, p.notes,
+        "SELECT p.id, p.score_id, p.label, p.transposition, p.notes,
+                (SELECT json_group_array(json_array(position, voice)) FROM part_voices WHERE part_id = p.id) AS voices,
                 (SELECT json_group_array(instrument_id) FROM part_instruments WHERE part_id = p.id) AS instruments,
                 (SELECT json_group_array(i.name) FROM part_instruments pi JOIN instruments i ON i.id = pi.instrument_id
                  WHERE pi.part_id = p.id) AS instrument_names,
@@ -352,7 +360,8 @@ pub async fn delete_score(State(app): State<AppState>, user: AuthUser, Path(id):
 
 struct CleanPart {
     label: Option<String>,
-    voice: Option<String>,
+    /// JSON array of the cleaned voices, in order.
+    voices: String,
     transposition: Option<String>,
     notes: Option<String>,
     instruments: String,
@@ -376,9 +385,19 @@ fn clean_part(input: &PartInput, stored_key: Option<&str>) -> ApiResult<CleanPar
             }
         },
     };
+    let voices = naming::clean_voices(&input.voices);
+    if voices.len() > naming::MAX_VOICES {
+        return Err(AppError::BadRequest(format!("at most {} voices per part", naming::MAX_VOICES)));
+    }
+    if let Some(v) = voices.iter().find(|v| v.chars().count() > naming::MAX_VOICE_CHARS) {
+        return Err(AppError::BadRequest(format!(
+            "voice \"{v}\" is longer than {} characters",
+            naming::MAX_VOICE_CHARS
+        )));
+    }
     Ok(CleanPart {
         label: optional("label", input.label.as_deref(), 120)?,
-        voice: optional("voice", input.voice.as_deref(), 20)?,
+        voices: serde_json::to_string(&voices).expect("voices serialise"),
         transposition,
         notes: optional("notes", input.notes.as_deref(), 2000)?,
         instruments: json_ids(&input.instrument_ids),
@@ -408,11 +427,10 @@ pub async fn create_part(
         return Err(AppError::NotFound);
     }
     let id: Id = sqlx::query_scalar(
-        "INSERT INTO parts (score_id, label, voice, transposition, notes, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6) RETURNING id",
+        "INSERT INTO parts (score_id, label, transposition, notes, created_at) VALUES (?1, ?2, ?3, ?4, ?5) RETURNING id",
     )
     .bind(score_id)
     .bind(p.label)
-    .bind(p.voice)
     .bind(p.transposition)
     .bind(p.notes)
     .bind(now())
@@ -423,9 +441,21 @@ pub async fn create_part(
         .bind(p.instruments)
         .execute(&mut *tx)
         .await?;
+    set_voices(&mut tx, id, &p.voices).await?;
     part_index::reindex(&mut tx, Some(&[id])).await?;
     tx.commit().await?;
     one_part(&app, &user, id).await
+}
+
+/// Replaces the voices of a part by a JSON array, keeping its order.
+pub async fn set_voices(conn: &mut sqlx::SqliteConnection, part_id: Id, voices_json: &str) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM part_voices WHERE part_id = ?1").bind(part_id).execute(&mut *conn).await?;
+    sqlx::query("INSERT INTO part_voices (part_id, position, voice) SELECT ?1, key, value FROM json_each(?2)")
+        .bind(part_id)
+        .bind(voices_json)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
 }
 
 pub async fn update_part(
@@ -440,10 +470,9 @@ pub async fn update_part(
         sqlx::query_scalar("SELECT transposition FROM parts WHERE id = ?1").bind(id).fetch_optional(&mut *tx).await?;
     let Some(stored_key) = stored else { return Err(AppError::NotFound) };
     let p = clean_part(&input, stored_key.as_deref())?;
-    let done = sqlx::query("UPDATE parts SET label = ?2, voice = ?3, transposition = ?4, notes = ?5 WHERE id = ?1")
+    let done = sqlx::query("UPDATE parts SET label = ?2, transposition = ?3, notes = ?4 WHERE id = ?1")
         .bind(id)
         .bind(p.label)
-        .bind(p.voice)
         .bind(p.transposition)
         .bind(p.notes)
         .execute(&mut *tx)
@@ -457,6 +486,7 @@ pub async fn update_part(
         .bind(p.instruments)
         .execute(&mut *tx)
         .await?;
+    set_voices(&mut tx, id, &p.voices).await?;
     part_index::reindex(&mut tx, Some(&[id])).await?;
     tx.commit().await?;
     one_part(&app, &user, id).await
