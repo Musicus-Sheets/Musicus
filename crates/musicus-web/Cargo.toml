@@ -13,6 +13,7 @@ gloo-net = { version = "0.6", default-features = false, features = ["http", "jso
 gloo-timers = { version = "0.3", features = ["futures"] }
 js-sys = "0.3"
 musicus-api.workspace = true
+musicus-i18n = { workspace = true, features = ["bundles"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.11"

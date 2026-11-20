@@ -17,7 +17,7 @@ use axum::{
     http::StatusCode,
 };
 use musicus_api::{ErrorCode, Field};
-use musicus_api::{FileVersion, Id, Part, PartInput, Score, ScoreInput, naming};
+use musicus_api::{FileVersion, Id, NamedRef, Part, PartInput, Score, ScoreInput, naming};
 use serde::Deserialize;
 use std::collections::HashMap;
 use tokio::io::AsyncReadExt;
@@ -52,6 +52,7 @@ struct PartRow {
     transposition: Option<String>,
     notes: Option<String>,
     instruments: String,
+    /// `[[id, name], …]`.
     instrument_names: String,
     version: Option<i64>,
     sha256: Option<String>,
@@ -78,16 +79,19 @@ impl From<PartRow> for Part {
         };
         let mut instrument_ids: Vec<Id> = serde_json::from_str(&r.instruments).unwrap_or_default();
         instrument_ids.sort_unstable();
-        let names: Vec<String> = serde_json::from_str(&r.instrument_names).unwrap_or_default();
-        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut instruments: Vec<NamedRef> = serde_json::from_str::<Vec<(Id, String)>>(&r.instrument_names)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(id, name)| NamedRef { id, name })
+            .collect();
+        instruments.sort_by_key(|i| i.id);
         let voices = voices_from_json(&r.voices);
-        let display_name = naming::part_name(r.label.as_deref(), &names, r.transposition.as_deref(), &voices);
         Part {
             id: r.id,
             score_id: r.score_id,
             label: r.label,
-            display_name,
             instrument_ids,
+            instruments,
             voices,
             transposition: r.transposition,
             notes: r.notes,
@@ -114,8 +118,8 @@ pub async fn visible_parts(
         "SELECT p.id, p.score_id, p.label, p.transposition, p.notes,
                 (SELECT json_group_array(json_array(position, voice)) FROM part_voices WHERE part_id = p.id) AS voices,
                 (SELECT json_group_array(instrument_id) FROM part_instruments WHERE part_id = p.id) AS instruments,
-                (SELECT json_group_array(i.name) FROM part_instruments pi JOIN instruments i ON i.id = pi.instrument_id
-                 WHERE pi.part_id = p.id) AS instrument_names,
+                (SELECT json_group_array(json_array(i.id, i.name)) FROM part_instruments pi
+                 JOIN instruments i ON i.id = pi.instrument_id WHERE pi.part_id = p.id) AS instrument_names,
                 pf.version, f.sha256, f.mime, f.size_bytes, f.page_count,
                 f.thumbnail_sha256 IS NOT NULL AS has_thumbnail, pf.uploaded_at
          FROM parts p
@@ -133,12 +137,9 @@ pub async fn visible_parts(
     .bind(part_id)
     .fetch_all(&app.db.read)
     .await?;
-    let mut parts: Vec<Part> = rows.into_iter().map(Part::from).collect();
-    // Within a score by shown name, numbers by value ("Trumpet in B♭ 2" before "… 10").
-    parts.sort_by(|a, b| {
-        a.score_id.cmp(&b.score_id).then_with(|| naming::natural_cmp(&a.display_name, &b.display_name))
-    });
-    Ok(parts)
+    // Stable order (score, id); the client sorts by the name it composes
+    // in its language (a-client-part-names).
+    Ok(rows.into_iter().map(Part::from).collect())
 }
 
 /// Attaches the user's visible parts to score rows.
@@ -189,14 +190,22 @@ pub async fn scores_by_ids(app: &App, user: &AuthUser, ids: &[Id]) -> ApiResult<
 
 /// Turns user input into FTS5 prefix queries, one per word, as a JSON
 /// array (bound as one parameter, expanded with `json_each`). Every word
-/// must match the score's metadata or the shown name of one of the user's
-/// parts of it.
+/// must match the score's metadata or one of the user's parts of it
+/// (components and key spellings, `part_index`). Connecting words of part
+/// names in any shipped language ("in") are dropped, unless the query has
+/// nothing else (R-I18N-007).
 fn fts_terms(q: &str) -> Option<String> {
+    let words: Vec<String> = q
+        .split_whitespace()
+        .take(10)
+        .map(|w| w.chars().filter(|c| c.is_alphanumeric()).collect::<String>())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let only_connectors = words.iter().all(|w| musicus_i18n::is_name_connector(w));
     let mut terms: Vec<String> = Vec::new();
-    for w in q.split_whitespace().take(10) {
-        let w: String = w.chars().filter(|c| c.is_alphanumeric()).collect();
+    for w in words.iter().filter(|w| only_connectors || !musicus_i18n::is_name_connector(w)) {
         let term = format!("\"{w}\"*");
-        if !w.is_empty() && !terms.contains(&term) {
+        if !terms.contains(&term) {
             terms.push(term);
         }
     }
@@ -691,5 +700,7 @@ mod tests {
         assert_eq!(fts_terms("\" OR NEAR( or"), Some(r#"["\"OR\"*","\"NEAR\"*","\"or\"*"]"#.into()));
         assert_eq!(fts_terms("march march"), Some(r#"["\"march\"*"]"#.into()));
         assert_eq!(fts_terms("  ()  "), None);
+        assert_eq!(fts_terms("Clarinet in B♭ 2"), Some(r#"["\"Clarinet\"*","\"B\"*","\"2\"*"]"#.into()));
+        assert_eq!(fts_terms("in"), Some(r#"["\"in\"*"]"#.into()), "only connectors: kept");
     }
 }

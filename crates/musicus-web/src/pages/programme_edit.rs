@@ -9,6 +9,7 @@ use crate::{
 use dioxus::prelude::*;
 use gloo_net::http::Method;
 use musicus_api::{IdList, Programme, ProgrammeInput, Score};
+use musicus_i18n::t;
 
 #[component]
 pub fn NewProgramme() -> Element {
@@ -89,7 +90,7 @@ fn ProgrammeEditor(id: Option<i64>) -> Element {
     };
     let delete = move |_| async move {
         let Some(pid) = id else { return };
-        if !confirm("Delete this programme? The pieces stay in the library.") {
+        if !confirm(&t::programmes_delete_confirm()) {
             return;
         }
         match api::call(Method::DELETE, &format!("/api/programmes/{pid}")).await {
@@ -131,48 +132,48 @@ fn ProgrammeEditor(id: Option<i64>) -> Element {
     };
     rsx! {
         main { class: "medium",
-            div { class: "crumbs", Link { to: Route::Programmes {}, "‹ Programmes" } }
+            div { class: "crumbs", Link { to: Route::Programmes {}, {t::programmes_crumb()} } }
             match &*programme.read() {
                 None => rsx! { Loading {} },
                 Some(Err(e)) => rsx! { ErrorBox { message: e.message.clone() } },
                 Some(Ok(_)) => rsx! {
-                    h1 { if id.is_some() { "Edit programme" } else { "New programme" } }
+                    h1 { if id.is_some() { {t::programmes_edit_title()} } else { {t::programmes_new()} } }
                     if let Some(e) = error() { ErrorBox { message: e } }
                     form { onsubmit: save,
                         section { class: "card",
-                            h2 { "Concert" }
+                            h2 { {t::programmes_concert()} }
                             div { class: "grid",
-                                label { "Title"
-                                    input { required: true, placeholder: "e.g. Christmas Concert 2026", value: "{title}",
+                                label { {t::programmes_field_title()}
+                                    input { required: true, placeholder: t::programmes_title_placeholder(), value: "{title}",
                                         oninput: move |e| title.set(e.value()) } }
-                                label { "Date" input { r#type: "date", value: "{date}", oninput: move |e| date.set(e.value()) } }
-                                label { class: "wide", "Notes for the musicians"
-                                    textarea { rows: 2, placeholder: "e.g. Meet at 18:30 for the sound check.", value: "{notes}",
+                                label { {t::programmes_field_date()} input { r#type: "date", value: "{date}", oninput: move |e| date.set(e.value()) } }
+                                label { class: "wide", {t::programmes_field_notes()}
+                                    textarea { rows: 2, placeholder: t::programmes_notes_placeholder(), value: "{notes}",
                                         oninput: move |e| notes.set(e.value()) } }
                             }
                         }
                         section { class: "card",
-                            h2 { "Pieces in concert order" }
-                            if count == 0 { p { class: "muted", "No pieces yet. Add them with “+ Add pieces”, then put them in playing order with ↑ ↓." } }
+                            h2 { {t::programmes_pieces()} }
+                            if count == 0 { p { class: "muted", {t::programmes_pieces_none()} } }
                             ol { class: "items",
                                 for (index, (score_id, name)) in items.read().iter().cloned().enumerate() {
                                     li { key: "{index}-{score_id}",
                                         span { class: "position", "{index + 1}" }
                                         span { class: "grow", "{name}" }
-                                        button { r#type: "button", class: "icon-button", disabled: index == 0, title: "Move up",
-                                            "aria-label": "Move up", onclick: move |_| items.write().swap(index, index - 1), "↑" }
-                                        button { r#type: "button", class: "icon-button", disabled: index + 1 == count, title: "Move down",
-                                            "aria-label": "Move down", onclick: move |_| items.write().swap(index, index + 1), "↓" }
-                                        button { r#type: "button", class: "icon-button danger", title: "Remove",
-                                            "aria-label": "Remove", onclick: move |_| { items.write().remove(index); }, "×" }
+                                        button { r#type: "button", class: "icon-button", disabled: index == 0, title: t::programmes_move_up(),
+                                            "aria-label": t::programmes_move_up(), onclick: move |_| items.write().swap(index, index - 1), "↑" }
+                                        button { r#type: "button", class: "icon-button", disabled: index + 1 == count, title: t::programmes_move_down(),
+                                            "aria-label": t::programmes_move_down(), onclick: move |_| items.write().swap(index, index + 1), "↓" }
+                                        button { r#type: "button", class: "icon-button danger", title: t::programmes_remove(),
+                                            "aria-label": t::programmes_remove(), onclick: move |_| { items.write().remove(index); }, "×" }
                                     }
                                 }
                             }
                             Picker {
                                 options: piece_choices,
-                                label: "+ Add pieces",
-                                placeholder: "Search title or composer…",
-                                none_left: "The library has no pieces yet.",
+                                label: t::programmes_add_pieces(),
+                                placeholder: t::common_search_pieces(),
+                                none_left: t::programmes_library_empty(),
                                 onapply: move |chosen: Vec<i64>| {
                                     let mut list = items.write();
                                     for sid in chosen {
@@ -182,21 +183,20 @@ fn ProgrammeEditor(id: Option<i64>) -> Element {
                                     }
                                 },
                             }
-                            p { class: "muted small", "Tick several pieces at once; they are added in the order you tick them. "
-                                "A piece may appear more than once, e.g. as an encore." }
+                            p { class: "muted small", {t::programmes_add_hint()} }
                         }
                         div { class: "actions",
-                            Link { class: "button", to: back, "Cancel" }
+                            Link { class: "button", to: back, {t::common_cancel()} }
                             span { class: "grow" }
                             button { class: "primary", r#type: "submit", disabled: saving(),
-                                if id.is_some() { "Save programme" } else { "Create programme" } }
+                                if id.is_some() { {t::programmes_save()} } else { {t::programmes_create()} } }
                         }
                     }
                     if id.is_some() {
                         section { class: "card danger-zone",
-                            h2 { "Delete programme" }
-                            p { class: "muted small", "Removes only the concert; the pieces stay in the library." }
-                            button { class: "danger", onclick: delete, "Delete programme" }
+                            h2 { {t::programmes_delete()} }
+                            p { class: "muted small", {t::programmes_delete_text()} }
+                            button { class: "danger", onclick: delete, {t::programmes_delete()} }
                         }
                     }
                 },

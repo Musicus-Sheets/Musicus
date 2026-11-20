@@ -299,9 +299,12 @@ pub struct Part {
     pub score_id: Id,
     /// Custom name, `None` when the name is derived.
     pub label: Option<String>,
-    /// The name to show everywhere: `label` or the derived name.
-    pub display_name: String,
+    /// Sorted ids of the instruments (same as in `instruments`).
     pub instrument_ids: Vec<Id>,
+    /// The instruments with their names as entered, for the derived name the
+    /// client composes in its language (`naming::part_name`,
+    /// a-client-part-names). The server sends no composed name.
+    pub instruments: Vec<NamedRef>,
     /// Voices in their stored order (table `part_voices`), possibly empty.
     pub voices: Vec<String>,
     /// Key code (see `naming::KEYS`); older data may hold other text.
@@ -333,6 +336,13 @@ fn voice_list<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<String>, D::Error> 
         })
         .collect();
     Ok(crate::naming::clean_voices(&raw))
+}
+
+/// An entry referenced by id, with its name as entered.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct NamedRef {
+    pub id: Id,
+    pub name: String,
 }
 
 /// One uploaded file version of a part. Files are immutable and addressed
@@ -401,7 +411,9 @@ pub struct AnnotationSet {
     /// The file version the annotations were drawn on.
     pub file_sha256: String,
     pub file_version: i64,
-    pub name: String,
+    /// `None`: the set the reader created without asking (shown as "My
+    /// annotations" in the UI language, a-client-part-names).
+    pub name: Option<String>,
     pub programme_id: Option<Id>,
     pub is_default: bool,
     pub created_at: i64,
@@ -419,7 +431,9 @@ pub struct PageRevision {
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct NewAnnotationSet {
-    pub name: String,
+    /// Blank or missing: an unnamed set (at most one per user and part).
+    #[serde(default, deserialize_with = "blank_is_none")]
+    pub name: Option<String>,
     #[serde(default)]
     pub programme_id: Option<Id>,
     /// Duplicate the pages of this set (same user and part) into the new one.

@@ -1,0 +1,17 @@
+name: UI literals
+# No literal UI text in the web client: every text comes from the catalogue
+# (R-I18N-010, d-i18n-fluent). Runs on pull requests, the merge queue and main.
+# Make it a merge gate by marking the job "literals" as a required status check.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+  push:
+    branches: [main]
+jobs:
+  literals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for literal UI text
+        run: python3 scripts/check-ui-literals.py

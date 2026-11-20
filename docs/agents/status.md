@@ -27,6 +27,7 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 
 | F-LIB-004 phase 2 | mass import extensions | pattern per subfolder (archives mixing structures; today: several batches), ZIP upload, server-side paging of the review for very large batches, CSV inventory and OCR sources (R-LIB-022) |
 | R-LIB-022 | OCR / inventory list as import sources | add candidates with `Source::Ocr` / `Source::Inventory` to `PieceGuess` fields (a-import-shared) |
+| F-I18N-001 (R-I18N-001…010) | languages | phases (`docs/technical/chapters/13-i18n.typ`): 0 decisions/requirements/glossary done; 1 catalogue crate + `locale`; 2 errors as codes (separate branch); 3 part names in the client; 4 all client strings in the catalogue; 5 sorting in the browser; German catalogue, guide per language (R-I18N-009), Weblate later |
 
 Also not implemented (no requirement yet): user deletion, rate limiting beyond login, metrics.
 
@@ -59,12 +60,12 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 
 ## Known debt / quirks
 
+- i18n: only English is shipped (`locales/en`); the German catalogue is a later branch. The pseudo-locale run (`e2e/pseudo.mjs`) covers 13 pages without the reader with a file, the import review and the system editor (those are covered only by the lint). Button overflow with long translations is only reported, not failed.
+
 - `annotation_sets` name uniqueness is case-sensitive (SQLite UNIQUE without NOCASE) while users/groups/instruments are case-insensitive.
 - `LoginLimiter` is in-memory: resets on restart, per process.
 - i18n (F-I18N-001): errors, import notes, pattern/ink errors and staged-file problems are codes rendered by the client
-  (`errors.rs`, a-error-codes) but only in English so far; the catalogue, browser-language selection and client-side part
-  names are not done (server still computes `Part.display_name` and the default set name is stored by the client in English).
-  Some client texts are coarser than the codes (`correction_bounds_*`, `if_match_*`, the damaged-ink cases share one text).
+  (`errors.rs` with `errors.ftl`, a-error-codes). Some client texts are coarser than the codes (`correction_bounds_*`, `if_match_*`, the damaged-ink cases share one text).
 - Pages whose PDF page count is unknown accept annotation pages 0..1999.
 - Client uses `window.prompt`/`confirm` for dialogs (no custom modal).
 - Tag entry: the input is moved between chips only with an empty input (←/→/Home/End) or by clicking a chip; clicking between two chips (not on one) puts it at the end. Keystrokes typed in the very frame after a move could go to the old focus (refocus waits for `requestAnimationFrame`).

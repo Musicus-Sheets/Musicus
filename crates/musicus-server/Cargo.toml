@@ -17,6 +17,7 @@ getrandom = "0.3"
 hayro = "0.8"
 hex = "0.4"
 musicus-api.workspace = true
+musicus-i18n.workspace = true
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 serde.workspace = true
 serde_json.workspace = true
@@ -31,5 +32,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 zstd = "0.13"
 
 [dev-dependencies]
+# Composes the English part names in the API tests (the server itself sends none).
+musicus-i18n = { workspace = true, features = ["bundles"] }
 http-body-util = "0.1"
 tempfile = "3"

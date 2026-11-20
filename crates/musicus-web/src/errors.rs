@@ -1,14 +1,16 @@
 //! The one place that turns error codes and import notes into text
 //! (a-error-codes, R-I18N-004). The server sends codes with arguments, never
 //! sentences; every match here is exhaustive, so a new code, note or pattern
-//! error does not compile until it has a text. English for now: each arm is
-//! one message, to be replaced by a catalogue lookup (`error-<code>`) later.
+//! error does not compile until it has a message. The messages are in the
+//! catalogue (`locales/en/errors.ftl`: `error-<code>`, `error-field-<field>`,
+//! `note-<kind>`, `error-pattern-*`, `error-ink-*`; d-i18n-fluent).
 
 use musicus_api::{
     ApiError, ErrorCode, Field,
     import::{Note, pattern::PatternError},
     ink::{InkError, InkLimit, MAX_ENCODED_BYTES},
 };
+use musicus_i18n::t;
 
 /// Text of a failed request: the code's text, or the server's English
 /// `message` for a code this build does not know (newer server).
@@ -26,104 +28,97 @@ pub fn unknown_error_text(message: &str) -> String {
 }
 
 pub fn network_text(detail: &str) -> String {
-    format!("Network error: {detail}")
+    t::error_network(detail)
 }
 
 pub fn http_failed_text(status: u16) -> String {
-    format!("Request failed (HTTP {status})")
+    t::error_http_failed(status as u32)
 }
 
 /// The sentence for an error code (also used for a staged file's problem).
 pub fn code_text(code: &ErrorCode) -> String {
     use ErrorCode::*;
     match code {
-        NotFound => "Not found".into(),
-        Unauthorized => "Please log in".into(),
-        Internal => "Something went wrong on the server. Please try again later".into(),
-        PayloadTooLarge { max_bytes } => format!("The file is too large (at most {})", size_text(*max_bytes)),
-        TooManyAttempts { minutes } => format!("Too many attempts. Try again in {minutes} minutes"),
-        CsrfMissing => "The request was refused (missing security header). Reload the page".into(),
-        LibrarianOnly => "Only librarians may do this".into(),
-        AdminOnly => "Only admins may do this".into(),
-        AlreadyExists => "An entry with this name already exists".into(),
-        InUseOrUnknown => "The entry is still in use or refers to something that does not exist".into(),
-        FieldEmpty { field } => format!("{} must not be empty", field_name(*field)),
-        FieldTooLong { field, max } => format!("{} is longer than {max} characters", field_name(*field)),
-        WrongPassword => "The current password is wrong".into(),
-        PasswordTooShort { min } => format!("The password needs at least {min} characters"),
-        PasswordTooLong { max } => format!("The password may have at most {max} characters"),
-        UsernameInvalid => "Usernames may contain letters, digits, '.', '_' and '-'".into(),
-        CannotLockOutSelf => "You cannot disable yourself or remove your own admin role".into(),
-        UserDisabled => "Enable the user before inviting them".into(),
-        TooManyTags { max } => format!("At most {max} tags"),
-        TooManyInstruments { max } => format!("At most {max} instruments per part"),
-        UnknownKey { key } => format!("Unknown key “{key}”: choose one from the list"),
-        TooManyVoices { max } => format!("At most {max} voices per part"),
-        VoiceTooLong { voice, max } => format!("The voice “{voice}” is longer than {max} characters"),
-        UploadInterrupted => "The upload was interrupted. Please try again".into(),
-        NotPdf => "Only PDF files are supported".into(),
-        SystemsNotDetected => "The systems of this file have not been detected yet".into(),
-        CorrectionTooManyBands { max } => format!("At most {max} bands per page"),
-        CorrectionBoundsCount | CorrectionBoundsRange | CorrectionBoundsOrder => {
-            "The corrected bands are invalid. Reload the page and try again".into()
-        }
-        UnknownProgramme => "Unknown programme".into(),
-        CopyFromOtherPart => "The set to copy belongs to another part".into(),
-        PartHasNoFile => "This part has no file yet".into(),
-        PageCountChanged => "The new file version has a different page count".into(),
-        IfMatchRequired | IfMatchInvalid => "The annotations could not be saved (revision missing)".into(),
+        NotFound => t::error_not_found(),
+        Unauthorized => t::error_unauthorized(),
+        Internal => t::error_internal(),
+        PayloadTooLarge { max_bytes } => t::error_payload_too_large(size_text(*max_bytes)),
+        TooManyAttempts { minutes } => t::error_too_many_attempts(*minutes),
+        CsrfMissing => t::error_csrf_missing(),
+        LibrarianOnly => t::error_librarian_only(),
+        AdminOnly => t::error_admin_only(),
+        AlreadyExists => t::error_already_exists(),
+        InUseOrUnknown => t::error_in_use_or_unknown(),
+        FieldEmpty { field } => t::error_field_empty(field_name(*field)),
+        FieldTooLong { field, max } => t::error_field_too_long(field_name(*field), *max),
+        WrongPassword => t::error_wrong_password(),
+        PasswordTooShort { min } => t::error_password_too_short(*min),
+        PasswordTooLong { max } => t::error_password_too_long(*max),
+        UsernameInvalid => t::error_username_invalid(),
+        CannotLockOutSelf => t::error_cannot_lock_out_self(),
+        UserDisabled => t::error_user_disabled(),
+        TooManyTags { max } => t::error_too_many_tags(*max),
+        TooManyInstruments { max } => t::error_too_many_instruments(*max),
+        UnknownKey { key } => t::error_unknown_key(key),
+        TooManyVoices { max } => t::error_too_many_voices(*max),
+        VoiceTooLong { voice, max } => t::error_voice_too_long(voice, *max),
+        UploadInterrupted => t::error_upload_interrupted(),
+        NotPdf => t::error_not_pdf(),
+        SystemsNotDetected => t::error_systems_not_detected(),
+        CorrectionTooManyBands { max } => t::error_correction_too_many_bands(*max),
+        CorrectionBoundsCount | CorrectionBoundsRange | CorrectionBoundsOrder => t::error_correction_invalid(),
+        UnknownProgramme => t::error_unknown_programme(),
+        CopyFromOtherPart => t::error_copy_from_other_part(),
+        PartHasNoFile => t::error_part_has_no_file(),
+        PageCountChanged => t::error_page_count_changed(),
+        IfMatchRequired | IfMatchInvalid => t::error_if_match(),
         InvalidInk { reason } => ink_error_text(reason),
-        DateFormat => "The date must look like 2026-12-24".into(),
-        TooManyPieces { max } => format!("At most {max} pieces per programme"),
+        DateFormat => t::error_date_format(),
+        TooManyPieces { max } => t::error_too_many_pieces(*max),
         InvalidPattern { reason } => capitalise(&pattern_error_text(reason)),
-        InvalidPath { path } => format!("Invalid path “{path}”"),
-        NotPdfName { path } => format!("Not a PDF file name: “{path}”"),
-        TooManyFiles { max } => format!("At most {max} files per request"),
-        InvalidFileHash { path } => format!("Invalid hash or size for “{path}”"),
-        FileChanged => "The file changed after it was checked; select the folder again".into(),
-        ItemCount { max } => format!("Choose 1 to {max} items"),
-        UnknownItems => "Unknown items, or items of several batches".into(),
-        ImportCommitted => "Already imported; undo the batch to change it".into(),
-        UnknownScore => "Unknown piece".into(),
-        UnknownInstruments => "Unknown instruments".into(),
-        UnknownInstrument => "Unknown instrument".into(),
-        FileNotUploaded { path } => format!("{path} is not uploaded"),
-        UndoAnnotated { pieces } => {
-            format!("Cannot undo: musicians have annotated imported parts of {}", pieces.join(", "))
-        }
-        UndoChanged { pieces } => format!(
-            "Cannot undo: these imported pieces got other parts or are in a programme since: {}",
-            pieces.join(", ")
-        ),
-        NotInBatch => "Not a piece of this batch".into(),
-        DuplicateInLibrary { title } => format!("Already in the library: {title}"),
-        DuplicateInBatch { path } => format!("Same file as {path}"),
+        InvalidPath { path } => t::error_invalid_path(path),
+        NotPdfName { path } => t::error_not_pdf_name(path),
+        TooManyFiles { max } => t::error_too_many_files(*max),
+        InvalidFileHash { path } => t::error_invalid_file_hash(path),
+        FileChanged => t::error_file_changed(),
+        ItemCount { max } => t::error_item_count(*max),
+        UnknownItems => t::error_unknown_items(),
+        ImportCommitted => t::error_import_committed(),
+        UnknownScore => t::error_unknown_score(),
+        UnknownInstruments => t::error_unknown_instruments(),
+        UnknownInstrument => t::error_unknown_instrument(),
+        FileNotUploaded { path } => t::error_file_not_uploaded(path),
+        UndoAnnotated { pieces } => t::error_undo_annotated(pieces.join(", ")),
+        UndoChanged { pieces } => t::error_undo_changed(pieces.join(", ")),
+        NotInBatch => t::error_not_in_batch(),
+        DuplicateInLibrary { title } => t::error_duplicate_in_library(title),
+        DuplicateInBatch { path } => t::error_duplicate_in_batch(path),
         ImportBlocked { note: Some(note) } => capitalise(&note_text(note)),
-        ImportBlocked { note: None } => "Not ready".into(),
-        Unknown => "Unknown error".into(),
+        ImportBlocked { note: None } => t::error_import_not_ready(),
+        Unknown => t::error_unknown(),
     }
 }
 
 /// Field names as the forms label them.
-pub fn field_name(field: Field) -> &'static str {
+pub fn field_name(field: Field) -> String {
     match field {
-        Field::Name => "Name",
-        Field::Family => "Family",
-        Field::Username => "Username",
-        Field::DisplayName => "Display name",
-        Field::Title => "Title",
-        Field::Subtitle => "Subtitle",
-        Field::Composer => "Composer",
-        Field::Arranger => "Arranger",
-        Field::Genre => "Genre",
-        Field::Notes => "Notes",
-        Field::ArchiveNumber => "Archive number",
-        Field::Tag => "A tag",
-        Field::Label => "Custom name",
-        Field::Date => "Date",
-        Field::Pattern => "Pattern",
-        Field::InstrumentWord => "An instrument word",
-        Field::Alias => "The alias",
+        Field::Name => t::error_field_name(),
+        Field::Family => t::error_field_family(),
+        Field::Username => t::error_field_username(),
+        Field::DisplayName => t::error_field_display_name(),
+        Field::Title => t::error_field_title(),
+        Field::Subtitle => t::error_field_subtitle(),
+        Field::Composer => t::error_field_composer(),
+        Field::Arranger => t::error_field_arranger(),
+        Field::Genre => t::error_field_genre(),
+        Field::Notes => t::error_field_notes(),
+        Field::ArchiveNumber => t::error_field_archive_number(),
+        Field::Tag => t::error_field_tag(),
+        Field::Label => t::error_field_label(),
+        Field::Date => t::error_field_date(),
+        Field::Pattern => t::error_field_pattern(),
+        Field::InstrumentWord => t::error_field_instrument_word(),
+        Field::Alias => t::error_field_alias(),
     }
 }
 
@@ -131,50 +126,46 @@ pub fn field_name(field: Field) -> &'static str {
 /// because it often follows other text).
 pub fn note_text(note: &Note) -> String {
     match note {
-        Note::AmbiguousKey(k) => format!(
-            "\"{k}\" is a key name in German only (B = B♭, Es = E♭, H = B♮): choose the key, or set the batch language to German"
-        ),
-        Note::UnknownKey(k) => format!("\"{k}\" is not a known key"),
-        Note::InvalidKey(k) => format!("unknown key \"{k}\""),
-        Note::TwoKeys(k) => format!("several keys in the name: {k}"),
-        Note::SeveralVoices(v) => {
-            format!("numbers without a separator in the name ({v}): check the voices (also a copy or page number?)")
-        }
-        Note::Abbreviation(t) => format!("\"{t}\" is an abbreviation: check the instrument"),
-        Note::Guessed(t) => format!("\"{t}\" was guessed from the beginning of the word: check the instrument"),
-        Note::AmbiguousInstrument(t) => format!("\"{t}\" can mean several instruments: check it"),
-        Note::UnknownInstrument(t) => format!("unknown instrument \"{t}\": choose an instrument or create it"),
-        Note::NoInstrument => "no instrument: nobody could get this part through an instrument grant".into(),
-        Note::Unrecognised(t) => format!("not understood: \"{t}\""),
-        Note::Contradictory(v) => format!("the files of this piece disagree: {v}"),
-        Note::TitleMissing => "the file names contain no title: type it".into(),
-        Note::SimilarTitle(t) => format!("a piece with a similar title exists: {t}"),
-        Note::ConfirmTarget(t) => {
-            format!("this may be the existing piece {t}: add the parts to it or import as a new piece")
-        }
-        Note::TargetGone => "the chosen existing piece was deleted".into(),
-        Note::NoParts => "no parts to import".into(),
-        Note::NotUploaded => "file not uploaded yet: select the folder again to continue".into(),
-        Note::UploadFailed(Some(why)) => format!("upload failed: {}", code_text(why)),
-        Note::UploadFailed(None) => "upload failed".into(),
-        Note::ScoreWithOneStaff => "named as full score, but its systems have only one staff".into(),
-        Note::ManyStaves(n) => format!("a single part, but its systems have {n} staves: a score?"),
-        Note::NoReaders => "no group can read this part yet".into(),
+        Note::AmbiguousKey(k) => t::note_ambiguous_key(k),
+        Note::UnknownKey(k) => t::note_unknown_key(k),
+        Note::InvalidKey(k) => t::note_invalid_key(k),
+        Note::TwoKeys(k) => t::note_two_keys(k),
+        Note::SeveralVoices(v) => t::note_several_voices(v),
+        Note::Abbreviation(w) => t::note_abbreviation(w),
+        Note::Guessed(w) => t::note_guessed(w),
+        Note::AmbiguousInstrument(w) => t::note_ambiguous_instrument(w),
+        Note::UnknownInstrument(w) => t::note_unknown_instrument(w),
+        Note::NoInstrument => t::note_no_instrument(),
+        Note::Unrecognised(x) => t::note_unrecognised(x),
+        Note::Contradictory(v) => t::note_contradictory(v),
+        Note::TitleMissing => t::note_title_missing(),
+        Note::SimilarTitle(p) => t::note_similar_title(p),
+        Note::ConfirmTarget(p) => t::note_confirm_target(p),
+        Note::TargetGone => t::note_target_gone(),
+        Note::NoParts => t::note_no_parts(),
+        Note::NotUploaded => t::note_not_uploaded(),
+        Note::UploadFailed(Some(why)) => t::note_upload_failed_because(code_text(why)),
+        Note::UploadFailed(None) => t::note_upload_failed(),
+        Note::ScoreWithOneStaff => t::note_score_with_one_staff(),
+        Note::ManyStaves(n) => t::note_many_staves(*n),
+        Note::NoReaders => t::note_no_readers(),
     }
 }
 
+/// The placeholders of a pattern; never translated.
+const PLACEHOLDERS: &str = "{number}, {title}, {composer}, {arranger}, {genre}, {part}, {*}";
+
 /// Why a file name pattern cannot be used (under the pattern field).
 pub fn pattern_error_text(e: &PatternError) -> String {
+    let braced = |p: &str| format!("{{{p}}}");
     match e {
-        PatternError::UnknownPlaceholder(p) => format!(
-            "unknown placeholder {{{p}}}; use {{number}}, {{title}}, {{composer}}, {{arranger}}, {{genre}}, {{part}} or {{*}}"
-        ),
-        PatternError::Unbalanced => "brackets [ ] or braces { } do not match".into(),
-        PatternError::MissingPart => "the pattern needs {part}".into(),
-        PatternError::MissingTitleOrNumber => "the pattern needs {title} or {number}".into(),
-        PatternError::Twice(p) => format!("{{{p}}} may appear only once"),
+        PatternError::UnknownPlaceholder(p) => t::error_pattern_unknown_placeholder(braced(p), PLACEHOLDERS),
+        PatternError::Unbalanced => t::error_pattern_unbalanced(),
+        PatternError::MissingPart => t::error_pattern_missing("{part}"),
+        PatternError::MissingTitleOrNumber => t::error_pattern_missing_title_or_number("{title}", "{number}"),
+        PatternError::Twice(p) => t::error_pattern_twice(braced(p)),
         PatternError::TooManyOptionals => {
-            format!("at most {} optional groups [ ]", musicus_api::import::pattern::MAX_OPTIONALS)
+            t::error_pattern_too_many_optionals(musicus_api::import::pattern::MAX_OPTIONALS)
         }
     }
 }
@@ -183,27 +174,21 @@ pub fn pattern_error_text(e: &PatternError) -> String {
 pub fn ink_error_text(e: &InkError) -> String {
     match e {
         InkError::Empty | InkError::Malformed | InkError::DuplicateId(_) | InkError::PressureMismatch => {
-            "The annotations of this page are damaged".into()
+            t::error_ink_damaged()
         }
-        InkError::UnsupportedVersion(_) => "The annotations were saved by a newer version of Musicus".into(),
-        InkError::TooLarge => {
-            format!("The annotations of this page are too large (at most {})", size_text(MAX_ENCODED_BYTES as u64))
-        }
-        InkError::LimitExceeded(InkLimit::ObjectsPerPage) => {
-            format!("Too many annotations on this page (at most {})", InkLimit::ObjectsPerPage.max())
-        }
-        InkError::LimitExceeded(InkLimit::PointsPerStroke) => {
-            format!("A stroke is too long (at most {} points)", InkLimit::PointsPerStroke.max())
-        }
-        InkError::LimitExceeded(InkLimit::TextLength) => {
-            format!("A text is too long (at most {} characters)", InkLimit::TextLength.max())
-        }
+        InkError::UnsupportedVersion(_) => t::error_ink_newer_version(),
+        InkError::TooLarge => t::error_ink_too_large(size_text(MAX_ENCODED_BYTES as u64)),
+        InkError::LimitExceeded(l @ InkLimit::ObjectsPerPage) => t::error_ink_too_many_objects(l.max()),
+        InkError::LimitExceeded(l @ InkLimit::PointsPerStroke) => t::error_ink_stroke_too_long(l.max()),
+        InkError::LimitExceeded(l @ InkLimit::TextLength) => t::error_ink_text_too_long(l.max()),
     }
 }
 
+/// A limit in whole MB / KB (limits are round numbers; no `Intl` needed, so
+/// this also runs in host tests).
 fn size_text(bytes: u64) -> String {
     const MB: u64 = 1024 * 1024;
-    if bytes >= MB { format!("{} MB", bytes / MB) } else { format!("{} KB", bytes.div_ceil(1024)) }
+    if bytes >= MB { t::common_size_mb(bytes / MB) } else { t::common_size_kb(bytes.div_ceil(1024)) }
 }
 
 fn capitalise(s: &str) -> String {
@@ -239,6 +224,26 @@ mod tests {
         assert!(note_text(&Note::AmbiguousKey("B".into())).contains("German"));
         let failed = Note::UploadFailed(Some(Box::new(ErrorCode::NotPdf)));
         assert_eq!(note_text(&failed), "upload failed: Only PDF files are supported");
+    }
+
+    /// In the pseudo-locale every text is marked: nothing English is left in
+    /// this module (R-I18N-010). The language is per thread.
+    #[test]
+    fn every_text_comes_from_the_catalogue() {
+        musicus_i18n::set_language(musicus_i18n::PSEUDO);
+        let marked = |s: String| assert!(s.contains('⟦'), "not from the catalogue: {s}");
+        for code in musicus_api::error::examples() {
+            marked(code_text(&code));
+        }
+        for f in [Field::Name, Field::Tag, Field::Alias] {
+            marked(field_name(f));
+        }
+        marked(note_text(&Note::ManyStaves(5)));
+        marked(pattern_error_text(&PatternError::MissingPart));
+        marked(ink_error_text(&InkError::TooLarge));
+        marked(network_text("x"));
+        marked(http_failed_text(500));
+        musicus_i18n::set_language("en");
     }
 
     #[test]

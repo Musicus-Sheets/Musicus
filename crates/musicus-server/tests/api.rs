@@ -22,6 +22,37 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+/// The English name the web client composes for a part (the server sends
+/// only its components, a-client-part-names).
+fn name(p: &Part) -> String {
+    musicus_i18n::set_language("en");
+    let names: Vec<&str> = p.instruments.iter().map(|i| i.name.as_str()).collect();
+    musicus_api::naming::part_name(
+        &musicus_i18n::name_words(),
+        p.label.as_deref(),
+        &names,
+        p.transposition.as_deref(),
+        &p.voices,
+    )
+}
+
+/// The parts in the order the client lists them (by name, numbers by value).
+fn sorted(parts: &[Part]) -> Vec<Part> {
+    let mut v = parts.to_vec();
+    v.sort_by(|a, b| musicus_api::naming::natural_cmp(&name(a), &name(b)));
+    v
+}
+
+fn names(parts: &[Part]) -> Vec<String> {
+    sorted(parts).iter().map(name).collect()
+}
+
+/// The English name a part of the import review will get.
+fn review_name(p: &musicus_api::import::review::ReviewPart) -> String {
+    musicus_i18n::set_language("en");
+    p.name(&musicus_i18n::name_words())
+}
+
 struct Server {
     router: Router,
     state: musicus_server::state::AppState,
@@ -306,8 +337,8 @@ async fn library(s: &Server) -> Library {
     let tp: Part = s.upload(&admin, tp.id, tiny_pdf(4, "trumpet")).await.json();
     let fp: Part = s.upload(&admin, fp.id, tiny_pdf(2, "flute")).await.json();
     assert_eq!(tp.file.as_ref().unwrap().page_count, Some(4));
-    assert_eq!((tp.label.as_deref(), tp.display_name.as_str()), (None, "Trumpet in B♭ 2"));
-    assert_eq!(fp.display_name, "Solo Flute");
+    assert_eq!((tp.label.as_deref(), name(&tp).as_str()), (None, "Trumpet in B♭ 2"));
+    assert_eq!(name(&fp), "Solo Flute");
     Library { admin, anna, anna_id, trumpets: group.id, score: score.id, trumpet_part: tp, flute_part: fp }
 }
 
@@ -452,6 +483,11 @@ async fn annotations_are_private_versioned_and_conflict_checked() {
         .await;
     assert!(set.is_default);
     assert_eq!(set.file_version, 1);
+    // The reader's own set has no name (shown in the UI language); one per part.
+    let sets = format!("/api/parts/{part}/annotation-sets");
+    let unnamed: AnnotationSet = s.ok(Method::POST, &sets, &lib.anna, json!({})).await;
+    assert_eq!((unnamed.name, unnamed.is_default), (None, false));
+    assert_eq!(s.json(Method::POST, &sets, &lib.anna, json!({"name": " "})).await.status, StatusCode::CONFLICT);
     let page = |n: i64| format!("/api/annotation-sets/{}/pages/{n}", set.id);
     let put = |uri: String, rev: &'static str, body: Vec<u8>| {
         let token = lib.anna.clone();
@@ -700,7 +736,7 @@ async fn part_names_keys_and_part_search() {
         )
         .await;
     assert_eq!(
-        (p.voices.as_slice(), p.transposition.as_deref(), p.display_name.as_str()),
+        (p.voices.as_slice(), p.transposition.as_deref(), name(&p).as_str()),
         (["1a".to_owned()].as_slice(), Some("Bb"), "Trumpet in B♭ 1a")
     );
     let bad = s
@@ -733,7 +769,7 @@ async fn part_names_keys_and_part_search() {
             json!({"instrument_ids": [], "transposition": "H"}),
         )
         .await;
-    assert_eq!(unnamed.display_name, "Part in B♮");
+    assert_eq!(name(&unnamed), "Part in B♮");
 
     // A custom name overrides; clearing it brings the derived name back.
     let p: Part = s
@@ -744,7 +780,7 @@ async fn part_names_keys_and_part_search() {
             json!({"label": "Solo Cornet", "instrument_ids": trumpet, "voices": ["1"], "transposition": "Bb"}),
         )
         .await;
-    assert_eq!((p.label.as_deref(), p.display_name.as_str()), (Some("Solo Cornet"), "Solo Cornet"));
+    assert_eq!((p.label.as_deref(), name(&p).as_str()), (Some("Solo Cornet"), "Solo Cornet"));
     let p: Part = s
         .ok(
             Method::PUT,
@@ -753,7 +789,7 @@ async fn part_names_keys_and_part_search() {
             json!({"label": "", "instrument_ids": trumpet, "voices": [1], "transposition": "Bb"}),
         )
         .await;
-    assert_eq!((p.label, p.display_name.as_str()), (None, "Trumpet in B♭ 1"));
+    assert_eq!((p.label.as_deref(), name(&p).as_str()), (None, "Trumpet in B♭ 1"));
 
     // Parts of a score are ordered by name, numbers by value.
     for v in ["10", "2"] {
@@ -766,7 +802,7 @@ async fn part_names_keys_and_part_search() {
         .await;
     }
     let score: Score = s.get(&format!("/api/scores/{}", lib.score), &lib.anna).await.json();
-    let names: Vec<&str> = score.parts.iter().map(|p| p.display_name.as_str()).collect();
+    let names = names(&score.parts);
     assert_eq!(names, ["Trumpet in B♭ 1", "Trumpet in B♭ 2", "Trumpet in B♭ 10"]);
 
     // The library search finds pieces by the names of the user's own parts,
@@ -775,6 +811,13 @@ async fn part_names_keys_and_part_search() {
     assert_eq!(s.hits("trumpet", anna).await, 1);
     assert_eq!(s.hits("fucik%20trump", anna).await, 1);
     assert_eq!(s.hits("bb", anna).await, 1, "key code is searchable");
+    // Components and key spellings (R-I18N-007): the composed name, the code
+    // and the glyph form all find the part; the connecting word is ignored.
+    assert_eq!(s.hits("trumpet%20in%20B%E2%99%AD%202", anna).await, 1, "Trumpet in B♭ 2");
+    assert_eq!(s.hits("trumpet%20bb%2010", anna).await, 1);
+    assert_eq!(s.hits("trumpet%20B%2010", anna).await, 1, "B♭ is indexed as the token b");
+    assert_eq!(s.hits("trumpet%20in", anna).await, 1, "a trailing connector is dropped");
+    assert_eq!(s.hits("trumpet%20eb", anna).await, 0);
     assert_eq!(s.hits("solo%20flute", anna).await, 0, "anna cannot read the flute part");
     assert_eq!(s.hits("solo%20flute", admin).await, 1);
     assert_eq!(s.hits("trumpet%20concerto", anna).await, 0, "every word must match");
@@ -789,7 +832,7 @@ async fn part_names_keys_and_part_search() {
     )
     .await;
     let p: Part = s.get(&part(lib.trumpet_part.id), &lib.anna).await.json();
-    assert_eq!(p.display_name, "Cornet in B♭ 1");
+    assert_eq!(name(&p), "Cornet in B♭ 1");
     assert_eq!(s.hits("cornet", anna).await, 1);
     assert_eq!(s.hits("trumpet", anna).await, 0);
 
@@ -815,7 +858,7 @@ async fn parts_with_several_voices() {
         )
         .await;
     assert_eq!(p.voices, ["2", "1", "solo"], "order kept, blanks and duplicates (ignoring case) dropped");
-    assert_eq!(p.display_name, "Trumpet in B♭ 2 & 1 & solo");
+    assert_eq!(name(&p), "Trumpet in B♭ 2 & 1 & solo");
     // Update replaces the whole list, in the new order.
     let p: Part = s
         .ok(
@@ -826,7 +869,7 @@ async fn parts_with_several_voices() {
         )
         .await;
     assert_eq!(
-        (p.voices.as_slice(), p.display_name.as_str()),
+        (p.voices.as_slice(), name(&p).as_str()),
         (["1", "2"].map(String::from).as_slice(), "Trumpet in B♭ 1 & 2")
     );
     // "&" separates voices, so a typed "3 & 4" is two voices.
@@ -835,7 +878,7 @@ async fn parts_with_several_voices() {
     assert_eq!(q.voices, ["3", "4"]);
     // Ordered by name: the first voice, then the rest.
     let score: Score = s.get(&format!("/api/scores/{}", lib.score), &lib.anna).await.json();
-    let names: Vec<&str> = score.parts.iter().map(|p| p.display_name.as_str()).collect();
+    let names = names(&score.parts);
     assert_eq!(names, ["Trumpet 3 & 4", "Trumpet in B♭ 1 & 2", "Trumpet in B♭ 2"]);
     let got: Part = s.get(&format!("/api/parts/{}", p.id), &lib.anna).await.json();
     assert_eq!(got.voices, ["1", "2"], "members see the voices");
@@ -866,6 +909,60 @@ async fn parts_with_several_voices() {
         .await
         .unwrap();
     assert_eq!(left, 0);
+}
+
+/// Migration 0009 (a-client-part-names): sets named "My annotations" become unnamed (NULL);
+/// the table rebuild keeps their pages, foreign keys are on again, one unnamed set per part.
+#[tokio::test]
+async fn migration_0009_unnames_default_sets_and_keeps_their_pages() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = tempfile::tempdir().unwrap();
+    for f in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations")).unwrap() {
+        let f = f.unwrap();
+        if *f.file_name().to_string_lossy() < *"0009" {
+            std::fs::copy(f.path(), old.path().join(f.file_name())).unwrap();
+        }
+    }
+    {
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(dir.path().join("musicus.sqlite"))
+            .create_if_missing(true)
+            .foreign_keys(true);
+        let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
+        sqlx::migrate::Migrator::new(old.path()).await.unwrap().run(&pool).await.unwrap();
+        sqlx::raw_sql(
+            "INSERT INTO users (id, username, display_name, role, created_at) VALUES (1, 'anna', 'Anna', 'admin', 0);
+             INSERT INTO scores (id, title, tags, created_at, updated_at) VALUES (1, 'March', '[]', 0, 0);
+             INSERT INTO parts (id, score_id, created_at) VALUES (1, 1, 0);
+             INSERT INTO files (id, sha256, mime, size_bytes, created_at) VALUES (1, 'aa', 'application/pdf', 1, 0);
+             INSERT INTO part_files (part_id, version, file_id, uploaded_at) VALUES (1, 1, 1, 0);
+             INSERT INTO annotation_sets (id, user_id, part_id, file_id, name, is_default, created_at, updated_at)
+               VALUES (1, 1, 1, 1, 'My annotations', 1, 0, 0), (2, 1, 1, 1, 'Concert', 0, 0, 0);
+             INSERT INTO annotation_pages (set_id, page, revision, data, updated_at) VALUES (1, 0, 3, x'00', 0);",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool.close().await;
+    }
+    let settings = Settings { cookie_secure: false, ..Settings::default() };
+    let state = open_state(dir.path(), 1 << 20, settings).await.unwrap();
+    let rows: Vec<(Id, Option<String>, i64)> = sqlx::query_as(
+        "SELECT s.id, s.name, (SELECT COUNT(*) FROM annotation_pages p WHERE p.set_id = s.id) FROM annotation_sets s ORDER BY s.id",
+    )
+    .fetch_all(&state.db.read)
+    .await
+    .unwrap();
+    assert_eq!(rows, [(1, None, 1), (2, Some("Concert".to_owned()), 0)], "pages survive the table rebuild");
+    let fk: bool = sqlx::query_scalar("PRAGMA foreign_keys").fetch_one(&state.db.write).await.unwrap();
+    assert!(fk, "foreign keys are on again");
+    // One unnamed set per user and part.
+    let dup = sqlx::query(
+        "INSERT INTO annotation_sets (user_id, part_id, file_id, name, created_at, updated_at) VALUES (1, 1, 1, NULL, 0, 0)",
+    )
+    .execute(&state.db.write)
+    .await;
+    assert!(dup.is_err());
 }
 
 /// Data written before migration 0002: labels become custom names, numeric
@@ -906,23 +1003,23 @@ async fn migration_0002_keeps_old_parts() {
     let s = Server { router: routes::app(state.clone(), None), state, _dir: dir, admin_invite: invite };
     let admin = s.admin().await;
     let score: Score = s.get("/api/scores/1", &admin).await.json();
-    type Row<'a> = (Option<&'a str>, Vec<&'a str>, Option<&'a str>, &'a str);
-    let got: Vec<Row> = score
-        .parts
+    type Row<'a> = (Option<&'a str>, Vec<&'a str>, Option<&'a str>, String);
+    let parts = sorted(&score.parts);
+    let got: Vec<Row> = parts
         .iter()
         .map(|p| {
             let voices = p.voices.iter().map(String::as_str).collect();
-            (p.label.as_deref(), voices, p.transposition.as_deref(), p.display_name.as_str())
+            (p.label.as_deref(), voices, p.transposition.as_deref(), name(p))
         })
         .collect();
     assert_eq!(
         got,
         [
-            (Some("2nd Clarinet in Bb"), vec!["2"], Some("Bb"), "2nd Clarinet in Bb"),
-            (None, vec![], Some("B"), "Clarinet in B"),
-            (Some("Horn"), vec![], Some("Eb"), "Horn"),
-            (Some("Horn 2"), vec!["2"], Some("Es/F"), "Horn 2"),
-            (Some("Horn 3"), vec!["3"], None, "Horn 3"),
+            (Some("2nd Clarinet in Bb"), vec!["2"], Some("Bb"), "2nd Clarinet in Bb".to_owned()),
+            (None, vec![], Some("B"), "Clarinet in B".to_owned()),
+            (Some("Horn"), vec![], Some("Eb"), "Horn".to_owned()),
+            (Some("Horn 2"), vec!["2"], Some("Es/F"), "Horn 2".to_owned()),
+            (Some("Horn 3"), vec!["3"], None, "Horn 3".to_owned()),
         ]
     );
     // The unknown key can be kept, but not set anew.
@@ -1251,7 +1348,7 @@ async fn import_stages_reviews_commits_and_undoes() {
     );
     let t = part(alte, "Trompete 1 in B");
     assert_eq!(
-        (t.display_name.as_str(), t.level, t.readers.clone()),
+        (review_name(t).as_str(), t.level, t.readers.clone()),
         ("Trumpet in B♭ 1", Level::Green, vec!["Trumpets".to_string()])
     );
     // Unknown instruments are red and are never created by the import.
@@ -1298,7 +1395,7 @@ async fn import_stages_reviews_commits_and_undoes() {
     assert_eq!((done.committed.clone(), done.errors.len()), (vec![alte.id], 0));
     let mine: Vec<Score> = s.get("/api/scores?q=304", &lib.anna).await.json();
     assert_eq!(mine.len(), 1, "anna finds the new piece by its number");
-    assert_eq!(mine[0].parts.iter().map(|p| p.display_name.as_str()).collect::<Vec<_>>(), ["Trumpet in B♭ 1"]);
+    assert_eq!(names(&mine[0].parts), ["Trumpet in B♭ 1"]);
     assert_eq!(s.get(&format!("/api/files/{trumpet_sha}"), &lib.anna).await.status, StatusCode::OK);
     let all: Score = s.get(&format!("/api/scores/{}", mine[0].id), admin).await.json();
     assert_eq!(all.parts.len(), 4);
@@ -1404,7 +1501,7 @@ async fn import_of_flat_numbered_files_groups_by_number_and_keeps_changes() {
     // The same instrument named twice ("Klarinette Klar") is listed once.
     let k3 = part(p304, "Klarinette Klar 3");
     assert_eq!(
-        (k3.instruments.iter().map(|i| i.instrument_id).collect::<Vec<_>>(), k3.display_name.as_str(), k3.level),
+        (k3.instruments.iter().map(|i| i.instrument_id).collect::<Vec<_>>(), review_name(k3).as_str(), k3.level),
         (vec![Some(klarinette.id)], "Klarinette 3", Level::Green)
     );
 
@@ -1470,7 +1567,7 @@ async fn import_of_flat_numbered_files_groups_by_number_and_keeps_changes() {
             (Some(trumpet), Some(Source::Librarian), Level::Green)
         ]
     );
-    assert_eq!((k2_now.display_name.as_str(), k2_now.level), ("Klarinette / Trumpet 2 & 3", Level::Green));
+    assert_eq!((review_name(k2_now).as_str(), k2_now.level), ("Klarinette / Trumpet 2 & 3", Level::Green));
 
     // German: the same names are read again; changes to parts stay (by path).
     let changed: ImportBatch =
@@ -1486,14 +1583,14 @@ async fn import_of_flat_numbered_files_groups_by_number_and_keeps_changes() {
     assert_eq!(done.committed, [p304.id]);
     let found: Vec<Score> = s.get("/api/scores?q=alte", admin).await.json();
     assert_eq!(found[0].archive_number.as_deref(), Some("0304"), "the first path (in order) gives the number");
-    let names: Vec<&str> = found[0].parts.iter().map(|p| p.display_name.as_str()).collect();
-    assert_eq!(names, ["Klarinette / Trumpet 2 & 3", "Klarinette 3", "Klarinette in B♭ 1 & 2"]);
-    assert_eq!(found[0].parts[2].voices, ["1", "2"], "the commit fills the voice list");
-    assert_eq!(found[0].parts[1].instrument_ids, [klarinette.id], "an instrument named twice is committed once");
+    assert_eq!(names(&found[0].parts), ["Klarinette / Trumpet 2 & 3", "Klarinette 3", "Klarinette in B♭ 1 & 2"]);
+    let found_parts = sorted(&found[0].parts);
+    assert_eq!(found_parts[2].voices, ["1", "2"], "the commit fills the voice list");
+    assert_eq!(found_parts[1].instrument_ids, [klarinette.id], "an instrument named twice is committed once");
     let mut both = vec![klarinette.id, trumpet];
     both.sort_unstable();
     assert_eq!(
-        (found[0].parts[0].instrument_ids.clone(), found[0].parts[0].voices.clone()),
+        (found_parts[0].instrument_ids.clone(), found_parts[0].voices.clone()),
         (both, vec!["2".to_string(), "3".to_string()]),
         "the commit creates the part with both instruments and both voices"
     );

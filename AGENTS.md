@@ -47,6 +47,7 @@ cargo test                                                   # api + server unit
 cargo clippy --all-targets && cargo fmt --check
 cargo clippy -p musicus-web --target wasm32-unknown-unknown  # client only builds for wasm32
 ./scripts/fetch-pdfjs.sh && dx build --platform web --package musicus-web
+python3 scripts/check-ui-literals.py                          # no literal UI text in the client
 python3 docs/agents/check.py                                 # agent-doc consistency
 uv run docs/requirements/tools/validate.py                   # requirements consistency
 ```
@@ -71,3 +72,11 @@ merge commits on the docs `main` (never the feature-branch commits). The require
 - Writes go through `app.db.write` (single connection), reads through `app.db.read` (R-PERF-006).
 - The web client must not persist data on the device (R-SEC-001).
 - New migrations: new numbered file in `crates/musicus-server/migrations/`; never edit applied ones.
+- Store and show user data exactly as entered; never translate or reformat it (a-data-as-entered, R-I18N-006).
+  UI terms and their German translations: `docs/agents/glossary.md`.
+- Every text the web client shows comes from the catalogue `crates/musicus-i18n/locales/en/*.ftl` via
+  `musicus_i18n::t::…` — never a literal in `rsx!`, `confirm`/`prompt` or a status message (R-I18N-010; lint
+  `scripts/check-ui-literals.py`). Ids `<area>-<page>-<what>`, never reused; changed meaning = new id (a-i18n-keys).
+  Write only English; do not edit other languages except deleting obsolete ids.
+- The server sends no composed names: parts carry their components; the web client composes names, key names and
+  the unnamed set's name in the UI language (`names.rs`, `naming::NameWords`; a-client-part-names, R-I18N-006).

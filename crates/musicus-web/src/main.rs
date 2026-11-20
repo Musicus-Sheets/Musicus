@@ -7,6 +7,8 @@ mod bridge;
 mod errors;
 mod ink;
 mod layouts;
+mod locale;
+mod names;
 mod pages;
 mod picker;
 mod suggest;
@@ -15,6 +17,7 @@ mod ui;
 
 use dioxus::prelude::*;
 use musicus_api::CurrentUser;
+use musicus_i18n::t;
 use pages::{
     account::Account,
     groups::Groups,
@@ -96,6 +99,7 @@ pub fn session() -> Session {
 }
 
 fn main() {
+    locale::init();
     dioxus::launch(App);
 }
 
@@ -123,9 +127,9 @@ fn App() -> Element {
 fn NotFound(segments: Vec<String>) -> Element {
     rsx! {
         main { class: "narrow",
-            h1 { "Page not found" }
-            p { "/{segments.join(\"/\")} does not exist." }
-            Link { to: Route::Library {}, "Back to the library" }
+            h1 { {t::common_not_found_title()} }
+            p { {t::common_not_found_text(format!("/{}", segments.join("/")))} }
+            Link { to: Route::Library {}, {t::common_back_to_library()} }
         }
     }
 }

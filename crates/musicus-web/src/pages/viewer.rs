@@ -38,6 +38,7 @@ use musicus_api::{
     },
     pixels::device_size,
 };
+use musicus_i18n::t;
 use std::{
     cell::{Cell, RefCell},
     collections::{HashMap, HashSet},
@@ -57,11 +58,18 @@ const SWIPE_MIN_PX: f64 = 60.0;
 /// While a file's layout is still pending, ask again after this many ms.
 const LAYOUT_RETRY_MS: u32 = 10_000;
 
-const COLORS: [(u32, &str); 4] =
-    [(0xd0021bff, "Red"), (0x1f5fd6ff, "Blue"), (0x111111ff, "Black"), (0x1a8f3cff, "Green")];
-const HIGHLIGHTS: [(u32, &str); 3] = [(0xffd60aff, "Yellow"), (0x7ee081ff, "Green"), (0xff8fd8ff, "Pink")];
+type Named<T> = (T, fn() -> String);
+const COLORS: [Named<u32>; 4] = [
+    (0xd0021bff, t::reader_color_red),
+    (0x1f5fd6ff, t::reader_color_blue),
+    (0x111111ff, t::reader_color_black),
+    (0x1a8f3cff, t::reader_color_green),
+];
+const HIGHLIGHTS: [Named<u32>; 3] =
+    [(0xffd60aff, t::reader_color_yellow), (0x7ee081ff, t::reader_color_green), (0xff8fd8ff, t::reader_color_pink)];
 /// Pen widths in page units (1/65535 of the page width).
-const PEN_WIDTHS: [(u16, &str); 3] = [(110, "Fine"), (200, "Medium"), (380, "Bold")];
+const PEN_WIDTHS: [Named<u16>; 3] =
+    [(110, t::reader_width_fine), (200, t::reader_width_medium), (380, t::reader_width_bold)];
 const HIGHLIGHT_WIDTH: u16 = 1400;
 const STAMP_SIZE: u16 = 2200;
 const TEXT_SIZE: u16 = 1300;
@@ -99,17 +107,17 @@ async fn load(id: i64, pid: Option<i64>) -> api::ApiResult<Loaded> {
 fn ViewerPage(id: i64, pid: Option<i64>) -> Element {
     let data = use_resource(move || load(id, pid));
     match &*data.read() {
-        None => rsx! { div { class: "reader", div { class: "loading-page", "Loading…" } } },
+        None => rsx! { div { class: "reader", div { class: "loading-page", {musicus_i18n::t::common_loading()} } } },
         Some(Err(e)) => rsx! {
             main { class: "narrow",
                 ErrorBox { message: e.message.clone() }
-                Link { to: Route::Library {}, "Back to the library" }
+                Link { to: Route::Library {}, {t::common_back_to_library()} }
             }
         },
         Some(Ok(d)) if d.part.file.is_none() => rsx! {
             main { class: "narrow",
-                p { "No file has been uploaded for this part yet." }
-                Link { to: Route::Library {}, "Back to the library" }
+                p { {t::reader_no_file()} }
+                Link { to: Route::Library {}, {t::common_back_to_library()} }
             }
         },
         Some(Ok(d)) => rsx! { Reader { data: d.clone() } },
@@ -295,7 +303,10 @@ fn neighbours(programme: &Programme, part: &Part) -> (Option<Route>, Option<Rout
         return (None, None);
     };
     let pick = |idx: usize| -> Option<Route> {
-        let parts: Vec<&Part> = programme.items.get(idx)?.score.parts.iter().filter(|p| p.file.is_some()).collect();
+        let parts: Vec<&Part> = crate::names::sorted(&programme.items.get(idx)?.score.parts)
+            .into_iter()
+            .filter(|p| p.file.is_some())
+            .collect();
         let chosen = parts
             .iter()
             .find(|p| p.instrument_ids.iter().any(|i| part.instrument_ids.contains(i)))
@@ -535,7 +546,7 @@ fn Reader(data: Loaded) -> Element {
                         page.set(n.saturating_sub(1));
                     }
                 }
-                Err(e) => error.set(Some(format!("Could not open the sheet: {e}"))),
+                Err(e) => error.set(Some(t::reader_open_failed(e.to_string()))),
             }
         });
     });
@@ -550,7 +561,7 @@ fn Reader(data: Loaded) -> Element {
             match bridge::render_page(&u, p, PAGE_CANVAS, w - STAGE_MARGIN, h - STAGE_MARGIN, r).await {
                 Ok(Some((width, height))) => page_box.set(Some(PageBox::page(width, height))),
                 Ok(None) => {}
-                Err(e) => error.set(Some(format!("Could not render the page: {e}"))),
+                Err(e) => error.set(Some(t::reader_systems_render_failed(e.to_string()))),
             }
         });
     });
@@ -566,7 +577,7 @@ fn Reader(data: Loaded) -> Element {
         spawn(async move {
             for (k, (_, crop, _)) in current.iter().enumerate() {
                 if let Err(e) = bridge::render_crop(&u, &crop_canvas(k), *crop).await {
-                    error.set(Some(format!("Could not render the page: {e}")));
+                    error.set(Some(t::reader_systems_render_failed(e.to_string())));
                     return;
                 }
             }
@@ -591,7 +602,7 @@ fn Reader(data: Loaded) -> Element {
                 spawn(async move {
                     match load_page(store, (set, p)).await {
                         Ok(()) => version += 1,
-                        Err(e) => error.set(Some(format!("Could not load annotations: {e}"))),
+                        Err(e) => error.set(Some(t::reader_annotations_load_failed(e.to_string()))),
                     }
                 });
             }
@@ -688,7 +699,8 @@ fn Reader(data: Loaded) -> Element {
                 });
                 return;
             }
-            let name = programme_title.clone().unwrap_or_else(|| "My annotations".into());
+            // Unnamed (None) unless read from a programme: shown as "My annotations".
+            let name = programme_title.clone();
             let mut change = change.clone();
             let store = store.clone();
             spawn(async move {
@@ -704,7 +716,7 @@ fn Reader(data: Loaded) -> Element {
                             Some(Action::Add(object.clone()))
                         });
                     }
-                    Err(e) => error.set(Some(format!("Could not create an annotation set: {}", e.message))),
+                    Err(e) => error.set(Some(t::reader_set_create_failed(&e.message))),
                 }
             });
         }
@@ -915,7 +927,7 @@ fn Reader(data: Loaded) -> Element {
                 }
                 ToolKind::Text => {
                     drop(l);
-                    if let Some(text) = prompt("Text", "") {
+                    if let Some(text) = prompt(&t::reader_text_prompt(), "") {
                         let at = b.to_page(x, y);
                         add_object(
                             page_index,
@@ -1023,9 +1035,9 @@ fn Reader(data: Loaded) -> Element {
 
     let new_set = move |copy: bool| async move {
         let source = if copy { active() } else { None };
-        let suggestion = if copy { "Copy" } else { "Concert" };
-        let Some(name) = prompt("Name of the new annotation set", suggestion) else { return };
-        let req = NewAnnotationSet { name, programme_id, copy_from: source };
+        let suggestion = if copy { t::reader_sets_suggest_copy() } else { t::reader_sets_suggest_new() };
+        let Some(name) = prompt(&t::reader_sets_name_prompt(), &suggestion) else { return };
+        let req = NewAnnotationSet { name: Some(name), programme_id, copy_from: source };
         match api::post::<_, AnnotationSet>(&format!("/api/parts/{part_id}/annotation-sets"), &req).await {
             Ok(set) => {
                 let id = set.id;
@@ -1045,7 +1057,7 @@ fn Reader(data: Loaded) -> Element {
     };
     let delete_set = move |_| async move {
         let Some(id) = active() else { return };
-        if !confirm("Delete this annotation set with all its drawings?") {
+        if !confirm(&t::reader_sets_delete_confirm()) {
             return;
         }
         match api::call(Method::DELETE, &format!("/api/annotation-sets/{id}")).await {
@@ -1068,7 +1080,7 @@ fn Reader(data: Loaded) -> Element {
 
     // --- View ------------------------------------------------------------
 
-    let title = format!("{} — {}", data.score.title, part.display_name);
+    let title = format!("{} — {}", data.score.title, crate::names::part_name(&part));
     let back = match programme_id {
         Some(id) => Route::ProgrammeView { id },
         None => Route::Library {},
@@ -1082,11 +1094,9 @@ fn Reader(data: Loaded) -> Element {
     let systems_wanted = reader.mode == ReaderMode::Systems;
     let layout_note = match (&*layout.read(), systems_wanted && !systems_on()) {
         (_, false) => None,
-        (Some(l), true) if l.state == LayoutState::Failed => {
-            Some("The system view is not available for this sheet; showing whole pages.")
-        }
+        (Some(l), true) if l.state == LayoutState::Failed => Some(t::reader_layout_failed()),
         (Some(l), true) if l.state == LayoutState::Done => None,
-        _ => Some("The systems of this sheet are still being detected; showing whole pages for now."),
+        _ => Some(t::reader_layout_pending()),
     };
     // Changes the reader settings here and on the server (R-SEC-001: not on the device).
     let mut change_settings = move |new: ReaderSettings| {
@@ -1099,16 +1109,16 @@ fn Reader(data: Loaded) -> Element {
         }
         spawn(async move {
             if let Err(e) = api::put::<_, ReaderSettings>("/api/auth/reader-settings", &new).await {
-                error.set(Some(format!("Could not save the view setting: {}", e.message)));
+                error.set(Some(t::reader_settings_failed(&e.message)));
             }
         });
     };
     let status_text = match status() {
         SaveStatus::Idle => String::new(),
-        SaveStatus::Pending => "Unsaved".into(),
-        SaveStatus::Saving => "Saving…".into(),
-        SaveStatus::Saved => "Saved".into(),
-        SaveStatus::Failed(e) => format!("Not saved: {e}"),
+        SaveStatus::Pending => t::reader_save_pending(),
+        SaveStatus::Saving => t::common_saving(),
+        SaveStatus::Saved => t::common_saved(),
+        SaveStatus::Failed(e) => t::reader_save_failed(e),
     };
     let drawing = mode() == Mode::Draw;
     let ink_class = if drawing { "ink active" } else { "ink" };
@@ -1116,24 +1126,24 @@ fn Reader(data: Loaded) -> Element {
     rsx! {
         div { class: "reader",
             header { class: "reader-bar",
-                Link { class: "icon", to: back, title: "Back", "‹" }
+                Link { class: "icon", to: back, title: t::reader_back(), "‹" }
                 span { class: "reader-title", title: "{title}", "{title}" }
                 span { class: "page-no", if page_total() > 0 { "{page() + 1} / {page_total()}" } }
                 button {
                     class: if systems_wanted { "toggle on" } else { "toggle" },
-                    title: "System view: whole systems at a minimum staff size, across pages",
+                    title: t::reader_system_view_hint(),
                     "aria-pressed": "{systems_wanted}",
                     onclick: move |_| change_settings(ReaderSettings {
                         mode: if systems_wanted { ReaderMode::Page } else { ReaderMode::Systems },
                         ..reader
                     }),
-                    "☰ Systems"
+                    {t::reader_system_view()}
                 }
                 if systems_wanted {
                     select {
                         class: "staff-size",
-                        title: "Staff size",
-                        "aria-label": "Staff size",
+                        title: t::reader_staff_size(),
+                        "aria-label": t::reader_staff_size(),
                         onchange: move |e| {
                             if let Some(z) = StaffSize::parse(&e.value()) {
                                 change_settings(ReaderSettings { staff_size: z, ..reader });
@@ -1146,34 +1156,34 @@ fn Reader(data: Loaded) -> Element {
                 }
                 button {
                     class: if drawing { "toggle on" } else { "toggle" },
-                    title: "Draw (annotations are private)",
+                    title: t::reader_draw_hint(),
                     onclick: move |_| mode.set(if drawing { Mode::Read } else { Mode::Draw }),
-                    if drawing { "✓ Done" } else { "✎ Draw" }
+                    if drawing { {t::reader_draw_done()} } else { {t::reader_draw()} }
                 }
-                button { class: "icon", title: "Annotation sets", onclick: move |_| menu.toggle(), "☰" }
+                button { class: "icon", title: t::reader_sets_title(), onclick: move |_| menu.toggle(), "☰" }
                 button {
                     class: "icon",
-                    title: if show_ink() { "Hide annotations" } else { "Show annotations" },
+                    title: if show_ink() { t::reader_hide_annotations() } else { t::reader_show_annotations() },
                     onclick: move |_| show_ink.toggle(),
                     if show_ink() { "◉" } else { "○" }
                 }
-                button { class: "icon", title: "Full screen", onclick: |_| bridge::toggle_fullscreen(), "⛶" }
+                button { class: "icon", title: t::reader_full_screen(), onclick: |_| bridge::toggle_fullscreen(), "⛶" }
             }
             if drawing {
                 div { class: "tool-bar",
-                    ToolButton { label: "Pen", icon: "✒", active: tool() == ToolKind::Pen, onclick: move |_| tool.set(ToolKind::Pen) }
-                    ToolButton { label: "Highlighter", icon: "▮", active: tool() == ToolKind::Highlighter, onclick: move |_| tool.set(ToolKind::Highlighter) }
-                    ToolButton { label: "Eraser", icon: "⌫", active: tool() == ToolKind::Eraser, onclick: move |_| tool.set(ToolKind::Eraser) }
-                    ToolButton { label: "Text", icon: "T", active: tool() == ToolKind::Text, onclick: move |_| tool.set(ToolKind::Text) }
+                    ToolButton { label: t::reader_tool_pen(), icon: "✒", active: tool() == ToolKind::Pen, onclick: move |_| tool.set(ToolKind::Pen) }
+                    ToolButton { label: t::reader_tool_highlighter(), icon: "▮", active: tool() == ToolKind::Highlighter, onclick: move |_| tool.set(ToolKind::Highlighter) }
+                    ToolButton { label: t::reader_tool_eraser(), icon: "⌫", active: tool() == ToolKind::Eraser, onclick: move |_| tool.set(ToolKind::Eraser) }
+                    ToolButton { label: t::reader_tool_text(), icon: "T", active: tool() == ToolKind::Text, onclick: move |_| tool.set(ToolKind::Text) }
                     select {
                         class: if matches!(tool(), ToolKind::Stamp(_)) { "stamps on" } else { "stamps" },
-                        title: "Stamp",
+                        title: t::reader_tool_stamp(),
                         onchange: move |e| {
                             if let Ok(i) = e.value().parse::<usize>() {
                                 tool.set(ToolKind::Stamp(StampKind::ALL[i]));
                             }
                         },
-                        option { value: "", "Stamp…" }
+                        option { value: "", {t::reader_tool_stamp_choose()} }
                         for (i, k) in StampKind::ALL.iter().enumerate() {
                             option { value: "{i}", selected: tool() == ToolKind::Stamp(*k), "{k.glyph()}" }
                         }
@@ -1181,87 +1191,87 @@ fn Reader(data: Loaded) -> Element {
                     span { class: "sep" }
                     if tool() == ToolKind::Highlighter {
                         for (c, name) in HIGHLIGHTS {
-                            button { class: if highlight() == c { "swatch on" } else { "swatch" }, title: name,
+                            button { class: if highlight() == c { "swatch on" } else { "swatch" }, title: name(),
                                 style: "background: {ink::css_color(c, 0.6)}", onclick: move |_| highlight.set(c) }
                         }
                     } else {
                         for (c, name) in COLORS {
-                            button { class: if color() == c { "swatch on" } else { "swatch" }, title: name,
+                            button { class: if color() == c { "swatch on" } else { "swatch" }, title: name(),
                                 style: "background: {ink::css_color(c, 1.0)}", onclick: move |_| color.set(c) }
                         }
                         span { class: "sep" }
                         for (w, name) in PEN_WIDTHS {
-                            button { class: if pen_width() == w { "width on" } else { "width" }, title: name,
+                            button { class: if pen_width() == w { "width on" } else { "width" }, title: name(),
                                 onclick: move |_| pen_width.set(w),
                                 span { class: "dot", style: "width: {w / 30}px; height: {w / 30}px" }
                             }
                         }
                     }
                     span { class: "sep" }
-                    button { class: "icon", title: "Undo", onclick: { let mut u = undo_redo.clone(); move |_| u(false) }, "↶" }
-                    button { class: "icon", title: "Redo", onclick: { let mut u = undo_redo.clone(); move |_| u(true) }, "↷" }
+                    button { class: "icon", title: t::reader_undo(), onclick: { let mut u = undo_redo.clone(); move |_| u(false) }, "↶" }
+                    button { class: "icon", title: t::reader_redo(), onclick: { let mut u = undo_redo.clone(); move |_| u(true) }, "↷" }
                     span { class: "save-status", "{status_text}" }
                 }
             }
             if menu() {
                 div { class: "set-menu card",
-                    h3 { "Annotation sets" }
+                    h3 { {t::reader_sets_title()} }
                     if sets.read().is_empty() {
-                        p { class: "muted small", "None yet. Drawing creates one." }
+                        p { class: "muted small", {t::reader_sets_none()} }
                     }
                     for s in sets.read().iter().cloned() {
                         label { key: "{s.id}", class: "set-option",
                             input { r#type: "radio", name: "set", checked: active() == Some(s.id),
                                 onchange: move |_| active.set(Some(s.id)) }
-                            span { "{s.name}" }
-                            if s.is_default { span { class: "tag", "default" } }
-                            if s.file_version != current_version { span { class: "tag warn", "v{s.file_version}" } }
+                            span { {crate::names::set_name(&s)} }
+                            if s.is_default { span { class: "tag", {t::reader_sets_default_tag()} } }
+                            if s.file_version != current_version { span { class: "tag warn", {t::reader_sets_version_tag(s.file_version)} } }
                         }
                     }
                     label { class: "set-option",
                         input { r#type: "radio", name: "set", checked: active().is_none(), onchange: move |_| active.set(None) }
-                        span { class: "muted", "No annotations" }
+                        span { class: "muted", {t::reader_sets_no_annotations()} }
                     }
                     div { class: "menu-actions",
-                        button { onclick: move |_| new_set(false), "New set" }
+                        button { onclick: move |_| new_set(false), {t::reader_sets_new()} }
                         if let Some(s) = active_set.clone() {
-                            button { onclick: move |_| new_set(true), "Duplicate" }
+                            button { onclick: move |_| new_set(true), {t::reader_sets_duplicate()} }
                             button {
                                 onclick: move |_| {
-                                    let current = s.name.clone();
+                                    let current = crate::names::set_name(&s);
                                     async move {
-                                        if let Some(name) = prompt("New name", &current) {
+                                        if let Some(name) = prompt(&t::reader_sets_rename_prompt(), &current) {
                                             update_set(UpdateAnnotationSet { name: Some(name), ..Default::default() }).await;
                                         }
                                     }
                                 },
-                                "Rename"
+                                {t::reader_sets_rename()}
                             }
                             if !s.is_default {
-                                button { onclick: move |_| update_set(UpdateAnnotationSet { is_default: Some(true), ..Default::default() }), "Make default" }
+                                button { onclick: move |_| update_set(UpdateAnnotationSet { is_default: Some(true), ..Default::default() }), {t::reader_sets_make_default()} }
                             }
                             if let Some(pid) = programme_id {
                                 if s.programme_id != Some(pid) {
-                                    button { onclick: move |_| update_set(UpdateAnnotationSet { programme_id: Some(Some(pid)), ..Default::default() }), "Use for this programme" }
+                                    button { onclick: move |_| update_set(UpdateAnnotationSet { programme_id: Some(Some(pid)), ..Default::default() }), {t::reader_sets_use_for_programme()} }
                                 }
                             }
-                            button { class: "danger", onclick: delete_set, "Delete" }
+                            button { class: "danger", onclick: delete_set, {t::common_delete()} }
                         }
                     }
-                    button { class: "link close", onclick: move |_| menu.set(false), "Close" }
+                    button { class: "link close", onclick: move |_| menu.set(false), {t::common_close()} }
                 }
             }
             if let Some(s) = active_set.clone().filter(|s| s.file_version != current_version) {
                 div { class: "banner",
-                    "These annotations belong to version {s.file_version} of the sheet; the current version is {current_version}. "
-                    button { onclick: migrate_set, "Move them to the current version" }
+                    {t::reader_sets_outdated(s.file_version, current_version)}
+                    button { onclick: migrate_set, {t::reader_sets_migrate()} }
                 }
             }
             if let Some(note) = layout_note {
                 div { class: "banner info", "{note}" }
             }
             if let Some(e) = error() {
-                div { class: "banner error", "{e} " button { class: "link", onclick: move |_| error.set(None), "Dismiss" } }
+                div { class: "banner error", "{e} " button { class: "link", onclick: move |_| error.set(None), {t::reader_dismiss()} } }
             }
             div {
                 class: "stage",
@@ -1356,7 +1366,7 @@ fn Reader(data: Loaded) -> Element {
                 }
                 if at_end && mode() == Mode::Read {
                     if let Some(r) = next_piece() {
-                        Link { class: "next-piece", to: r, onclick: move |e: MouseEvent| e.stop_propagation(), "Next piece ›" }
+                        Link { class: "next-piece", to: r, onclick: move |e: MouseEvent| e.stop_propagation(), {t::reader_next_piece()} }
                     }
                 }
             }
@@ -1365,7 +1375,7 @@ fn Reader(data: Loaded) -> Element {
 }
 
 #[component]
-fn ToolButton(label: &'static str, icon: &'static str, active: bool, onclick: EventHandler<MouseEvent>) -> Element {
+fn ToolButton(label: String, icon: &'static str, active: bool, onclick: EventHandler<MouseEvent>) -> Element {
     rsx! {
         button { class: if active { "tool on" } else { "tool" }, title: label, onclick: move |e| onclick.call(e),
             span { class: "tool-icon", "{icon}" }

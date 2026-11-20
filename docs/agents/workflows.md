@@ -4,8 +4,8 @@
 
 ```sh
 cargo build                       # api + server (web excluded from default-members)
-cargo test                        # 62 api unit, 19 server unit, 15 API integration tests, 1 source check (no_prose)
-cargo test -p musicus-web         # client unit tests on the host (errors.rs texts); not in default-members
+cargo test                        # api unit, i18n unit + catalogue checks, server unit, API integration tests, no_prose
+cargo test -p musicus-web         # client unit tests on the host (errors.rs: texts, pseudo-locale check); not in default-members
 cargo run --release -p musicus-server --example layout_report -- a.pdf …   # system detection per page (regressions)
 cargo clippy --all-targets        # must be warning-free
 cargo fmt --check                 # rustfmt.toml: max_width 120
@@ -15,6 +15,8 @@ dx build --platform web --package musicus-web            # debug → target/dx/m
 dx bundle --platform web --package musicus-web --release # release (needs wasm-opt)
 cargo run -p musicus-server -- serve --data-dir /tmp/m --web-dir target/dx/musicus-web/debug/web/public --insecure-cookies
 node e2e/smoke.mjs <admin-invite-url-from-log> some.pdf /tmp/shots   # fresh data dir required; BROWSER=firefox for Firefox
+python3 scripts/check-ui-literals.py  # no literal UI text in the client (R-I18N-010; CI: workflow `UI literals`)
+node e2e/pseudo.mjs <admin-invite-url>   # pseudo-locale run (fresh data dir; every UI text marked)
 python3 docs/agents/check.py [--since <ref>]
 uv run docs/requirements/tools/validate.py
 docker compose up -d --build
@@ -78,6 +80,11 @@ Site: GitHub Pages of the main repository (`https://<owner>.github.io/Musicus/`)
 5. New Typst version: change `TYPST_VERSION`/`TYPST_SHA256` in the workflow (sha256 from the release asset) and
    the version in `docs/user-guide/README.md`; run the script locally over all tags first.
 
+### Add or change a UI text (d-i18n-fluent, a-i18n-keys)
+1. Add the English message to `crates/musicus-i18n/locales/en/<area>.ftl` (id `<area>-<page>-<what>`, comment for translators; counts as `{ $count -> [one] … *[other] … }`); terms from `docs/agents/glossary.md`.
+2. Use it as `musicus_i18n::t::<id with _>(args)`; a missing message or wrong argument does not compile.
+3. `cargo test -p musicus-i18n` fails for unused messages and for other languages with other arguments or obsolete ids. Changed meaning = new id.
+
 ### Change the schema
 New `crates/musicus-server/migrations/000N_<desc>.sql` (never edit applied ones); update `data-model.md`; update queries; tests.
 
@@ -93,7 +100,7 @@ Read the entry in `decisions.md` (Serves / If you change it). If a served requir
 ## Definition of done (every change)
 
 - [ ] `cargo test`, `cargo clippy --all-targets`, `cargo fmt --check` clean; web clippy clean if client touched.
-- [ ] Client changes: built with `dx build` and exercised (ideally `e2e/smoke.mjs`).
+- [ ] Client changes: built with `dx build` and exercised (ideally `e2e/smoke.mjs`); `scripts/check-ui-literals.py` clean; new texts in the catalogue (`e2e/pseudo.mjs` for new pages).
 - [ ] `docs/agents/*` describe the new state; `python3 docs/agents/check.py --since <base>` passes.
 - [ ] Requirements updated and validated; docs submodule pull requests merged first, then pointers updated with
       `./scripts/update-submodules.sh` so that `./scripts/check-submodules.sh` passes.

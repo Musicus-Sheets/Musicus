@@ -26,6 +26,7 @@ use musicus_api::{
         strip_common_root,
     },
 };
+use musicus_i18n::t;
 
 /// Where an upload of a folder stands.
 #[derive(Clone, PartialEq, Debug)]
@@ -75,7 +76,7 @@ pub async fn send_folder(batch_id: Id, selection: Selection, mut progress: Signa
         progress.set(Progress::Hashing { done, total });
         match bridge::hash_import_file(f.index, f.size).await {
             Ok(sha256) => list.push(ImportFileInput { path: f.path.clone(), size_bytes: f.size as i64, sha256 }),
-            Err(e) => return progress.set(Progress::Failed(format!("Could not read {}: {e}", f.path))),
+            Err(e) => return progress.set(Progress::Failed(t::import_read_failed(&f.path, e.to_string()))),
         }
     }
     progress.set(Progress::Registering);
@@ -109,21 +110,13 @@ pub async fn send_folder(batch_id: Id, selection: Selection, mut progress: Signa
 pub fn ProgressView(progress: Progress) -> Element {
     let (text, value) = match &progress {
         Progress::Idle => return rsx! {},
-        Progress::Hashing { done, total } => (format!("Checking files… {done} of {total}"), Some((*done, *total))),
-        Progress::Registering => ("Comparing with the library…".to_owned(), None),
+        Progress::Hashing { done, total } => (t::import_progress_hashing(*done, *total), Some((*done, *total))),
+        Progress::Registering => (t::import_progress_registering(), None),
         Progress::Uploading { done, total, failed, name } => {
-            let failed = if *failed > 0 { format!(" ({failed} failed)") } else { String::new() };
-            (format!("Uploading {done} of {total}{failed}: {name}"), Some((*done, *total)))
+            (t::import_progress_uploading(*done, *total, *failed, name), Some((*done, *total)))
         }
         Progress::Finished { uploaded, failed, skipped } => {
-            let mut t = format!("Upload finished: {uploaded} uploaded");
-            if *skipped > 0 {
-                t.push_str(&format!(", {skipped} already in the library or twice in the folder (skipped)"));
-            }
-            if *failed > 0 {
-                t.push_str(&format!(", {failed} failed — select the folder again to retry"));
-            }
-            (t, None)
+            (t::import_progress_finished(*uploaded, *skipped, *failed), None)
         }
         Progress::Failed(e) => return rsx! { ErrorBox { message: e.clone() } },
     };
@@ -164,7 +157,7 @@ pub fn FolderPicker(onfiles: EventHandler<Vec<FolderFile>>, #[props(default)] di
     rsx! {
         div { class: "dropzone", id: "{zone_id}",
             label { class: if disabled { "button primary disabled" } else { "button primary" },
-                "Select folder…"
+                {t::import_select_folder()}
                 input { id: "{input_id}", r#type: "file", hidden: true, multiple: true, disabled,
                     "webkitdirectory": "true", "directory": "true",
                     onchange: move |_| {
@@ -174,7 +167,7 @@ pub fn FolderPicker(onfiles: EventHandler<Vec<FolderFile>>, #[props(default)] di
                         }
                     } }
             }
-            span { class: "muted", "or drop the folder here" }
+            span { class: "muted", {t::import_drop_folder()} }
         }
     }
 }
@@ -193,18 +186,17 @@ pub fn Imports() -> Element {
     rsx! {
         main {
             div { class: "page-head",
-                h1 { "Import" }
+                h1 { {t::import_title()} }
             }
             p { class: "muted",
-                "Import a whole folder of PDF parts: Musicus reads number, title, composer and the parts from the folder and file names. "
-                "Nothing reaches the library until you have checked and imported it."
+                {t::import_intro()}
             }
             NewImport {}
-            h2 { "Earlier imports" }
+            h2 { {t::import_earlier()} }
             match &*batches.read() {
                 None => rsx! { Loading {} },
                 Some(Err(e)) => rsx! { ErrorBox { message: e.message.clone() } },
-                Some(Ok(list)) if list.is_empty() => rsx! { p { class: "muted", "No imports yet." } },
+                Some(Ok(list)) if list.is_empty() => rsx! { p { class: "muted", {t::import_none()} } },
                 Some(Ok(list)) => rsx! {
                     ul { class: "batch-list",
                         for b in list.iter() {
@@ -222,7 +214,7 @@ fn BatchRow(batch: ImportBatch, ondelete: EventHandler<()>) -> Element {
     let id = batch.id;
     let mut error = use_signal(|| None::<String>);
     let delete = move |_| async move {
-        if !confirm("Forget this import? Pieces already imported stay in the library.") {
+        if !confirm(&t::import_forget_confirm()) {
             return;
         }
         match api::call(Method::DELETE, &format!("/api/import/batches/{id}")).await {
@@ -231,19 +223,19 @@ fn BatchRow(batch: ImportBatch, ondelete: EventHandler<()>) -> Element {
         }
     };
     let f = &batch.files;
-    let who = batch.created_by.clone().map(|w| format!(" by {w}")).unwrap_or_default();
+    let who = batch.created_by.clone().map(t::import_batch_by).unwrap_or_default();
     rsx! {
         li { class: "row",
             div { class: "grow",
                 Link { to: Route::ImportReview { id }, strong { "{batch.name}" } }
-                div { class: "muted small", "{format_time(batch.created_at)}{who} · {batch.pieces} pieces, {batch.committed} imported · {f.total} files" }
+                div { class: "muted small", {t::import_batch_line(format_time(batch.created_at), who, batch.pieces, batch.committed, f.total)} }
                 if f.pending + f.failed > 0 {
-                    div { class: "warn-text small", "{f.pending + f.failed} files not uploaded yet" }
+                    div { class: "warn-text small", {t::import_batch_missing(f.pending + f.failed)} }
                 }
                 if let Some(e) = error() { div { class: "error-text small", "{e}" } }
             }
-            Link { class: "button", to: Route::ImportReview { id }, "Review" }
-            button { class: "link danger", onclick: delete, "Forget" }
+            Link { class: "button", to: Route::ImportReview { id }, {t::import_review()} }
+            button { class: "link danger", onclick: delete, {t::import_forget()} }
         }
     }
 }
@@ -316,8 +308,47 @@ pub fn part_label(part: &musicus_api::import::review::ReviewPart) -> String {
     if part.instruments.iter().any(|i| i.instrument_id.is_none()) || part.instruments.is_empty() {
         format!("“{}”", part.text)
     } else {
-        part.display_name.clone()
+        crate::names::review_name(part)
     }
+}
+
+/// Order of review pieces (a-browser-sort): by archive number, pieces
+/// without one after those with one, then by title, in the UI language's
+/// collation (numbers by value).
+pub fn cmp_pieces(a: &ReviewPiece, b: &ReviewPiece) -> std::cmp::Ordering {
+    use crate::locale::compare;
+    let text = |f: &musicus_api::import::review::Field| f.value.clone().unwrap_or_default();
+    let (na, nb) = (text(&a.number), text(&b.number));
+    na.is_empty()
+        .cmp(&nb.is_empty())
+        .then_with(|| compare(&na, &nb))
+        .then_with(|| compare(&text(&a.title), &text(&b.title)))
+        .then(a.id.cmp(&b.id))
+}
+
+/// Names joined with ", " in the UI language's order.
+pub fn sorted_join(names: &[String]) -> String {
+    let mut v = names.to_vec();
+    crate::locale::sort_by_text(&mut v, |s| s);
+    v.join(", ")
+}
+
+/// Name of a structure preset in the UI language (the shared crate's English
+/// name for an unknown id).
+pub fn preset_name(p: &musicus_api::import::pattern::Preset) -> String {
+    match p.id {
+        "folder" => t::import_preset_folder(),
+        "flat-number" => t::import_preset_flat_number(),
+        "flat-title" => t::import_preset_flat_title(),
+        _ => p.name.to_owned(),
+    }
+}
+
+/// The first 12 pieces of the preview in display order.
+fn preview_pieces(pieces: &[ReviewPiece]) -> Vec<ReviewPiece> {
+    let mut v: Vec<&ReviewPiece> = pieces.iter().collect();
+    v.sort_by(|a, b| cmp_pieces(a, b));
+    v.into_iter().take(12).cloned().collect()
 }
 
 pub fn level_class(level: Level) -> &'static str {
@@ -373,7 +404,7 @@ fn NewImport() -> Element {
 
     let start = move |_| async move {
         let sel = selection();
-        let name = sel.root.clone().unwrap_or_else(|| "Import".into());
+        let name = sel.root.clone().unwrap_or_else(t::import_title);
         let input = NewImportBatch { name, pattern: pattern(), language: language() };
         let batch: ImportBatch = match api::post("/api/import/batches", &input).await {
             Ok(b) => b,
@@ -388,42 +419,41 @@ fn NewImport() -> Element {
 
     rsx! {
         section { class: "card import-new",
-            h2 { "New import" }
+            h2 { {t::import_new()} }
             FolderPicker { onfiles: choose, disabled: busy }
             if !sel.files.is_empty() {
                 p { class: "small",
-                    strong { "{sel.files.len()} PDF files" }
-                    if let Some(r) = &sel.root { " in “{r}”" }
-                    if sel.ignored == 1 { span { class: "muted", " (1 other file is ignored)" } }
-                    if sel.ignored > 1 { span { class: "muted", " ({sel.ignored} other files are ignored)" } }
+                    strong { {t::import_pdf_files(sel.files.len())} }
+                    if let Some(r) = &sel.root { {t::import_in_folder(r)} }
+                    if sel.ignored > 0 { span { class: "muted", {t::import_ignored(sel.ignored)} } }
                 }
                 div { class: "grid",
-                    label { "Structure"
+                    label { {t::import_structure()}
                         select {
                             onchange: move |e: FormEvent| pattern.set(e.value()),
                             for f in fits.iter() {
                                 option { value: "{f.preset.pattern}", selected: pattern() == f.preset.pattern,
-                                    "{f.preset.name} — {f.matched} of {sel.files.len()} files" }
+                                    {t::import_structure_option(preset_name(f.preset), f.matched, sel.files.len())} }
                             }
                             if !PRESETS.iter().any(|p| p.pattern == pattern()) {
-                                option { value: "{pattern}", selected: true, "Own pattern" }
+                                option { value: "{pattern}", selected: true, {t::import_own_pattern()} }
                             }
                         }
                     }
-                    label { "Naming language"
+                    label { {t::import_naming_language()}
                         select {
                             onchange: move |e: FormEvent| language.set(Language::parse(&e.value()).unwrap_or_default()),
                             option { value: "de", selected: language() == Language::De,
-                                if suggested() == Some(Language::De) { "German (suggested): B = B♭, Es = E♭, H = B♮" } else { "German: B = B♭, Es = E♭, H = B♮" } }
+                                if suggested() == Some(Language::De) { {t::import_language_de_suggested()} } else { {t::import_language_de()} } }
                             option { value: "en", selected: language() == Language::En,
-                                if suggested() == Some(Language::En) { "English (suggested): B is not read as a key" } else { "English: B is not read as a key" } }
+                                if suggested() == Some(Language::En) { {t::import_language_en_suggested()} } else { {t::import_language_en()} } }
                         }
                     }
-                    label { class: "wide", "Pattern"
+                    label { class: "wide", {t::import_pattern()}
                         input { class: "mono", value: "{pattern}", spellcheck: false,
                             oninput: move |e| pattern.set(e.value()) }
                         span { class: "muted small",
-                            "{{number}} {{title}} {{composer}} {{arranger}} {{genre}} {{part}}, {{*}} = ignore, [ … ] = optional, / = folder"
+                            {t::import_pattern_hint("{number} {title} {composer} {arranger} {genre} {part}", "{*}")}
                         }
                     }
                 }
@@ -431,19 +461,19 @@ fn NewImport() -> Element {
                     div { class: "error", role: "alert", "{e}" }
                 } else {
                     p { class: "import-summary",
-                        "{shown.pieces.len()} pieces: "
-                        span { class: "count lvl-green", "{green} ready" } " · "
-                        span { class: "count lvl-yellow", "{yellow} to check" } " · "
-                        span { class: "count lvl-red", "{red} to complete" }
+                        {t::import_summary_pieces(shown.pieces.len())}
+                        span { class: "count lvl-green", {t::import_count_ready(green)} } " · "
+                        span { class: "count lvl-yellow", {t::import_count_check(yellow)} } " · "
+                        span { class: "count lvl-red", {t::import_count_complete(red)} }
                         if !shown.unmatched.is_empty() {
                             " · "
-                            span { class: "count lvl-red", "{shown.unmatched.len()} files do not fit the pattern" }
+                            span { class: "count lvl-red", {t::import_count_unmatched(shown.unmatched.len())} }
                         }
                     }
-                    PreviewTable { pieces: shown.pieces.iter().take(12).cloned().collect::<Vec<_>>(), more: shown.pieces.len().saturating_sub(12) }
+                    PreviewTable { pieces: preview_pieces(&shown.pieces), more: shown.pieces.len().saturating_sub(12) }
                     if !shown.unmatched.is_empty() {
                         details { class: "small",
-                            summary { "Files that do not fit the pattern" }
+                            summary { {t::import_unmatched_files()} }
                             ul { for p in shown.unmatched.iter().take(50) { li { class: "mono", "{p}" } } }
                         }
                     }
@@ -451,9 +481,9 @@ fn NewImport() -> Element {
                 ProgressView { progress: progress() }
                 if let Some(e) = error() { ErrorBox { message: e } }
                 div { class: "actions",
-                    span { class: "muted small", "{format_size(sel.files.iter().map(|f| f.size as i64).sum())} to check. You can review everything before anything is imported." }
+                    span { class: "muted small", {t::import_size_to_check(format_size(sel.files.iter().map(|f| f.size as i64).sum()))} }
                     button { class: "primary", disabled: busy || shown.error.is_some() || shown.pieces.is_empty(), onclick: start,
-                        "Upload and review"
+                        {t::import_upload_and_review()}
                     }
                 }
             }
@@ -470,12 +500,12 @@ fn PreviewTable(pieces: Vec<ReviewPiece>, more: usize) -> Element {
         div { class: "table-scroll",
         table { class: "import-preview",
             colgroup { col { class: "no" } col { class: "title" } col { class: "composer" } col { class: "genre" } col { class: "preview-parts" } }
-            thead { tr { th { "No." } th { "Title" } th { "Composer" } th { "Genre" } th { "Parts" } } }
+            thead { tr { th { {t::import_col_number()} } th { {t::library_field_title()} } th { {t::library_field_composer()} } th { {t::library_field_genre()} } th { {t::import_col_parts()} } } }
             tbody {
                 for p in pieces.iter() {
                     tr { key: "{p.id}", class: level_class(p.level),
                         td { class: level_class(p.number.level), {p.number.value.clone().unwrap_or_default()} }
-                        td { class: level_class(p.title.level), {p.title.value.clone().unwrap_or_else(|| "— title missing —".into())} }
+                        td { class: level_class(p.title.level), {p.title.value.clone().unwrap_or_else(t::import_title_missing)} }
                         td { {p.composer.value.clone().unwrap_or_default()} }
                         td { {p.genre.value.clone().unwrap_or_default()} }
                         td { class: "preview-parts",
@@ -490,6 +520,6 @@ fn PreviewTable(pieces: Vec<ReviewPiece>, more: usize) -> Element {
             }
         }
         }
-        if more > 0 { p { class: "muted small", "… and {more} more pieces." } }
+        if more > 0 { p { class: "muted small", {t::import_more_pieces(more)} } }
     }
 }

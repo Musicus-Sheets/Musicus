@@ -495,8 +495,6 @@ pub struct ReviewPart {
     pub voices: VoicesField,
     /// Custom name chosen in the review.
     pub label: Option<String>,
-    /// The name the part will have.
-    pub display_name: String,
     /// Groups that will be able to read the part.
     pub readers: Vec<String>,
     pub notes: Vec<Note>,
@@ -535,6 +533,25 @@ impl ReviewPart {
     /// one keeps the others as they are (an unknown word stays to confirm).
     pub fn instrument_picks(&self) -> Vec<InstrumentPick> {
         self.instruments.iter().filter_map(ResolvedInstrument::pick).collect()
+    }
+}
+
+impl ReviewPart {
+    /// The names of the resolved library instruments, for the name the part
+    /// will have (`naming::part_name` with the client's words).
+    pub fn instrument_names(&self) -> Vec<&str> {
+        self.instruments.iter().filter_map(|i| i.name.as_deref()).collect()
+    }
+
+    /// The name the part will have, with the given words.
+    pub fn name(&self, words: &naming::NameWords) -> String {
+        naming::part_name(
+            words,
+            self.label.as_deref(),
+            &self.instrument_names(),
+            self.key.value.as_deref(),
+            &self.voices.values,
+        )
     }
 }
 
@@ -861,8 +878,6 @@ fn review_part(p: PartInput, extra_readers: &[&Group], lib: &Library) -> ReviewP
         notes.push(Note::NoReaders);
     }
     let label = p.overrides.label.as_ref().map(|l| l.trim().to_owned()).filter(|l| !l.is_empty());
-    let name_refs: Vec<&str> = names.iter().map(String::as_str).collect();
-    let display_name = naming::part_name(label.as_deref(), &name_refs, key.value.as_deref(), &voices.values);
     ReviewPart {
         id: p.id,
         file: p.file,
@@ -871,7 +886,6 @@ fn review_part(p: PartInput, extra_readers: &[&Group], lib: &Library) -> ReviewP
         key,
         voices,
         label,
-        display_name,
         readers,
         notes,
         level,
@@ -979,7 +993,7 @@ mod tests {
             (Some("Alte Kameraden"), Some(Source::Librarian), Level::Green)
         );
         assert_eq!(
-            r.parts.iter().map(|p| p.display_name.as_str()).collect::<Vec<_>>(),
+            r.parts.iter().map(|p| p.name(&crate::naming::test_words())).collect::<Vec<_>>(),
             ["Klarinette 2", "Klarinette in E♭"]
         );
     }
@@ -1170,13 +1184,16 @@ mod tests {
         let over =
             PartOverrides { key: Some("in B-flat".into()), voices: Some(vec!["2".into()]), ..Default::default() };
         let r = part(trumpet, file(1), &over);
-        assert_eq!((r.display_name.as_str(), r.level), ("Trumpet in B♭ 2", Level::Green));
+        assert_eq!((r.name(&crate::naming::test_words()).as_str(), r.level), ("Trumpet in B♭ 2", Level::Green));
         let mut two = PartOverrides::default();
         two.merge(&PartOverrides { voices: Some(vec![" 1 & 2".into(), "1".into()]), ..Default::default() });
         assert_eq!(two.voices, Some(vec!["1".to_string(), "2".to_string()]), "cleaned on merge");
         let r = part(trumpet, file(1), &two);
         assert_eq!(r.voices.values, ["1", "2"], "cleaned");
-        assert_eq!((r.display_name.as_str(), r.voices.source), ("Trumpet 1 & 2", Some(Source::Librarian)));
+        assert_eq!(
+            (r.name(&crate::naming::test_words()).as_str(), r.voices.source),
+            ("Trumpet 1 & 2", Some(Source::Librarian))
+        );
         let bad = PartOverrides { key: Some("B".into()), ..Default::default() };
         assert_eq!(part(trumpet, file(1), &bad).level, Level::Red);
         let mut pending = file(1);
@@ -1220,7 +1237,7 @@ mod tests {
                 ("Flute".to_string(), Some(Source::Librarian), Level::Green)
             ]
         );
-        assert_eq!((r.level, r.display_name.as_str()), (Level::Green, "Flute / Trumpet 1 & 2"));
+        assert_eq!((r.level, r.name(&crate::naming::test_words()).as_str()), (Level::Green, "Flute / Trumpet 1 & 2"));
         assert_eq!(r.instrument_picks(), [InstrumentPick::Id(trumpet), InstrumentPick::Id(flute)]);
 
         // An instrument added to an unknown word keeps the word: still red,
@@ -1292,11 +1309,14 @@ mod tests {
         let none = PartOverrides::default();
         // Same dictionary entry twice (already one in the parser).
         let k = reviewed(&none, 1);
-        assert_eq!((ids(&k), k.display_name.as_str(), k.level), (vec![Some(clarinet)], "Clarinet 1", Level::Green));
+        assert_eq!(
+            (ids(&k), k.name(&crate::naming::test_words()).as_str(), k.level),
+            (vec![Some(clarinet)], "Clarinet 1", Level::Green)
+        );
         // Two different words resolving to the same library instrument.
         let t = reviewed(&none, 2);
         assert_eq!(pieces[0].parts[2].text.instruments.len(), 2, "two words in the file name");
-        assert_eq!((ids(&t), t.display_name.as_str()), (vec![Some(trumpet)], "Trumpet 2"));
+        assert_eq!((ids(&t), t.name(&crate::naming::test_words()).as_str()), (vec![Some(trumpet)], "Trumpet 2"));
         assert_eq!(t.readers, ["Trumpets"]);
         // Librarian adds an instrument the part has already: no-op.
         let mut over = PartOverrides::default();
@@ -1311,7 +1331,7 @@ mod tests {
         });
         let t = reviewed(&over, 2);
         assert_eq!(ids(&t), [Some(trumpet), Some(flugelhorn)]);
-        assert_eq!(t.display_name, "Flugelhorn / Trumpet 2");
+        assert_eq!(t.name(&crate::naming::test_words()), "Flugelhorn / Trumpet 2");
         assert_eq!(t.instrument_picks().len(), 2, "the next change sends each instrument once");
         // An unknown word kept twice (in any spelling) is listed once.
         let mut over = PartOverrides::default();

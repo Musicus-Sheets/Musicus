@@ -3,6 +3,7 @@
 use crate::{Route, api, session, ui::ErrorBox};
 use dioxus::prelude::*;
 use musicus_api::{AcceptInvite, InviteInfo, LoginRequest, LoginResponse};
+use musicus_i18n::t;
 
 #[component]
 pub fn Login() -> Element {
@@ -26,7 +27,7 @@ pub fn Login() -> Element {
                 let mut user = s.user;
                 user.set(Some(r.user));
             }
-            Err(e) if e.status == 401 => error.set(Some("Wrong username or password.".into())),
+            Err(e) if e.status == 401 => error.set(Some(t::login_wrong_password())),
             Err(e) => error.set(Some(e.message)),
         }
         busy.set(false);
@@ -38,16 +39,16 @@ pub fn Login() -> Element {
                 if let Some(e) = error() {
                     ErrorBox { message: e }
                 }
-                label { "Username"
+                label { {t::login_username()}
                     input { r#type: "text", autocomplete: "username", autofocus: true, required: true,
                         value: "{username}", oninput: move |e| username.set(e.value()) }
                 }
-                label { "Password"
+                label { {t::login_password()}
                     input { r#type: "password", autocomplete: "current-password", required: true,
                         value: "{password}", oninput: move |e| password.set(e.value()) }
                 }
-                button { class: "primary", r#type: "submit", disabled: busy(), "Log in" }
-                p { class: "muted small", "No account yet? Ask your librarian for an invite link." }
+                button { class: "primary", r#type: "submit", disabled: busy(), {t::login_submit()} }
+                p { class: "muted small", {t::login_no_account()} }
             }
         }
     }
@@ -66,7 +67,7 @@ pub fn Invite(token: String) -> Element {
     let submit = move |e: FormEvent| async move {
         e.prevent_default();
         if password() != repeat() {
-            error.set(Some("The passwords do not match.".into()));
+            error.set(Some(t::login_invite_mismatch()));
             return;
         }
         match api::post::<_, LoginResponse>(
@@ -86,30 +87,30 @@ pub fn Invite(token: String) -> Element {
     rsx! {
         main { class: "auth",
             match &*info.read() {
-                None => rsx! { p { "Loading…" } },
+                None => rsx! { p { {musicus_i18n::t::common_loading()} } },
                 Some(Err(_)) => rsx! {
                     div { class: "card",
-                        h1 { "Link expired" }
-                        p { "This invite link is invalid or has expired. Ask your librarian for a new one." }
-                        Link { to: Route::Login {}, "Go to login" }
+                        h1 { {t::login_invite_expired_title()} }
+                        p { {t::login_invite_expired_text()} }
+                        Link { to: Route::Login {}, {t::login_invite_go_to_login()} }
                     }
                 },
                 Some(Ok(i)) => rsx! {
                     form { class: "card", onsubmit: submit,
-                        h1 { "Welcome, {i.display_name}" }
-                        p { "Choose a password for the username " strong { "{i.username}" } "." }
+                        h1 { {t::login_invite_welcome(&i.display_name)} }
+                        p { crate::ui::WithStrong { text: t::login_invite_choose(crate::ui::MARK), strong: i.username.clone() } }
                         if let Some(e) = error() {
                             ErrorBox { message: e }
                         }
-                        label { "New password (at least 8 characters)"
+                        label { {t::account_new_password()}
                             input { r#type: "password", autocomplete: "new-password", minlength: 8, required: true,
                                 value: "{password}", oninput: move |e| password.set(e.value()) }
                         }
-                        label { "Repeat password"
+                        label { {t::login_invite_repeat()}
                             input { r#type: "password", autocomplete: "new-password", required: true,
                                 value: "{repeat}", oninput: move |e| repeat.set(e.value()) }
                         }
-                        button { class: "primary", r#type: "submit", "Set password and log in" }
+                        button { class: "primary", r#type: "submit", {t::login_invite_submit()} }
                     }
                 },
             }

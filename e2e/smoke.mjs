@@ -536,6 +536,8 @@ await m.waitForFunction(() => {
   return c && c.style.width !== '';
 }, null, { timeout: 20000 });
 await m.waitForTimeout(1500);
+const firstSetName = await m.evaluate(async () => (await (await fetch('/api/parts/1/annotation-sets')).json())[0].name);
+check(/Christmas concert/.test(firstSetName ?? ''), `the set created while reading a programme is named after it (${firstSetName}); an unnamed set is API-tested`);
 const objects = await m.evaluate(async () => {
   const sets = await (await fetch('/api/parts/1/annotation-sets')).json();
   return sets[0].pages.map((p) => p.revision);
@@ -908,7 +910,7 @@ await m.getByText('Alte Kameraden').waitFor();
 check(JSON.stringify(await m.locator('.score', { hasText: 'Alte Kameraden' }).locator('.part-label').allInnerTexts()) === '["Trumpet in B♭ 1 & 2"]',
   'after the commit anna sees the imported trumpet part (German "in B" = B♭), and only that');
 const imported = await a.evaluate(async () => (await (await fetch('/api/scores?q=0412')).json())[0].parts
-  .find((p) => p.display_name === 'Clarinet / Flute 2 & 3'));
+  .find((p) => p.instruments.map((i) => i.name).sort().join(' / ') === 'Clarinet / Flute'));
 check(imported && imported.instrument_ids.length === 2 && JSON.stringify(imported.voices) === '["2","3"]',
   'the committed part has both instruments and both voices');
 await a.getByRole('button', { name: 'Undo import' }).click();
