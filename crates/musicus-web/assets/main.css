@@ -406,7 +406,9 @@ label.check input { width: 1.2rem; height: 1.2rem; min-height: auto; }
 .table-scroll { overflow-x: auto; }
 table.import-preview, table.import-parts { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
 /* Preview of the pattern: number, title, composer and genre keep their width,
-   the parts take the rest and wrap. */
+   the parts take the rest and wrap. The parts cell is `preview-parts`, not
+   `parts`: the library's `.parts` flex rule would turn it into a flex box
+   whose bottom border no longer lines up with the row. */
 table.import-preview { table-layout: fixed; min-width: 600px; }
 .import-preview col.no { width: 4rem; }
 .import-preview col.title { width: 24%; }

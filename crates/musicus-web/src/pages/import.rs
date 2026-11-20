@@ -467,7 +467,7 @@ fn PreviewTable(pieces: Vec<ReviewPiece>, more: usize) -> Element {
         // the rest and wrap onto several lines.
         div { class: "table-scroll",
         table { class: "import-preview",
-            colgroup { col { class: "no" } col { class: "title" } col { class: "composer" } col { class: "genre" } col { class: "parts" } }
+            colgroup { col { class: "no" } col { class: "title" } col { class: "composer" } col { class: "genre" } col { class: "preview-parts" } }
             thead { tr { th { "No." } th { "Title" } th { "Composer" } th { "Genre" } th { "Parts" } } }
             tbody {
                 for p in pieces.iter() {
@@ -476,7 +476,7 @@ fn PreviewTable(pieces: Vec<ReviewPiece>, more: usize) -> Element {
                         td { class: level_class(p.title.level), {p.title.value.clone().unwrap_or_else(|| "— title missing —".into())} }
                         td { {p.composer.value.clone().unwrap_or_default()} }
                         td { {p.genre.value.clone().unwrap_or_default()} }
-                        td { class: "parts",
+                        td { class: "preview-parts",
                             div { class: "ichips",
                                 for (i, part) in p.parts.iter().enumerate() {
                                     span { key: "{i}", class: "ichip {level_class(part.level)}", title: "{part.text}", {part_label(part)} }
