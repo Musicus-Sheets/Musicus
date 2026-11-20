@@ -316,7 +316,7 @@ pub fn part_label(part: &musicus_api::import::review::ReviewPart) -> String {
     if part.instruments.iter().any(|i| i.instrument_id.is_none()) || part.instruments.is_empty() {
         format!("“{}”", part.text)
     } else {
-        part.display_name.clone()
+        crate::names::review_name(part)
     }
 }
 

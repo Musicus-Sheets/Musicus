@@ -11,7 +11,7 @@ use std::path::Path;
 const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 /// Messages used through a lookup by code instead of their function.
-const DYNAMIC_PREFIXES: &[(&str, &str)] = &[("key-name-", "t::key_name(")];
+const DYNAMIC_PREFIXES: &[(&str, &str)] = &[("key-name-", "t::key_name"), ("key-option-", "t::key_option(")];
 
 fn catalogue(lang_files: &[std::path::PathBuf]) -> Vec<scan::Msg> {
     lang_files.iter().flat_map(|f| scan::messages(f).unwrap()).collect()
@@ -45,16 +45,24 @@ fn rust_sources(dir: &Path, out: &mut String) {
     }
 }
 
+/// `call` occurs as a whole path (called or passed as a function).
+fn uses(code: &str, call: &str) -> bool {
+    code.match_indices(call)
+        .any(|(i, _)| !code[i + call.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+}
+
 #[test]
 fn every_english_message_is_used() {
     let mut code = String::new();
     rust_sources(&Path::new(ROOT).join("../musicus-web/src"), &mut code);
+    // `name_words` uses the part-name messages for the client.
+    code.push_str(&std::fs::read_to_string(Path::new(ROOT).join("src/lib.rs")).unwrap());
     let langs = scan::languages(&Path::new(ROOT).join("locales"));
     let unused: Vec<String> = catalogue(&langs[0].1)
         .into_iter()
         .filter(|m| match DYNAMIC_PREFIXES.iter().find(|(p, _)| m.id.starts_with(p)) {
-            Some((_, call)) => !code.contains(call),
-            None => !code.contains(&format!("t::{}(", scan::fn_name(&m.id))),
+            Some((_, call)) => !uses(&code, call.trim_end_matches('(')),
+            None => !uses(&code, &format!("t::{}", scan::fn_name(&m.id))),
         })
         .map(|m| format!("{} ({})", m.id, m.file))
         .collect();

@@ -40,7 +40,7 @@ struct SetRow {
     file_id: Id,
     sha256: String,
     version: i64,
-    name: String,
+    name: Option<String>,
     programme_id: Option<Id>,
     is_default: bool,
     created_at: i64,
@@ -134,7 +134,9 @@ pub async fn create(
     Json(req): Json<NewAnnotationSet>,
 ) -> ApiResult<Json<AnnotationSet>> {
     ensure_part_readable(&app, &user, part_id).await?;
-    let name = required(Field::Name, &req.name, 100)?;
+    // `None`: the unnamed set the reader creates (at most one per user and
+    // part: partial unique index, migration 0009); the client names it.
+    let name = req.name.as_deref().map(|n| required(Field::Name, n, 100)).transpose()?;
     check_programme(&app, req.programme_id).await?;
     let source = match req.copy_from {
         Some(id) => {

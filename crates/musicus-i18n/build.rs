@@ -14,6 +14,8 @@ use std::path::Path;
 const CONNECTOR_MESSAGE: &str = "part-name-with-key";
 /// Prefix of the key names (`key-name-Bb`).
 const KEY_NAME: &str = "key-name-";
+/// Prefix of key selection entries that differ from the name (`key-option-H`).
+const KEY_OPTION: &str = "key-option-";
 
 fn main() {
     let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -101,6 +103,7 @@ fn main() {
     writeln!(out, "#[cfg(feature = \"bundles\")]\n#[allow(non_snake_case, clippy::too_many_arguments, clippy::match_single_binding)]").unwrap();
     writeln!(out, "pub mod t {{\n    #[allow(unused_imports)]\n    use crate::{{Arg, message}};\n").unwrap();
     let mut keys: Vec<(String, String)> = Vec::new();
+    let mut options: Vec<(String, String)> = Vec::new();
     for m in en {
         for line in m.text.lines() {
             writeln!(out, "    /// {}", line.replace("*/", "* /")).unwrap();
@@ -113,6 +116,9 @@ fn main() {
         if let Some(code) = m.id.strip_prefix(KEY_NAME) {
             keys.push((code.to_owned(), m.id.clone()));
         }
+        if let Some(code) = m.id.strip_prefix(KEY_OPTION) {
+            options.push((code.to_owned(), m.id.clone()));
+        }
     }
     writeln!(out, "    /// Name of a key code in the UI language (`key-name-<code>`), `None` for an unknown code.")
         .unwrap();
@@ -120,7 +126,13 @@ fn main() {
     for (code, id) in &keys {
         writeln!(out, "            {code:?} => Some(message({id:?}, &[])),").unwrap();
     }
-    writeln!(out, "            _ => None,\n        }}\n    }}\n}}").unwrap();
+    writeln!(out, "            _ => None,\n        }}\n    }}\n").unwrap();
+    writeln!(out, "    /// Entry of the key selection (`key-option-<code>`, else the key name).").unwrap();
+    writeln!(out, "    pub fn key_option(code: &str) -> Option<String> {{\n        match code {{").unwrap();
+    for (code, id) in &options {
+        writeln!(out, "            {code:?} => Some(message({id:?}, &[])),").unwrap();
+    }
+    writeln!(out, "            _ => key_name(code),\n        }}\n    }}\n}}").unwrap();
 
     let dest = Path::new(&std::env::var("OUT_DIR").unwrap()).join("messages.rs");
     std::fs::write(dest, out).unwrap();

@@ -68,7 +68,7 @@ Auth column: `—` none, `U` any logged-in user, `L` librarian/admin, `A` admin.
 | POST | `/users/{id}/invite` | A | `users::reinvite` | disabled ⇒ 409; replaces invites | R-ACC-010 |
 | GET | `/instruments` | U | `groups::list_instruments` | all | — |
 | POST | `/instruments` | L | `groups::create_instrument` | name ≤80 unique (NOCASE) ⇒ 409 | R-LIB-003 |
-| PUT/DELETE | `/instruments/{id}` | L | `groups::update_instrument` / `delete_instrument` | rename re-indexes the instrument's parts (`part_fts`, derived names); delete in use ⇒ 409 (FK RESTRICT, see Errors) | R-LIB-003, R-LIB-010 |
+| PUT/DELETE | `/instruments/{id}` | L | `groups::update_instrument` / `delete_instrument` | rename re-indexes the instrument's parts (`part_fts`); delete in use ⇒ 409 (FK RESTRICT, see Errors) | R-LIB-003, R-LIB-010 |
 | GET | `/groups` | L | `groups::list_groups` | `Vec<Group>` with member/instrument/score ids | R-ACL-004 |
 | POST | `/groups` | A | `groups::create_group` | | R-ACL-004 |
 | PUT/DELETE | `/groups/{id}` | A | `groups::rename_group` / `delete_group` | | R-ACL-004 |
@@ -81,7 +81,7 @@ Auth column: `—` none, `U` any logged-in user, `L` librarian/admin, `A` admin.
 | GET | `/scores/{id}` | U, ACL | `library::get_score` | 404 if no visible part (members) | R-LIB-005 |
 | PUT/DELETE | `/scores/{id}` | L | `library::update_score` / `delete_score` | update writes `archive_search` with the number; delete cascades parts, versions, annotation sets (blobs stay) | R-LIB-001, R-LIB-015 |
 | POST | `/scores/{id}/parts` | L | `library::create_part` | `PartInput` (label optional ≤120, voices: list cleaned by `naming::clean_voices`, ≤10 entries of ≤20 chars else 400, stored in `part_voices` by `set_voices`, key `naming::normalize_key` else 400, ≤20 instruments); re-indexes `part_fts` | R-LIB-002, R-LIB-010, R-LIB-011 |
-| GET | `/parts/{id}` | U, ACL | `library::get_part` | `Part` with `display_name` (custom or derived) and current `FileVersion` | R-LIB-005, R-LIB-010 |
+| GET | `/parts/{id}` | U, ACL | `library::get_part` | `Part` with its name components (`label`, `instruments` {id, name}, key, voices; no composed name) and current `FileVersion` | R-LIB-005, R-LIB-010 |
 | PUT/DELETE | `/parts/{id}` | L | `library::update_part` / `delete_part` | all fields + instruments + voices replaced; key as on POST, except the part's stored (legacy) key may be sent unchanged; re-indexes `part_fts` (delete: trigger) | R-LIB-002, R-LIB-011 |
 | PUT | `/parts/{id}/file` | L | `library::upload_file` | raw body; no body limit layer (blob store enforces `max_upload_bytes` ⇒ 413); non-PDF ⇒ 415; dedupe; new version unless same file as latest | R-FILE-001, R-FILE-002, R-FILE-003 |
 | GET | `/parts/{id}/versions` | U, ACL | `library::list_versions` | newest first | R-FILE-002 |

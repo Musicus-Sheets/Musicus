@@ -735,7 +735,7 @@ fn PartRow(
                     onchange: move |e: FormEvent| change(PartOverrides { key: Some(e.value()), ..Default::default() }),
                     option { value: "", selected: key.is_empty(), "—" }
                     for k in naming::KEYS.iter() {
-                        option { key: "{k.code}", value: "{k.code}", selected: key == k.code, "{k.option}" }
+                        option { key: "{k.code}", value: "{k.code}", selected: key == k.code, {crate::names::key_option(k.code)} }
                     }
                     if legacy_key { option { value: "{key}", selected: true, "{key}" } }
                 }
@@ -744,7 +744,7 @@ fn PartRow(
             td { class: "voices {level_class(part.voices.level)}", "data-label": "Voices",
                 title: "{source_hint(part.voices.source, part.voices.note.as_ref())}",
                 if done {
-                    "{part.voices.values.join(naming::VOICE_SEPARATOR)}"
+                    {part.voices.values.join(&musicus_i18n::t::part_name_voice_sep())}
                 } else {
                     VoicesCell { id, path: path.clone(), values: part.voices.values.clone(), review, error }
                 }

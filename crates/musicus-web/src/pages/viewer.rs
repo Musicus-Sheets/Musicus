@@ -295,7 +295,10 @@ fn neighbours(programme: &Programme, part: &Part) -> (Option<Route>, Option<Rout
         return (None, None);
     };
     let pick = |idx: usize| -> Option<Route> {
-        let parts: Vec<&Part> = programme.items.get(idx)?.score.parts.iter().filter(|p| p.file.is_some()).collect();
+        let parts: Vec<&Part> = crate::names::sorted(&programme.items.get(idx)?.score.parts)
+            .into_iter()
+            .filter(|p| p.file.is_some())
+            .collect();
         let chosen = parts
             .iter()
             .find(|p| p.instrument_ids.iter().any(|i| part.instrument_ids.contains(i)))
@@ -688,7 +691,8 @@ fn Reader(data: Loaded) -> Element {
                 });
                 return;
             }
-            let name = programme_title.clone().unwrap_or_else(|| "My annotations".into());
+            // Unnamed (None) unless read from a programme: shown as "My annotations".
+            let name = programme_title.clone();
             let mut change = change.clone();
             let store = store.clone();
             spawn(async move {
@@ -1025,7 +1029,7 @@ fn Reader(data: Loaded) -> Element {
         let source = if copy { active() } else { None };
         let suggestion = if copy { "Copy" } else { "Concert" };
         let Some(name) = prompt("Name of the new annotation set", suggestion) else { return };
-        let req = NewAnnotationSet { name, programme_id, copy_from: source };
+        let req = NewAnnotationSet { name: Some(name), programme_id, copy_from: source };
         match api::post::<_, AnnotationSet>(&format!("/api/parts/{part_id}/annotation-sets"), &req).await {
             Ok(set) => {
                 let id = set.id;
@@ -1068,7 +1072,7 @@ fn Reader(data: Loaded) -> Element {
 
     // --- View ------------------------------------------------------------
 
-    let title = format!("{} — {}", data.score.title, part.display_name);
+    let title = format!("{} — {}", data.score.title, crate::names::part_name(&part));
     let back = match programme_id {
         Some(id) => Route::ProgrammeView { id },
         None => Route::Library {},
@@ -1213,7 +1217,7 @@ fn Reader(data: Loaded) -> Element {
                         label { key: "{s.id}", class: "set-option",
                             input { r#type: "radio", name: "set", checked: active() == Some(s.id),
                                 onchange: move |_| active.set(Some(s.id)) }
-                            span { "{s.name}" }
+                            span { {crate::names::set_name(&s)} }
                             if s.is_default { span { class: "tag", "default" } }
                             if s.file_version != current_version { span { class: "tag warn", "v{s.file_version}" } }
                         }
@@ -1228,7 +1232,7 @@ fn Reader(data: Loaded) -> Element {
                             button { onclick: move |_| new_set(true), "Duplicate" }
                             button {
                                 onclick: move |_| {
-                                    let current = s.name.clone();
+                                    let current = crate::names::set_name(&s);
                                     async move {
                                         if let Some(name) = prompt("New name", &current) {
                                             update_set(UpdateAnnotationSet { name: Some(name), ..Default::default() }).await;

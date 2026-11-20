@@ -1,12 +1,16 @@
-//! Search index of part names (`part_fts`, migration 0002). A part's shown
-//! name depends on the names of its instruments, so SQL triggers cannot
-//! keep it current; the server re-indexes parts whenever a part or an
-//! instrument changes, and rebuilds the whole index on start when it does
-//! not match the parts table (first start after the migration).
+//! Search index of parts (`part_fts`, migration 0002). The server composes
+//! no part names (a-client-part-names): it indexes the components (custom
+//! name, instrument names as entered, voices) plus the key code and every
+//! name of the key in the shipped languages (`musicus_i18n::KEY_SPELLINGS`),
+//! so a part is found by whatever words a reader of any language types
+//! (R-I18N-007). Instrument names live in another table, so SQL triggers
+//! cannot keep the text current; the server re-indexes parts whenever a part
+//! or an instrument changes, and rebuilds the whole index on start when it
+//! does not match the parts table (after migrations that empty it).
 //! Deleting a part removes its row by trigger. (a-part-names, R-LIB-011)
 
 use crate::db::json_ids;
-use musicus_api::{Id, naming};
+use musicus_api::Id;
 use sqlx::SqliteConnection;
 
 #[derive(sqlx::FromRow)]
@@ -18,22 +22,31 @@ struct Row {
     instruments: String,
 }
 
-/// Indexed text of a part: its shown name, the derived name when a custom
-/// name hides it, and the key code ("Bb"), which the glyph form "B♭" does
-/// not tokenise to. Every voice is its own token ("Clarinet 1 & 2" gives
-/// "1" and "2"), so "clarinet 2" finds the part (a-part-voices).
+/// Indexed text of a part: custom name, instrument names, voices (each its
+/// own token, so "clarinet 2" finds "Clarinet 1 & 2", a-part-voices), the key
+/// code ("Bb") and the key's names in all shipped languages ("B♭"; FTS5
+/// splits at "♭", giving the token "b").
 pub fn index_text(label: Option<&str>, instruments: &[&str], key: Option<&str>, voices: &[String]) -> String {
-    let derived = naming::derived_name(instruments, key, voices);
-    let mut text = naming::part_name(label, instruments, key, voices);
-    if text != derived {
-        text.push(' ');
-        text.push_str(&derived);
+    index_text_with(label, instruments, key, voices, musicus_i18n::key_spellings)
+}
+
+fn index_text_with(
+    label: Option<&str>,
+    instruments: &[&str],
+    key: Option<&str>,
+    voices: &[String],
+    spellings: impl Fn(&str) -> &'static [&'static str],
+) -> String {
+    let mut words: Vec<&str> = Vec::new();
+    words.extend(label.map(str::trim).filter(|l| !l.is_empty()));
+    words.extend(instruments.iter().map(|i| i.trim()));
+    words.extend(voices.iter().map(|v| v.trim()));
+    if let Some(k) = key.map(str::trim).filter(|k| !k.is_empty()) {
+        words.push(k);
+        words.extend(spellings(k).iter().copied().filter(|s| *s != k));
     }
-    if let Some(k) = key {
-        text.push(' ');
-        text.push_str(k);
-    }
-    text
+    words.retain(|w| !w.is_empty());
+    words.join(" ")
 }
 
 /// Re-indexes the given parts (all parts with `None`). Runs inside the
@@ -86,11 +99,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn index_text_has_derived_name_and_key_code() {
+    fn index_text_has_components_and_key_spellings() {
         let v = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-        assert_eq!(index_text(None, &["Clarinet"], Some("Bb"), &v(&["2"])), "Clarinet in B♭ 2 Bb");
-        assert_eq!(index_text(Some("Solo Cornet"), &["Trumpet"], Some("Bb"), &[]), "Solo Cornet Trumpet in B♭ Bb");
+        assert_eq!(index_text(None, &["Clarinet"], Some("Bb"), &v(&["2"])), "Clarinet 2 Bb B♭");
+        assert_eq!(index_text(Some("Solo Cornet"), &["Trumpet"], Some("Bb"), &[]), "Solo Cornet Trumpet Bb B♭");
         assert_eq!(index_text(None, &["Flute"], None, &[]), "Flute");
-        assert_eq!(index_text(None, &["Klarinette"], None, &v(&["1", "2"])), "Klarinette 1 & 2");
+        assert_eq!(index_text(None, &["Klarinette"], None, &v(&["1", "2"])), "Klarinette 1 2");
+        assert_eq!(index_text(None, &["Horn"], Some("Es/F"), &[]), "Horn Es/F", "legacy keys as stored");
+        // A second shipped language adds its names (here a German table).
+        let de = |k: &str| -> &'static [&'static str] {
+            match k {
+                "Eb" => &["E♭", "Es"],
+                _ => &[],
+            }
+        };
+        assert_eq!(index_text_with(None, &["Horn"], Some("Eb"), &[], de), "Horn Eb E♭ Es");
     }
 }

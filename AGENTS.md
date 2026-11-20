@@ -73,3 +73,5 @@ merge commits on the docs `main` (never the feature-branch commits). The require
 - New migrations: new numbered file in `crates/musicus-server/migrations/`; never edit applied ones.
 - Store and show user data exactly as entered; never translate or reformat it (a-data-as-entered, R-I18N-006).
   UI terms and their German translations: `docs/agents/glossary.md`.
+- The server sends no composed names: parts carry their components; the web client composes names, key names and
+  the unnamed set's name in the UI language (`names.rs`, `naming::NameWords`; a-client-part-names, R-I18N-006).

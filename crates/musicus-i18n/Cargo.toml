@@ -10,9 +10,10 @@ rust-version.workspace = true
 # Formatting of messages (the web client). Without it the crate only offers
 # the build-time tables (`KEY_SPELLINGS`, `NAME_CONNECTORS`) the server needs.
 default = ["bundles"]
-bundles = ["dep:fluent-bundle", "dep:unic-langid"]
+bundles = ["dep:fluent-bundle", "dep:unic-langid", "dep:musicus-api"]
 
 [dependencies]
+musicus-api = { workspace = true, optional = true }
 fluent-bundle = { version = "0.16", optional = true }
 unic-langid = { version = "0.9", optional = true }
 

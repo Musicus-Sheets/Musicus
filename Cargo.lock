@@ -2803,6 +2803,7 @@ version = "0.1.0"
 dependencies = [
  "fluent-bundle",
  "fluent-syntax",
+ "musicus-api",
  "unic-langid",
 ]
 
@@ -2821,6 +2822,7 @@ dependencies = [
  "hex",
  "http-body-util",
  "musicus-api",
+ "musicus-i18n",
  "rustls",
  "serde",
  "serde_json",

@@ -175,7 +175,7 @@ pub fn ScoreCard(
                 }
             }
             div { class: "parts",
-                for part in score.parts.iter() {
+                for part in crate::names::sorted(&score.parts) {
                     PartTile { key: "{part.id}", part: part.clone(), names: names.clone(), programme, manage }
                 }
             }
@@ -210,7 +210,7 @@ fn PartLink(part: Part, names: HashMap<i64, String>, programme: Option<i64>) -> 
         return rsx! {
             div { class: "part disabled", title: "No file uploaded yet",
                 div { class: "thumb empty", "—" }
-                span { class: "part-label", "{part.display_name}" }
+                span { class: "part-label", {crate::names::part_name(&part)} }
                 if !instruments.is_empty() {
                     span { class: "muted small", "{instruments.join(\", \")}" }
                 }
@@ -224,7 +224,7 @@ fn PartLink(part: Part, names: HashMap<i64, String>, programme: Option<i64>) -> 
             } else {
                 div { class: "thumb empty", "PDF" }
             }
-            span { class: "part-label", "{part.display_name}" }
+            span { class: "part-label", {crate::names::part_name(&part)} }
             if !instruments.is_empty() {
                 span { class: "muted small", "{instruments.join(\", \")}" }
             }

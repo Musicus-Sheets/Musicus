@@ -51,6 +51,19 @@ pub fn negotiate<S: AsRef<str>>(preferred: &[S]) -> (&'static str, String) {
 #[cfg(feature = "bundles")]
 pub use bundles::{Arg, current_language, message, set_language};
 
+/// The words of derived part names in the current language (a-client-part-names).
+#[cfg(feature = "bundles")]
+pub fn name_words() -> musicus_api::naming::NameWords {
+    musicus_api::naming::NameWords {
+        with_key: |i, k| t::part_name_with_key(i, k),
+        no_instrument: t::part_name_no_instrument(),
+        unnamed: t::part_name_unnamed(),
+        instrument_sep: t::part_name_instrument_sep(),
+        voice_sep: t::part_name_voice_sep(),
+        key_name: t::key_name,
+    }
+}
+
 #[cfg(feature = "bundles")]
 mod bundles {
     use super::{PSEUDO, SOURCES};
@@ -220,6 +233,26 @@ mod bundles {
 #[cfg(all(test, feature = "bundles"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn english_part_names_and_search_tables() {
+        set_language("en");
+        let w = name_words();
+        let name = |i: &[&str], k: Option<&str>, v: &[&str]| musicus_api::naming::part_name(&w, None, i, k, v);
+        assert_eq!(name(&["Trumpet"], Some("Bb"), &["1"]), "Trumpet in B♭ 1");
+        assert_eq!(name(&["Oboe", "Flöte"], None, &["1", "2"]), "Flöte / Oboe 1 & 2");
+        assert_eq!(name(&[], Some("H"), &[]), "Part in B♮");
+        assert_eq!(name(&[], None, &[]), "Unnamed part");
+        assert_eq!(name(&["Horn"], Some("Es/F"), &[]), "Horn in Es/F");
+        assert_eq!(t::key_option("H").as_deref(), Some("B♮ (H)"));
+        assert_eq!(t::key_option("Bb").as_deref(), Some("B♭"));
+        assert_eq!(key_spellings("Bb"), ["B♭"]);
+        assert!(is_name_connector("In"));
+        assert!(!is_name_connector("clarinet"));
+        for k in musicus_api::naming::KEYS {
+            assert!(t::key_name(k.code).is_some(), "key {} has a name", k.code);
+        }
+    }
 
     #[test]
     fn negotiation_takes_the_first_shipped_language() {

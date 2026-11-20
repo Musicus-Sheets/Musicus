@@ -149,7 +149,7 @@ pub fn InstrumentPicker(
 /// `musicus_api::naming`, a-part-names, a-part-voices).
 pub fn preview_name(instruments: &[Instrument], selected: &[i64], label: &str, key: &str, voices: &[String]) -> String {
     let names: Vec<&str> = instruments.iter().filter(|i| selected.contains(&i.id)).map(|i| i.name.as_str()).collect();
-    naming::part_name(Some(label), &names, Some(key), voices)
+    crate::names::compose(Some(label), &names, Some(key), voices)
 }
 
 /// Key, voices and custom name of a part. The voices are chips
@@ -172,14 +172,14 @@ pub fn PartFields(
     // Nothing chosen yet: an example instead of "Unnamed part".
     let none: &[&str] = &[];
     let placeholder =
-        if derived == naming::derived_name(&[], None, none) { "e.g. Solo Cornet".to_owned() } else { derived };
+        if derived == crate::names::compose(None, &[], None, none) { "e.g. Solo Cornet".to_owned() } else { derived };
     rsx! {
         div { class: "part-fields",
             label { class: "key", "Key"
                 select { value: "{current}", onchange: move |e| key.set(e.value()),
                     option { value: "", selected: current.is_empty(), "— (concert pitch)" }
                     for k in naming::KEYS {
-                        option { key: "{k.code}", value: "{k.code}", selected: current == k.code, "{k.option}" }
+                        option { key: "{k.code}", value: "{k.code}", selected: current == k.code, {crate::names::key_option(k.code)} }
                     }
                     if let Some(l) = legacy {
                         option { value: "{l}", selected: current == l, "Other: {l}" }
@@ -497,7 +497,7 @@ pub fn AddedParts(rows: Vec<(Part, Upload)>, names: std::collections::HashMap<i6
             for (part, state) in rows.iter() {
                 li { key: "{part.id}",
                     div { class: "grow",
-                        strong { "{part.display_name}" }
+                        strong { {crate::names::part_name(part)} }
                         // A custom name may hide the instruments; show them then.
                         if part.label.is_some() {
                             span { class: "muted small",

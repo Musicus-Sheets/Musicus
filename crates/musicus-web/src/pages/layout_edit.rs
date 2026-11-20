@@ -206,7 +206,7 @@ fn Editor(part: Part, sha256: String) -> Element {
         div { class: "page-head",
             div {
                 h1 { "Systems" }
-                p { class: "muted", "{part.display_name} · current version" }
+                p { class: "muted", "{crate::names::part_name(&part)} · current version" }
             }
             Link { class: "button", to: Route::Viewer { id: part.id }, "Open" }
         }

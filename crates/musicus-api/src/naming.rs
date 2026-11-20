@@ -1,7 +1,9 @@
 //! Names of parts and the keys of transposing instruments.
 //!
 //! A part has an optional custom name (`label`). Without one, its name is
-//! derived from its instruments, key and voices (a-part-names, a-part-voices):
+//! derived from its instruments, key and voices (a-part-names, a-part-voices),
+//! with the words of the UI language ([`NameWords`], a-client-part-names).
+//! In English:
 //!
 //! | Instruments | Key | Voices | Name |
 //! | --- | --- | --- | --- |
@@ -14,42 +16,38 @@
 //! | — | — | 2 | `Part 2` |
 //! | — | — | — | `Unnamed part` |
 //!
-//! Instruments are joined with " / " in alphabetical order, voices with
-//! " & " in their stored order ([`VOICE_SEPARATOR`]). The server sends
-//! the result as `Part::display_name`; clients use [`part_name`] only for a
-//! live preview while editing.
+//! Instruments are joined in alphabetical order, voices in their stored
+//! order. The server sends only the components (a-data-as-entered); the web
+//! client composes the name with the words of its message catalogue
+//! (`musicus_i18n::name_words`).
 
 use std::cmp::Ordering;
 
-/// The keys a part may be in, as stored (`code`), shown in names (`name`)
-/// and offered in the key selection (`option`), in the order of the
-/// selection: the common band keys first. `None` (no key) means concert
-/// pitch / not transposing.
+/// The keys a part may be in, as stored (ASCII codes), in the order of the
+/// key selection: the common band keys first. `None` (no key) means concert
+/// pitch / not transposing. Their names ("B♭", German "B") are messages of
+/// the catalogue (`key-name-<code>`).
 pub const KEYS: &[Key] = &[
-    Key { code: "Bb", name: "B♭", option: "B♭" },
-    Key { code: "Eb", name: "E♭", option: "E♭" },
-    Key { code: "F", name: "F", option: "F" },
-    Key { code: "C", name: "C", option: "C" },
-    Key { code: "A", name: "A", option: "A" },
-    Key { code: "D", name: "D", option: "D" },
-    Key { code: "G", name: "G", option: "G" },
-    Key { code: "E", name: "E", option: "E" },
-    Key { code: "Ab", name: "A♭", option: "A♭" },
-    Key { code: "Db", name: "D♭", option: "D♭" },
-    Key { code: "Gb", name: "G♭", option: "G♭" },
+    Key { code: "Bb" },
+    Key { code: "Eb" },
+    Key { code: "F" },
+    Key { code: "C" },
+    Key { code: "A" },
+    Key { code: "D" },
+    Key { code: "G" },
+    Key { code: "E" },
+    Key { code: "Ab" },
+    Key { code: "Db" },
+    Key { code: "Gb" },
     // B natural has the German code "H": a stored "B" is ambiguous
     // (B-flat in German) and stays an unmapped legacy value.
-    Key { code: "H", name: "B♮", option: "B♮ (H)" },
+    Key { code: "H" },
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Key {
     /// Stored value, ASCII (`Bb`).
     pub code: &'static str,
-    /// Used in part names (`B♭`).
-    pub name: &'static str,
-    /// Text of the option in the key selection.
-    pub option: &'static str,
 }
 
 /// The key with this stored code.
@@ -57,14 +55,36 @@ pub fn key(code: &str) -> Option<&'static Key> {
     KEYS.iter().find(|k| k.code == code)
 }
 
-/// How a stored key appears in names: the glyph form of a known key, an
-/// unknown (legacy) value unchanged.
-pub fn key_name(code: &str) -> &str {
-    key(code).map_or(code, |k| k.name)
+/// The language-dependent words of derived part names (a-client-part-names),
+/// filled by the client from its message catalogue.
+#[derive(Clone, Debug)]
+pub struct NameWords {
+    /// "{instruments} in {key}".
+    pub with_key: fn(&str, &str) -> String,
+    /// Instead of instruments when there are none: "Part".
+    pub no_instrument: String,
+    /// Nothing at all: "Unnamed part".
+    pub unnamed: String,
+    /// Between instruments: " / ".
+    pub instrument_sep: String,
+    /// Between voices: " & ".
+    pub voice_sep: String,
+    /// Name of a known key code ("Bb" ⇒ "B♭"); `None` for an unknown
+    /// (legacy) value, which is shown as stored.
+    pub key_name: fn(&str) -> Option<String>,
 }
 
-/// Joins the voices of a part in its derived name: "Clarinet 1 & 2".
-pub const VOICE_SEPARATOR: &str = " & ";
+impl NameWords {
+    /// How a stored key appears in names.
+    pub fn key(&self, code: &str) -> String {
+        (self.key_name)(code).unwrap_or_else(|| code.to_owned())
+    }
+}
+
+/// Splits voices typed as one entry ("1 & 2"); the derived name joins voices
+/// with the same sign ([`NameWords::voice_sep`]), so a name never hides how
+/// many voices a part has.
+pub const VOICE_SEPARATOR: char = '&';
 
 /// At most this many voices per part.
 pub const MAX_VOICES: usize = 10;
@@ -79,7 +99,7 @@ pub const MAX_VOICE_CHARS: usize = 20;
 /// by the server ([`MAX_VOICES`], [`MAX_VOICE_CHARS`]).
 pub fn clean_voices<S: AsRef<str>>(voices: &[S]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    for v in voices.iter().flat_map(|v| v.as_ref().split('&')) {
+    for v in voices.iter().flat_map(|v| v.as_ref().split(VOICE_SEPARATOR)) {
         let v = v.trim();
         if !v.is_empty() && !out.iter().any(|x| x.to_lowercase() == v.to_lowercase()) {
             out.push(v.to_owned());
@@ -90,31 +110,36 @@ pub fn clean_voices<S: AsRef<str>>(voices: &[S]) -> Vec<String> {
 
 /// Name of a part: the custom name if given, otherwise derived from its
 /// instruments, key and voices (see the module documentation).
-pub fn part_name<S: AsRef<str>>(custom: Option<&str>, instruments: &[&str], key: Option<&str>, voices: &[S]) -> String {
+pub fn part_name<S: AsRef<str>>(
+    words: &NameWords,
+    custom: Option<&str>,
+    instruments: &[&str],
+    key: Option<&str>,
+    voices: &[S],
+) -> String {
     if let Some(c) = custom.map(str::trim).filter(|c| !c.is_empty()) {
         return c.to_owned();
     }
-    derived_name(instruments, key, voices)
+    derived_name(words, instruments, key, voices)
 }
 
 /// The name derived from instruments, key and voices, ignoring any custom name.
-pub fn derived_name<S: AsRef<str>>(instruments: &[&str], key: Option<&str>, voices: &[S]) -> String {
+pub fn derived_name<S: AsRef<str>>(words: &NameWords, instruments: &[&str], key: Option<&str>, voices: &[S]) -> String {
     let key = key.map(str::trim).filter(|k| !k.is_empty());
     let voices: Vec<&str> = voices.iter().map(|v| v.as_ref().trim()).filter(|v| !v.is_empty()).collect();
     let mut names: Vec<&str> = instruments.iter().map(|n| n.trim()).filter(|n| !n.is_empty()).collect();
     names.sort_by(|a, b| natural_cmp(a, b));
     names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
     if names.is_empty() && key.is_none() && voices.is_empty() {
-        return "Unnamed part".into();
+        return words.unnamed.clone();
     }
-    let mut name = if names.is_empty() { "Part".to_owned() } else { names.join(" / ") };
+    let mut name = if names.is_empty() { words.no_instrument.clone() } else { names.join(&words.instrument_sep) };
     if let Some(k) = key {
-        name.push_str(" in ");
-        name.push_str(key_name(k));
+        name = (words.with_key)(&name, &words.key(k));
     }
     if !voices.is_empty() {
         name.push(' ');
-        name.push_str(&voices.join(VOICE_SEPARATOR));
+        name.push_str(&voices.join(&words.voice_sep));
     }
     name
 }
@@ -218,10 +243,54 @@ pub fn archive_search_text(number: &str) -> String {
 }
 
 #[cfg(test)]
+/// The English words (the real ones are messages of `musicus-i18n`).
+pub(crate) fn test_words() -> NameWords {
+    NameWords {
+        with_key: |i, k| format!("{i} in {k}"),
+        no_instrument: "Part".into(),
+        unnamed: "Unnamed part".into(),
+        instrument_sep: " / ".into(),
+        voice_sep: " & ".into(),
+        key_name: |c| {
+            let n = match c {
+                "Bb" => "B♭",
+                "Eb" => "E♭",
+                "H" => "B♮",
+                "F" | "C" | "A" | "D" | "G" | "E" => c,
+                _ => return None,
+            };
+            Some(n.to_owned())
+        },
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     const NONE: &[&str] = &[];
+
+    fn en() -> NameWords {
+        test_words()
+    }
+
+    fn part_name<S: AsRef<str>>(custom: Option<&str>, i: &[&str], key: Option<&str>, voices: &[S]) -> String {
+        super::part_name(&en(), custom, i, key, voices)
+    }
+
+    #[test]
+    fn words_come_from_the_caller() {
+        let de = NameWords {
+            with_key: |i, k| format!("{i} in {k}"),
+            no_instrument: "Stimme".into(),
+            unnamed: "Unbenannte Stimme".into(),
+            key_name: |c| (c == "Bb").then(|| "B".to_owned()),
+            ..en()
+        };
+        assert_eq!(super::part_name(&de, None, &["Klarinette"], Some("Bb"), &["1", "2"]), "Klarinette in B 1 & 2");
+        assert_eq!(super::part_name(&de, None, &[], None, &["2"]), "Stimme 2");
+        assert_eq!(super::part_name(&de, None, &[], None, NONE), "Unbenannte Stimme");
+    }
 
     #[test]
     fn derived_names() {
@@ -298,11 +367,10 @@ mod tests {
         assert_eq!(parse_key("B♭"), Some("Bb"));
         assert_eq!(parse_key("Es"), Some("Eb"));
         assert_eq!(parse_key("H"), Some("H"));
-        assert_eq!(key_name("H"), "B♮");
         assert_eq!(parse_key("B"), None, "ambiguous: German B is B-flat");
         assert_eq!(parse_key("Es/F"), None);
-        assert_eq!(key_name("Eb"), "E♭");
-        assert_eq!(key_name("weird"), "weird");
+        assert_eq!(en().key("Eb"), "E♭");
+        assert_eq!(en().key("weird"), "weird", "unknown keys are shown as stored");
         for k in KEYS {
             assert_eq!(parse_key(k.code), Some(k.code), "every code parses to itself");
         }

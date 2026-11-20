@@ -8,6 +8,7 @@ mod errors;
 mod ink;
 mod layouts;
 mod locale;
+mod names;
 mod pages;
 mod picker;
 mod suggest;

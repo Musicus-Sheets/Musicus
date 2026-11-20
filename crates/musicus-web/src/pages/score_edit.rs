@@ -212,7 +212,7 @@ pub fn EditScore(id: i64) -> Element {
                     section { class: "card",
                         h2 { "Parts ({s.parts.len()})" }
                         if s.parts.is_empty() { p { class: "muted", "No parts yet." } }
-                        for p in s.parts.iter() {
+                        for p in crate::names::sorted(&s.parts) {
                             PartEditor { key: "{p.id}", part: p.clone(), instruments: all.clone(),
                                 onchange: move |_| score.restart(), ondelete: move |_| score.restart() }
                         }
@@ -279,7 +279,7 @@ pub fn EditPart(id: i64) -> Element {
                         div { class: "page-head",
                             div {
                                 h1 { "Edit part" }
-                                p { class: "muted", "{part.display_name} · {score.title}" }
+                                p { class: "muted", "{crate::names::part_name(&part)} · {score.title}" }
                             }
                             button { class: "primary", onclick: move |_| back_to_library(nav, Some(score_id)), "Done" }
                         }
