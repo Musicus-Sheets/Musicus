@@ -564,6 +564,26 @@ fn fuzzy(word: &str) -> Option<usize> {
     found
 }
 
+/// The same instrument named twice ("Klarinette Klar 1", "Trompete/Trp")
+/// is listed once (a-import-instruments): at the place it was named first,
+/// with the surest of its spellings (a full word before an abbreviation).
+fn unique_instruments(found: Vec<InstrumentText>) -> Vec<InstrumentText> {
+    let same = |a: &InstrumentText, b: &InstrumentText| match (&a.entry, &b.entry) {
+        (Some(x), Some(y)) => x == y,
+        (None, None) => a.alias == b.alias,
+        _ => false,
+    };
+    let mut out: Vec<InstrumentText> = Vec::new();
+    for i in found {
+        match out.iter_mut().find(|o| same(o, &i)) {
+            Some(o) if i.level < o.level => *o = i,
+            Some(_) => {}
+            None => out.push(i),
+        }
+    }
+    out
+}
+
 /// Reads a part name. `language` decides German key letters.
 pub fn parse_part(text: &str, language: Language) -> PartText {
     let tokens = tokenize(text);
@@ -692,6 +712,7 @@ pub fn parse_part(text: &str, language: Language) -> PartText {
         instruments.push(InstrumentText { alias: alias_key(&text), text, entry: None, level: Level::Red });
         rest.clear();
     }
+    let instruments = unique_instruments(instruments);
     let key = match keys.len() {
         0 => Reading::default(),
         1 => keys.pop().map(|(_, r)| r).unwrap_or_default(),
@@ -791,7 +812,7 @@ mod tests {
         assert_eq!(parsed("Klar2B", De), (vec!["Clarinet".into()], s("Bb"), v("2")));
         assert_eq!(parsed("KlarinetteEb", De), (vec!["Clarinet".into()], s("Eb"), v("")));
         assert_eq!(parsed("KlarinetteEb", En), (vec!["Clarinet".into()], s("Eb"), v("")), "Eb is the same in both");
-        assert_eq!(parsed("Klarinette2", De), (vec!["Clarinet".into()], None, v("2")));
+        assert_eq!(parsed("Trompete2", De), (vec!["Trumpet".into()], None, v("2")));
         assert_eq!(parsed("Trp 1", En), (vec!["Trumpet".into()], None, v("1")));
         assert_eq!(parsed("Pos. 3", De), (vec!["Trombone".into()], None, v("3")));
         assert_eq!(parsed("Trompete 1+2", De), (vec!["Trumpet".into()], None, v("1+2")));
@@ -914,5 +935,22 @@ mod tests {
         assert_eq!(suggest_language(["Clarinet 1", "Trumpet 2", "Tuba"]), Some(Language::En));
         assert_eq!(suggest_language(["Tuba", "Horn"]), None);
         assert_eq!(suggest_language(["Horn in Es"]), Some(Language::De));
+    }
+
+    #[test]
+    fn an_instrument_named_twice_is_listed_once() {
+        let names =
+            |t: &str| parse_part(t, De).instruments.iter().map(|i| (i.text.clone(), i.level)).collect::<Vec<_>>();
+        // Full word and abbreviation: once, the full word, at the first place.
+        assert_eq!(names("Klarinette Klar 1"), [("Klarinette".to_owned(), Level::Green)]);
+        assert_eq!(names("Trp/Trompete 1"), [("Trompete".to_owned(), Level::Green)]);
+        // German and English word, and the same word twice.
+        assert_eq!(names("Trompete Trumpet"), [("Trompete".to_owned(), Level::Green)]);
+        assert_eq!(names("Horn 1 + Horn 2"), [("Horn".to_owned(), Level::Green)]);
+        assert_eq!(parse_part("Horn 1 + Horn 2", De).voices.values, ["1", "2"]);
+        // Different instruments keep their order.
+        let both = parse_part("Flöte Piccolo Flöte", De);
+        let entries: Vec<_> = both.instruments.iter().map(|i| i.entry.clone().unwrap()).collect();
+        assert_eq!(entries, ["Flute", "Piccolo"]);
     }
 }

@@ -176,29 +176,39 @@ pub struct Fit {
     pub matched: usize,
     /// Of those, part names with a known instrument word.
     pub recognised: usize,
+    /// Of those, part names understood completely: every word is an
+    /// instrument, key, voice or filler word (no leftover title words).
+    pub understood: usize,
 }
 
-/// Tries every preset on the paths; the best fit first (most matched
-/// paths, then most recognised part names, then the preset order).
+/// Tries every preset on the paths; the best fit first: most matched
+/// paths, then most recognised part names, then most part names
+/// understood completely, then the preset order (a-import-patterns).
 pub fn detect(paths: &[String]) -> Vec<Fit> {
     let mut fits: Vec<Fit> = pattern::PRESETS
         .iter()
         .map(|preset| {
             let p = pattern::Pattern::parse(preset.pattern).expect("presets are valid");
-            let (mut matched, mut recognised) = (0, 0);
+            let (mut matched, mut recognised, mut understood) = (0, 0, 0);
             for path in paths {
                 if let Some(f) = p.matches(path) {
                     matched += 1;
                     let text = parts::parse_part(&f.part, Language::De);
                     if text.instruments.iter().any(|i| i.entry.is_some()) {
                         recognised += 1;
+                        if text.rest.is_empty() && text.instruments.iter().all(|i| i.entry.is_some()) {
+                            understood += 1;
+                        }
                     }
                 }
             }
-            Fit { preset, matched, recognised }
+            Fit { preset, matched, recognised, understood }
         })
         .collect();
-    fits.sort_by_key(|f| (std::cmp::Reverse(f.matched), std::cmp::Reverse(f.recognised)));
+    // Stable sort: ties keep the preset order.
+    fits.sort_by_key(|f| {
+        (std::cmp::Reverse(f.matched), std::cmp::Reverse(f.recognised), std::cmp::Reverse(f.understood))
+    });
     fits
 }
 
@@ -219,24 +229,56 @@ mod tests {
         assert!(is_pdf_name("a/B.PDF") && !is_pdf_name("a/notes.txt") && !is_pdf_name(".pdf"));
     }
 
+    fn best(paths: &[&str]) -> &'static str {
+        detect(&v(paths))[0].preset.id
+    }
+
     #[test]
     fn detection_picks_the_preset_that_parses_most_files() {
         let folder = v(&[
-            "Märsche/0304 Alte Kameraden - Teike/Partitur.pdf",
-            "Märsche/0304 Alte Kameraden - Teike/Klarinette 1 in B.pdf",
-            "0305 Böhmischer Traum/Trompete 1+2.pdf",
+            "Marches/0304 Radetzky March - Strauss/Full score.pdf",
+            "Marches/0304 Radetzky March - Strauss/Clarinet 1 in Bb.pdf",
+            "0305 Bohemian Dream/Trumpet 1+2.pdf",
+            "Polkas/Bohemian Dream/Horn.pdf",
         ]);
-        assert_eq!(detect(&folder)[0].preset.id, "folder");
-        assert_eq!(detect(&folder)[0].matched, 3);
-        let flat = v(&["304Stimme06_Klarinette2.pdf", "28Stimme04_KlarinetteEb.pdf", "302Stimme-06_Klarinette2.pdf"]);
-        let best = &detect(&flat)[0];
-        assert_eq!((best.preset.id, best.matched, best.recognised), ("flat-number", 3, 3));
-        let titled = v(&["Alte Kameraden - Horn in F 1.pdf", "Alte Kameraden - Tuba.pdf"]);
-        assert_eq!(detect(&titled)[0].preset.id, "flat-title");
-        let category = v(&["Polkas/Böhmischer Traum/Horn.pdf", "Märsche/Alte Kameraden/Tuba.pdf"]);
-        // Both folder presets parse these completely; the default comes first.
-        assert_eq!(detect(&category)[0].preset.id, "folder");
-        assert_eq!(detect(&category)[1].preset.id, "category");
+        let fit = &detect(&folder)[0];
+        assert_eq!((fit.preset.id, fit.matched, fit.recognised), ("folder", 4, 4));
+        // Archive number and part, with any of the usual separators.
+        for flat in [
+            ["0304 Trumpet 1.pdf", "0304 Tuba.pdf", "28 Flute.pdf"],
+            ["0304_Trumpet_1.pdf", "0304_Tuba.pdf", "28_Flute.pdf"],
+            ["0304 - Trumpet 1.pdf", "0304 - Tuba.pdf", "28 - Flute.pdf"],
+        ] {
+            let fit = &detect(&v(&flat))[0];
+            assert_eq!((fit.preset.id, fit.matched, fit.understood), ("flat-number", 3, 3), "{flat:?}");
+        }
+        // Title and part, with or without number.
+        assert_eq!(best(&["Radetzky March - Horn in F 1.pdf", "Radetzky March - Tuba.pdf"]), "flat-title");
+        assert_eq!(best(&["0304 Radetzky March - Horn.pdf", "0304 Radetzky March - Tuba.pdf"]), "flat-title");
+        assert_eq!(best(&["0304 - Radetzky March - Horn.pdf", "28 - Bohemian Dream - Tuba.pdf"]), "flat-title");
+        assert_eq!(best(&["0304_Radetzky_March_-_Horn.pdf"]), "flat-title");
+    }
+
+    #[test]
+    fn detection_ties_are_decided_sensibly_and_deterministically() {
+        // "0304 Radetzky March - Horn" fits "{number} {part}" too, but then the
+        // part name keeps the title words: the title preset understands it fully.
+        let titled = v(&["0304 Radetzky March - Horn.pdf"]);
+        let fits = detect(&titled);
+        let flat = fits.iter().find(|f| f.preset.id == "flat-number").unwrap();
+        assert_eq!((flat.matched, flat.recognised, flat.understood), (1, 1, 0));
+        assert_eq!(fits[0].preset.id, "flat-title");
+        // "0304 - Horn" fits both completely (title "0304" or number 0304):
+        // the preset order decides, the number wins.
+        let fits = detect(&v(&["0304 - Horn.pdf"]));
+        assert_eq!((fits[0].matched, fits[0].understood, fits[1].matched, fits[1].understood), (1, 1, 1, 1));
+        assert_eq!((fits[0].preset.id, fits[1].preset.id), ("flat-number", "flat-title"));
+        // Mixed: the preset that fits more files wins.
+        assert_eq!(best(&["0304 - Horn.pdf", "Radetzky March - Tuba.pdf"]), "flat-title");
+        // Nothing fits: every preset with 0, in the preset order.
+        let none = detect(&v(&["Horn.pdf"]));
+        assert!(none.iter().all(|f| f.matched == 0));
+        assert_eq!(none.iter().map(|f| f.preset.id).collect::<Vec<_>>(), ["folder", "flat-number", "flat-title"]);
     }
 
     #[test]

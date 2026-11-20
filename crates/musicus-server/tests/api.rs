@@ -11,7 +11,7 @@ use musicus_api::{
     LoginResponse, PageConflict, Part, Programme, ProgrammeSummary, RegisteredImportFiles, Score, UndoneImport,
     import::{
         Language, Level, Note, Source,
-        pattern::PRESETS,
+        pattern::{PRESETS, preset},
         review::{ItemState, ReviewPart, ReviewPiece},
     },
     ink::{self, InkObject, PageLayer, Stroke, Tool},
@@ -1344,14 +1344,16 @@ async fn import_of_flat_numbered_files_groups_by_number_and_keeps_changes() {
             Method::POST,
             "/api/import/batches",
             admin,
-            json!({"name": "Scans", "pattern": PRESETS[3].pattern, "language": "en"}),
+            json!({"name": "Scans", "pattern": preset("flat-number").unwrap().pattern, "language": "en"}),
         )
         .await;
-    let (a, b, c) = (tiny_pdf(1, "k2"), tiny_pdf(1, "keb"), tiny_pdf(1, "k28"));
+    let (a, b, c, d) = (tiny_pdf(1, "k2"), tiny_pdf(1, "keb"), tiny_pdf(1, "k28"), tiny_pdf(1, "k3"));
+    // Archive number and part with different separators.
     let files: Vec<(&str, &[u8])> = vec![
-        ("304Stimme06_Klarinette2.pdf", &a),
-        ("0304Stimme07_Klarinette in B.pdf", &b),
-        ("28Stimme04_KlarinetteEb.pdf", &c),
+        ("304_Klarinette 2.pdf", &a),
+        ("0304 - Klarinette in B.pdf", &b),
+        ("28 Klarinette Eb.pdf", &c),
+        ("0304 Klarinette Klar 3.pdf", &d),
     ];
     let todo = register(&s, admin, batch.id, &files).await;
     upload_all(&s, admin, &todo, &files).await;
@@ -1360,10 +1362,16 @@ async fn import_of_flat_numbered_files_groups_by_number_and_keeps_changes() {
     let p304 = review.pieces.iter().find(|p| p.number.value.as_deref() == Some("0304")).unwrap();
     assert_eq!((p304.title.level, p304.level), (Level::Red, Level::Red), "the title must be typed");
     // No key is assumed; in an English batch "B" is ambiguous and left empty.
-    let k2 = part(p304, "Klarinette2");
+    let k2 = part(p304, "Klarinette 2");
     assert_eq!((k2.key.value.clone(), k2.voices.values.clone()), (None, vec!["2".to_string()]));
     let kb = part(p304, "Klarinette in B");
     assert_eq!((kb.key.value.clone(), kb.key.level), (None, Level::Yellow));
+    // The same instrument named twice ("Klarinette Klar") is listed once.
+    let k3 = part(p304, "Klarinette Klar 3");
+    assert_eq!(
+        (k3.instruments.iter().map(|i| i.instrument_id).collect::<Vec<_>>(), k3.display_name.as_str(), k3.level),
+        (vec![Some(klarinette.id)], "Klarinette 3", Level::Green)
+    );
 
     // Bulk edit and a typed title; the part's key is chosen by the librarian.
     let ids: Vec<Id> = review.pieces.iter().map(|p| p.id).collect();
@@ -1415,7 +1423,7 @@ async fn import_of_flat_numbered_files_groups_by_number_and_keeps_changes() {
             json!({"ids": [k2.id], "part": {"instruments": [klarinette.id, trumpet], "voices": ["2", "3"]}}),
         )
         .await;
-    let k2_now = part(&edited[0], "Klarinette2");
+    let k2_now = part(&edited[0], "Klarinette 2");
     assert_eq!(
         k2_now.instruments.iter().map(|i| (i.instrument_id, i.source, i.level)).collect::<Vec<_>>(),
         [
@@ -1440,8 +1448,9 @@ async fn import_of_flat_numbered_files_groups_by_number_and_keeps_changes() {
     let found: Vec<Score> = s.get("/api/scores?q=alte", admin).await.json();
     assert_eq!(found[0].archive_number.as_deref(), Some("0304"), "the first path (in order) gives the number");
     let names: Vec<&str> = found[0].parts.iter().map(|p| p.display_name.as_str()).collect();
-    assert_eq!(names, ["Klarinette / Trumpet 2 & 3", "Klarinette in B♭ 1 & 2"]);
-    assert_eq!(found[0].parts[1].voices, ["1", "2"], "the commit fills the voice list");
+    assert_eq!(names, ["Klarinette / Trumpet 2 & 3", "Klarinette 3", "Klarinette in B♭ 1 & 2"]);
+    assert_eq!(found[0].parts[2].voices, ["1", "2"], "the commit fills the voice list");
+    assert_eq!(found[0].parts[1].instrument_ids, [klarinette.id], "an instrument named twice is committed once");
     let mut both = vec![klarinette.id, trumpet];
     both.sort_unstable();
     assert_eq!(
@@ -1453,7 +1462,7 @@ async fn import_of_flat_numbered_files_groups_by_number_and_keeps_changes() {
     // Cross-check with the system detection: a "Partitur" whose systems have one staff.
     s.ok::<Instrument>(Method::POST, "/api/instruments", admin, json!({"name": "Partitur"})).await;
     let score_pdf = staff_pdf(1, 8);
-    let more: Vec<(&str, &[u8])> = vec![("29Stimme01_Partitur.pdf", &score_pdf)];
+    let more: Vec<(&str, &[u8])> = vec![("29 Partitur.pdf", &score_pdf)];
     let todo = register(&s, admin, batch.id, &more).await;
     upload_all(&s, admin, &todo, &more).await;
     while musicus_server::layout::worker::run_once(&s.state).await.unwrap() {}
@@ -1469,13 +1478,13 @@ async fn import_of_flat_numbered_files_groups_by_number_and_keeps_changes() {
             Method::POST,
             "/api/import/batches",
             admin,
-            json!({"name": "Scans", "pattern": PRESETS[3].pattern, "language": "de"}),
+            json!({"name": "Scans", "pattern": preset("flat-number").unwrap().pattern, "language": "de"}),
         )
         .await;
     let todo = register(&s, admin, again.id, &files).await;
     assert_eq!(
         (todo.files.duplicate, todo.upload.len()),
-        (2, 0),
+        (3, 0),
         "28 is known content but not in the library: no upload"
     );
     let review: ImportReview = s.get(&format!("/api/import/batches/{}", again.id), admin).await.json();

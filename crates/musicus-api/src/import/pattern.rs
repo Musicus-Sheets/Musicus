@@ -8,13 +8,18 @@
 //! | `{number}` | archive number: no spaces, at least one digit (`0304`, `A-12`); as short as possible |
 //! | `{title}`, `{composer}`, `{arranger}`, `{genre}` | text without `/`; as long as possible |
 //! | `{part}` | the part name (instrument, key, voices), parsed by [`super::parts`] |
-//! | `{*}` | any text without `/`, ignored (e.g. a counter `Stimme06`); as short as possible |
-//! | `[ … ]` | optional; the pattern with the most optional groups present wins |
+//! | `{*}` | any text without `/`, ignored (e.g. a counter `Part06`); as short as possible |
+//! | `[ … ]` | optional; the reading with the most optional groups present wins, on a tie the one with the earlier groups |
 //! | `/` | folder separator; everything else is literal text, compared ignoring case |
 //!
 //! A trailing `.pdf` of the pattern and of the path is ignored. Paths are
 //! relative to the folder the librarian selected (without its name).
-//! In values, `_` counts as a space and spaces are collapsed.
+//!
+//! Separators are tolerant (a-import-patterns): `_` counts as a space, so a
+//! space in the pattern also matches `_` in the path, and values are cleaned
+//! (`_` ⇒ space, spaces collapsed, leading and trailing `-`, `–`, `_` and
+//! spaces dropped). One pattern `{number} {part}` therefore reads
+//! `0304 Horn`, `0304_Horn`, `0304 - Horn` and `0304_-_Horn` alike.
 
 use serde::{Deserialize, Serialize};
 
@@ -120,9 +125,18 @@ pub struct PathFields {
     pub part: String,
 }
 
-/// `_` as space, whitespace collapsed, trimmed.
+/// `_` as space, whitespace collapsed, separators (`-`, `–`, spaces) at
+/// both ends dropped.
 pub fn clean(value: &str) -> String {
-    value.replace('_', " ").split_whitespace().collect::<Vec<_>>().join(" ")
+    let spaced = value.replace('_', " ");
+    let trimmed = spaced.trim_matches(|c: char| c.is_whitespace() || c == '-' || c == '–');
+    trimmed.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A pattern character matches a path character: equal ignoring case, and a
+/// space of the pattern also matches `_`.
+fn same_char(pattern: char, path: char) -> bool {
+    pattern == path || (pattern == ' ' && path == '_') || pattern.to_lowercase().eq(path.to_lowercase())
 }
 
 fn strip_pdf(s: &str) -> &str {
@@ -196,7 +210,9 @@ fn expand(tokens: &[Token]) -> Vec<(Vec<Atom>, usize)> {
                 let options = expand(inner);
                 let mut next = Vec::new();
                 for (atoms, n) in &out {
-                    next.push((atoms.clone(), *n));
+                    // With the group first: among equally many groups, the
+                    // earlier group of the pattern wins ("0304 - Title" is
+                    // number and title, not title and composer).
                     for (opt, m) in &options {
                         let mut a = atoms.clone();
                         for atom in opt {
@@ -207,6 +223,7 @@ fn expand(tokens: &[Token]) -> Vec<(Vec<Atom>, usize)> {
                         }
                         next.push((a, n + m + 1));
                     }
+                    next.push((atoms.clone(), *n));
                 }
                 out = next;
             }
@@ -259,7 +276,7 @@ impl Pattern {
             return Err(PatternError::MissingTitleOrNumber);
         }
         let mut alternatives = expand(&tokens);
-        // Stable: among equally many groups, the order of the pattern.
+        // Stable: among equally many groups, the earlier groups present first.
         alternatives.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
         Ok(Self { source: source.trim().to_owned(), alternatives: alternatives.into_iter().map(|(a, _)| a).collect() })
     }
@@ -298,8 +315,7 @@ fn match_atoms(atoms: &[Atom], s: &[char], i: usize, out: &mut Vec<(Placeholder,
     let Some(first) = atoms.first() else { return i == s.len() };
     match first {
         Atom::Lit(lit) => {
-            let ok = s.len() >= i + lit.len()
-                && lit.iter().zip(&s[i..]).all(|(a, b)| a == b || a.to_lowercase().eq(b.to_lowercase()));
+            let ok = s.len() >= i + lit.len() && lit.iter().zip(&s[i..]).all(|(a, b)| same_char(*a, *b));
             ok && match_atoms(&atoms[1..], s, i + lit.len(), out)
         }
         Atom::Field(p) => {
@@ -336,33 +352,36 @@ pub struct Preset {
     pub example: &'static str,
 }
 
-/// The presets, the default first. Detection tries every one.
+/// The presets, the default first. Detection tries every one
+/// ([`super::detect`]); among presets that fit equally well the earlier one
+/// wins, so the more specific reading comes first. The presets describe
+/// common archive layouts in general terms; anything special (a counter in
+/// the file name, another order) is a pattern of the librarian's own.
 pub const PRESETS: &[Preset] = &[
     Preset {
         id: "folder",
         name: "Folder per piece",
         pattern: "[{genre}/][{number} ]{title}[ - {composer}]/{part}.pdf",
-        example: "Marches/0304 Alte Kameraden - Teike/Klarinette 1 in B.pdf",
-    },
-    Preset {
-        id: "category",
-        name: "Category / piece",
-        pattern: "{genre}/[{number} ]{title}[ - {composer}]/{part}.pdf",
-        example: "Marches/Alte Kameraden/Trompete 1+2.pdf",
-    },
-    Preset {
-        id: "flat-title",
-        name: "One folder, title in the file name",
-        pattern: "{title} - {part}.pdf",
-        example: "Alte Kameraden - Horn in F 1.pdf",
+        example: "Marches/0304 Radetzky March - Strauss/Clarinet 1 in Bb.pdf",
     },
     Preset {
         id: "flat-number",
-        name: "One folder, archive number in the file name",
-        pattern: "{number}Stimme{*}_{part}.pdf",
-        example: "304Stimme06_Klarinette2.pdf",
+        name: "Number and part in the file name",
+        pattern: "{number} {part}.pdf",
+        example: "0304 - Trumpet 1.pdf",
+    },
+    Preset {
+        id: "flat-title",
+        name: "Title and part in the file name",
+        pattern: "[{number} ]{title} - {part}.pdf",
+        example: "0304 Radetzky March - Horn in F 1.pdf",
     },
 ];
+
+/// The preset with this id.
+pub fn preset(id: &str) -> Option<&'static Preset> {
+    PRESETS.iter().find(|p| p.id == id)
+}
 
 #[cfg(test)]
 mod tests {
@@ -384,7 +403,7 @@ mod tests {
 
     #[test]
     fn folder_preset() {
-        let p = PRESETS[0].pattern;
+        let p = preset("folder").unwrap().pattern;
         assert_eq!(
             m(p, "Marches/0304 Alte Kameraden - Teike/Klarinette 1 in B.pdf"),
             Some(PathFields {
@@ -404,30 +423,65 @@ mod tests {
             Some(fields(None, Some("Marsch - Teil 2"), Some("Fučík"), "Horn in F 1"))
         );
         assert_eq!(m(p, "A-12 Polka/Tuba.pdf").unwrap().number.as_deref(), Some("A-12"));
+        // Separators: "number - title" and underscores.
+        assert_eq!(
+            m(p, "0304 - Alte Kameraden/Tuba.pdf"),
+            Some(fields(Some("0304"), Some("Alte Kameraden"), None, "Tuba"))
+        );
+        assert_eq!(
+            m(p, "0304_Alte_Kameraden_-_Teike/Tuba.pdf"),
+            Some(fields(Some("0304"), Some("Alte Kameraden"), Some("Teike"), "Tuba"))
+        );
         // Too deep or too flat.
         assert_eq!(m(p, "a/b/c/d.pdf"), None);
         assert_eq!(m(p, "Partitur.pdf"), None);
     }
 
     #[test]
-    fn flat_number_preset_ignores_counters() {
-        let p = PRESETS[3].pattern;
-        assert_eq!(m(p, "304Stimme06_Klarinette2.pdf"), Some(fields(Some("304"), None, None, "Klarinette2")));
-        assert_eq!(m(p, "28Stimme04_KlarinetteEb.pdf"), Some(fields(Some("28"), None, None, "KlarinetteEb")));
-        assert_eq!(m(p, "302Stimme-06_Klarinette2.pdf"), Some(fields(Some("302"), None, None, "Klarinette2")));
-        // An underscore inside the part name stays in the part (ignored text is as short as possible).
-        assert_eq!(m(p, "12Stimme01_Trompete_1.pdf"), Some(fields(Some("12"), None, None, "Trompete 1")));
-        assert_eq!(m(p, "Alte Kameraden - Horn.pdf"), None);
+    fn flat_number_preset_accepts_common_separators() {
+        let p = preset("flat-number").unwrap().pattern;
+        let horn = |n: &str| Some(fields(Some(n), None, None, "Horn in F 1"));
+        assert_eq!(m(p, "0304 Horn in F 1.pdf"), horn("0304"));
+        assert_eq!(m(p, "0304_Horn_in_F_1.pdf"), horn("0304"));
+        assert_eq!(m(p, "0304 - Horn in F 1.pdf"), horn("0304"));
+        assert_eq!(m(p, "0304_-_Horn in F 1.pdf"), horn("0304"));
+        assert_eq!(m(p, "A-12 Horn in F 1.pdf"), horn("A-12"));
+        // The number is the first word with a digit; a title word is not a number.
+        assert_eq!(m(p, "Radetzky March - Horn.pdf"), None);
+        assert_eq!(m(p, "0304.pdf"), None, "no part");
+        assert_eq!(m(p, "Marches/0304 Horn.pdf"), None, "one folder only");
     }
 
     #[test]
-    fn flat_title_and_category() {
+    fn flat_title_preset_with_and_without_number() {
+        let p = preset("flat-title").unwrap().pattern;
         assert_eq!(
-            m(PRESETS[2].pattern, "Alte Kameraden - Horn in F 1.pdf"),
-            Some(fields(None, Some("Alte Kameraden"), None, "Horn in F 1"))
+            m(p, "Radetzky March - Horn in F 1.pdf"),
+            Some(fields(None, Some("Radetzky March"), None, "Horn in F 1"))
         );
-        assert_eq!(m(PRESETS[1].pattern, "Alte Kameraden/Horn.pdf"), None, "category is required");
-        assert_eq!(m(PRESETS[1].pattern, "Polkas/Böhmischer Traum/Horn.pdf").unwrap().genre.as_deref(), Some("Polkas"));
+        assert_eq!(
+            m(p, "0304 Radetzky March - Tuba.pdf"),
+            Some(fields(Some("0304"), Some("Radetzky March"), None, "Tuba"))
+        );
+        // "number - title - part" and underscores instead of spaces.
+        assert_eq!(
+            m(p, "0304 - Radetzky March - Tuba.pdf"),
+            Some(fields(Some("0304"), Some("Radetzky March"), None, "Tuba"))
+        );
+        assert_eq!(
+            m(p, "0304_Radetzky_March_-_Tuba.pdf"),
+            Some(fields(Some("0304"), Some("Radetzky March"), None, "Tuba"))
+        );
+        // The last " - " separates the part.
+        assert_eq!(m(p, "Suite - Part 2 - Oboe.pdf"), Some(fields(None, Some("Suite - Part 2"), None, "Oboe")));
+        assert_eq!(m(p, "Oboe.pdf"), None);
+    }
+
+    #[test]
+    fn values_are_cleaned_of_separators() {
+        assert_eq!(clean(" - Radetzky_March  –"), "Radetzky March");
+        assert_eq!(clean("Horn_in_F__1"), "Horn in F 1");
+        assert_eq!(clean("Suite - Part 2"), "Suite - Part 2");
     }
 
     #[test]
@@ -440,6 +494,13 @@ mod tests {
         assert_eq!(f.title.as_deref(), Some("Ouvertüre"));
         let f = m("{title} ({arranger})/{*}-{part}.pdf", "Moment for Morricone (Johan de Meij)/03-Oboe.pdf").unwrap();
         assert_eq!((f.arranger.as_deref(), f.part.as_str()), (Some("Johan de Meij"), "Oboe"));
+        // A counter between number and part, written the librarian's own way.
+        let f = m("{number}Part{*}_{part}.pdf", "0304Part06_Clarinet 2.pdf").unwrap();
+        assert_eq!((f.number.as_deref(), f.part.as_str()), (Some("0304"), "Clarinet 2"));
+        // A literal "_" matches only "_"; underscores inside the part stay in it.
+        let f = m("{number}Part{*}_{part}.pdf", "12part-01_Trumpet_1.pdf").unwrap();
+        assert_eq!((f.number.as_deref(), f.part.as_str()), (Some("12"), "Trumpet 1"));
+        assert_eq!(m("{number}Part{*}_{part}.pdf", "12 Trumpet 1.pdf"), None);
     }
 
     #[test]

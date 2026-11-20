@@ -221,8 +221,9 @@ impl PartOverrides {
         if let Some(picks) = &changes.instruments {
             let mut unique: Vec<InstrumentPick> = Vec::new();
             for p in picks {
+                // Words as alias keys: "Klar" and "klar" are one word.
                 let p = match p {
-                    InstrumentPick::Word(w) => InstrumentPick::Word(w.trim().to_owned()),
+                    InstrumentPick::Word(w) => InstrumentPick::Word(parts::alias_key(w)),
                     id => id.clone(),
                 };
                 if !unique.contains(&p) && p != InstrumentPick::Word(String::new()) {
@@ -742,6 +743,23 @@ pub fn review_piece(
     ReviewPiece { id, state, level, number, title, composer, arranger, genre, suggestion, target, score, notes, parts }
 }
 
+/// Adds an instrument unless the part has it already (a-import-instruments):
+/// the same library instrument (two words or a word and a chosen
+/// instrument resolving to one id), or the same unknown word. The surer of
+/// the two stays at the earlier place.
+fn push_unique(list: &mut Vec<ResolvedInstrument>, r: ResolvedInstrument) {
+    let same = |x: &ResolvedInstrument| match (x.instrument_id, r.instrument_id) {
+        (Some(a), Some(b)) => a == b,
+        (None, None) => norm(&x.alias) == norm(&r.alias),
+        _ => false,
+    };
+    match list.iter().position(same) {
+        Some(i) if r.level < list[i].level => list[i] = r,
+        Some(_) => {}
+        None => list.push(r),
+    }
+}
+
 fn review_part(p: PartInput, extra_readers: &[&Group], lib: &Library) -> ReviewPart {
     let text = &p.guess.text;
     let mut notes = Vec::new();
@@ -770,14 +788,17 @@ fn review_part(p: PartInput, extra_readers: &[&Group], lib: &Library) -> ReviewP
                         None => continue,
                     },
                 };
-                let twice = r.instrument_id.is_some() && list.iter().any(|x| x.instrument_id == r.instrument_id);
-                if !twice {
-                    list.push(r);
-                }
+                push_unique(&mut list, r);
             }
             list
         }
-        None => text.instruments.iter().map(|t| resolve_instrument(t, lib)).collect(),
+        None => {
+            let mut list = Vec::new();
+            for t in &text.instruments {
+                push_unique(&mut list, resolve_instrument(t, lib));
+            }
+            list
+        }
     };
     let key = key_field(&text.key, p.overrides.key.as_ref());
     let voices = match &p.overrides.voices {
@@ -862,7 +883,7 @@ fn review_part(p: PartInput, extra_readers: &[&Group], lib: &Library) -> ReviewP
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::import::pattern::PRESETS;
+    use crate::import::pattern::{PRESETS, preset};
 
     fn instruments(names: &[&str]) -> Vec<Instrument> {
         names
@@ -936,17 +957,17 @@ mod tests {
 
     #[test]
     fn flat_files_group_by_number_and_need_a_title() {
-        let p = Pattern::parse(PRESETS[3].pattern).unwrap();
+        let p = Pattern::parse(preset("flat-number").unwrap().pattern).unwrap();
         let (pieces, _) = propose(
             &p,
             Language::De,
-            &paths(&["304Stimme06_Klarinette2.pdf", "0304Stimme07_KlarinetteEb.pdf", "28Stimme04_KlarinetteEb.pdf"]),
+            &paths(&["304 Klarinette 2.pdf", "0304_Klarinette in Eb.pdf", "28 - Klarinette in Eb.pdf"]),
         );
         assert_eq!(pieces.len(), 2, "304 and 0304 are the same piece");
         let instr = instruments(&["Klarinette"]);
         let lib = Library { instruments: &instr, aliases: &[], scores: &[], groups: &[] };
         let r = review(&pieces[1], &PieceOverrides::default(), &lib);
-        assert_eq!(r.number.value.as_deref(), Some("0304"), "first path in order");
+        assert_eq!(r.number.value.as_deref(), Some("0304"), "first path in byte order");
         assert_eq!((r.title.level, r.title.note.clone()), (Level::Red, Some(Note::TitleMissing)));
         assert_eq!(r.level, Level::Red);
         // Typed once for the piece: green.
@@ -1233,5 +1254,72 @@ mod tests {
         let o: PartOverrides = serde_json::from_str(r#"{"instrument_ids":[2]}"#).unwrap();
         assert_eq!(o.instruments, Some(vec![InstrumentPick::Id(2)]));
         assert_eq!(serde_json::to_string(&o).unwrap(), r#"{"instruments":[2]}"#);
+    }
+
+    #[test]
+    fn an_instrument_detected_twice_is_listed_once() {
+        let p = Pattern::parse("{title}/{part}").unwrap();
+        let instr = instruments(&["Clarinet", "Trumpet", "Flugelhorn"]);
+        let (clarinet, trumpet, flugelhorn) = (instr[0].id, instr[1].id, instr[2].id);
+        // A stored alias maps "Flüg" to the trumpet as well.
+        let aliases = vec![Alias { alias: "flug".into(), instrument_id: trumpet }];
+        let groups = vec![Group {
+            id: 1,
+            name: "Trumpets".into(),
+            member_ids: vec![],
+            instrument_ids: vec![trumpet],
+            score_ids: vec![],
+        }];
+        let lib = Library { instruments: &instr, aliases: &aliases, scores: &[], groups: &groups };
+        let (pieces, _) =
+            propose(&p, Language::De, &paths(&["M/Klarinette Klar 1.pdf", "M/Trompete Flüg 2.pdf", "M/Alphorn 1.pdf"]));
+        let reviewed = |over: &PartOverrides, i: usize| {
+            review_part(
+                PartInput {
+                    id: 1,
+                    guess: &pieces[0].parts[i],
+                    overrides: over,
+                    file: file(1),
+                    state: ItemState::Pending,
+                    part_id: None,
+                },
+                &[],
+                &lib,
+            )
+        };
+        let ids = |r: &ReviewPart| r.instruments.iter().map(|i| i.instrument_id).collect::<Vec<_>>();
+        let none = PartOverrides::default();
+        // Same dictionary entry twice (already one in the parser).
+        let k = reviewed(&none, 1);
+        assert_eq!((ids(&k), k.display_name.as_str(), k.level), (vec![Some(clarinet)], "Clarinet 1", Level::Green));
+        // Two different words resolving to the same library instrument.
+        let t = reviewed(&none, 2);
+        assert_eq!(pieces[0].parts[2].text.instruments.len(), 2, "two words in the file name");
+        assert_eq!((ids(&t), t.display_name.as_str()), (vec![Some(trumpet)], "Trumpet 2"));
+        assert_eq!(t.readers, ["Trumpets"]);
+        // Librarian adds an instrument the part has already: no-op.
+        let mut over = PartOverrides::default();
+        over.merge(&PartOverrides {
+            instruments: Some(vec![
+                InstrumentPick::Word("trompete".into()),
+                InstrumentPick::Word("Flug".into()),
+                InstrumentPick::Id(trumpet),
+                InstrumentPick::Id(flugelhorn),
+            ]),
+            ..Default::default()
+        });
+        let t = reviewed(&over, 2);
+        assert_eq!(ids(&t), [Some(trumpet), Some(flugelhorn)]);
+        assert_eq!(t.display_name, "Flugelhorn / Trumpet 2");
+        assert_eq!(t.instrument_picks().len(), 2, "the next change sends each instrument once");
+        // An unknown word kept twice (in any spelling) is listed once.
+        let mut over = PartOverrides::default();
+        over.merge(&PartOverrides {
+            instruments: Some(vec![InstrumentPick::Word("alphorn".into()), InstrumentPick::Word("Alphorn".into())]),
+            ..Default::default()
+        });
+        assert_eq!(over.instruments.as_ref().map(Vec::len), Some(1));
+        let a = reviewed(&over, 0);
+        assert_eq!((a.instruments.len(), a.level), (1, Level::Red));
     }
 }
