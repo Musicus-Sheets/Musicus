@@ -71,3 +71,5 @@ merge commits on the docs `main` (never the feature-branch commits). The require
 - Writes go through `app.db.write` (single connection), reads through `app.db.read` (R-PERF-006).
 - The web client must not persist data on the device (R-SEC-001).
 - New migrations: new numbered file in `crates/musicus-server/migrations/`; never edit applied ones.
+- Store and show user data exactly as entered; never translate or reformat it (a-data-as-entered, R-I18N-006).
+  UI terms and their German translations: `docs/agents/glossary.md`.

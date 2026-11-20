@@ -338,3 +338,49 @@ with the user's consent.
 - Serves: R-I18N-004, F-I18N-001, R-SEC-008, G-008.
 - If you change it: a new error = a new `ErrorCode` variant (+ `Display`, `examples()`, the test index in `error.rs`, a text in `errors.rs`); never rename or reuse a code (changed meaning = new code), and never put a sentence in `args`. API tests assert codes (`Reply::error`), not texts. Changing the wire shape breaks every client.
 
+## Internationalisation (F-I18N-001)
+
+Concept and plan: `docs/technical/chapters/13-i18n.typ`. Terms and agreed translations: `glossary.md`.
+Implementation state of each decision: see its **State** line (and `status.md`).
+
+### d-i18n-fluent
+- Decision: user-interface texts are Fluent messages (`.ftl`, Project Fluent) in a new crate `crates/musicus-i18n` (`locales/<lang>/<area>.ftl`, English = source of truth). A build script turns the English catalogue into typed functions (`t::library_add_piece()`, `t::library_parts_without_pdf(count)`), so a missing message or a wrong argument is a compile error; all shipped languages are compiled into the client (`include_str!`), formatted by `fluent-bundle` at run time with English as fallback per message. Dates, numbers and sorting come from the browser's `Intl` (a-intl-js, a-browser-sort), not from Rust libraries.
+- Why: measured in a wasm32 benchmark (opt-level z, LTO): `fluent-bundle` + plural rules ≈ +60 KB gzip (≈ +8 % of the client), while `icu_datetime` would add ≈ 217 KB and `icu_collator` ≈ 418 KB gzip. Fluent has CLDR plurals and selectors (translators control word order, e.g. "Clarinette en si♭"), one message per id, translator comments, and is supported by Weblate, Pontoon and Crowdin. gettext/PO has no selectors and no compile-time check without own code generation (and `gettext-rs` needs libintl, not WASM); `rust-i18n` has weak plurals; ICU4X MessageFormat is not usable. Own code generation instead of `i18n-embed-fl` (`fl!` macro): typed functions instead of a checked macro, no `rust-embed`/`i18n-embed` loader machinery and proc-macro in the WASM build, arguments checked as function parameters.
+- Serves: F-I18N-001, R-I18N-003, R-I18N-005, R-I18N-010, G-008.
+- State: decided (phase 0); crate built in phase 1.
+- If you change it: the client and the search tables (`KEY_SPELLINGS`, `NAME_CONNECTORS`) depend on the catalogue format; a different format needs a new code generator and the CI checks (unused keys, placeholder parity). Keep dates/numbers/sorting in `Intl` unless the size budget changes (measure first).
+
+### a-i18n-keys
+- Decision: message ids are `<area>-<page or component>-<what>` in lower kebab case (`library-score-edit`, `reader-sets-new`, `common-save`); the generated Rust function is the id with `_` (`t::library_score_edit()`). An id is never reused for another meaning: a changed meaning gets a new id. One message per visible string (no attributes), arguments named in the message (`{ $count }`); counts are numbers so plural selectors work. Comments above a message (`# …`) tell translators where it appears. Files per area: `common`, `names`, `library`, `reader`, `import`, `admin`, `account`, `programmes`. Text that is user data never enters the catalogue.
+- Why: stable, greppable ids; translation tools key on ids, so reusing one would silently keep an old translation of another meaning.
+- Serves: R-I18N-003, R-I18N-010.
+- State: decided (phase 0); applied from phase 1 on.
+- If you change it: renaming an id loses its translations in every language (and in Weblate); prefer adding a new id and deleting the old one.
+
+### a-data-as-entered
+- Decision: the database stores exactly what users type (titles, composers, tags, notes, instrument names and families, group names, voices, custom part names, programme texts, set names typed by users) and the client shows it unchanged in every language; nothing is ever translated or reformatted. The server produces no user-visible prose: part names, key names and the name of an unnamed annotation set are composed by the client in its UI language (a-client-part-names); errors are codes (a-error-codes). There is no instance-wide naming language, no key notation setting and no translated instrument proposal.
+- Why: the user's decision; the data belongs to the ensemble ("Klarinette" stays "Klarinette" for an English reader), and only the words Musicus adds follow the reader's language.
+- Serves: R-I18N-006, F-I18N-001.
+- State: decided (phase 0); part names and set names client-side from phase 3.
+- If you change it: translating data would need per-language columns and a source language per entry — ask the user.
+
+### a-client-part-names
+- Decision: the `Part` DTO carries the components of a name, not the name: custom `label`, `instruments: Vec<NamedRef {id, name}>` (names as entered; `instrument_ids` kept), key code, voices. `musicus_api::naming::part_name(words: &NameWords, …)` keeps the pure assembly (alphabetical instruments, dedup, voice cleaning, custom name wins) and takes the language-dependent words (`NameWords`: "{instruments} in {key}", "Part", "Unnamed part", " / ", " & ", key names) as a parameter; the client fills it from the catalogue and sorts parts itself. `ReviewPart` likewise has no composed name. The search index `part_fts` holds the components (custom name, instrument names, voices) plus every key spelling of the shipped languages (`musicus_i18n::KEY_SPELLINGS`, exported from the catalogue at build time), and `fts_terms` drops the connecting words of every shipped language (`NAME_CONNECTORS`, English "in") unless the query has nothing else. The default annotation set is stored with `name = NULL`; the client shows "My annotations" in its language.
+- Why: a-data-as-entered; the server cannot know the reader's language (no setting, R-I18N-001). Key spellings are search aliases, never shown, so the server still emits no prose.
+- Serves: R-I18N-006, R-I18N-007, R-LIB-010, R-LIB-011, R-LIB-004, R-ANN-009.
+- State: decided (phase 0); implemented in phase 3. Until then `a-part-names` describes the code.
+- If you change it: a new shipped language adds its key names and connector words to the index only after a `part_fts` rebuild (new migration `DELETE FROM part_fts`).
+
+### a-browser-sort
+- Decision: every displayed list of names is sorted in the browser with one helper `ui::collator()` = `Intl.Collator(<UI language>, {numeric: true, sensitivity: "base"})`, created once. Server `ORDER BY … COLLATE NOCASE` stays only as a stable default and `LIMIT 1000` as a safety cap (not paging). `naming::natural_cmp` stays in shared code where a deterministic, locale-free order is needed (tests, import grouping).
+- Why: the browser has the collation data for free; `icu_collator` in WASM would add ≈ 418 KB gzip (d-i18n-fluent). SQLite NOCASE folds ASCII only ("Ö" after "Z").
+- Serves: R-I18N-008.
+- State: decided (phase 0); implemented in phase 5.
+- If you change it: libraries above 1000 matching scores need real paging, then the server must sort by the same rules (ICU collation) — ask the user.
+
+### a-intl-js
+- Decision: the UI language is the first entry of `navigator.languages` that Musicus ships (compared by primary subtag), else English; there is no setting and nothing is stored (R-I18N-001, R-SEC-001). It is decided once at start in the client module `locale` (also sets `<html lang>`). Dates, times and numbers are formatted by the browser's `Intl.DateTimeFormat` / `Intl.NumberFormat` with that language through `js_sys` (0 KB of WASM data), replacing `toLocaleDateString("default")` and the hand-made `format_size`.
+- Why: the user's decision (no per-user language, browser language, English fallback); formatting libraries in Rust would add hundreds of KB (d-i18n-fluent). With "default" the date followed the browser while the text would follow the catalogue language; one language for both keeps them consistent.
+- Serves: R-I18N-001, R-I18N-002, R-I18N-005, R-SEC-001.
+- State: decided (phase 0); implemented in phase 1.
+- If you change it: a language setting would need storage on the server (never on the device, R-SEC-001) and a requirement change; keep all locale logic inside `locale` (a desktop app would replace only that module).

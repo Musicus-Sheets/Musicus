@@ -17,6 +17,7 @@ Human-oriented docs: `docs/technical` (Typst, submodule). Requirements: `docs/re
 | `api-and-ink.md` | `musicus-api` crate: DTOs, status codes, binary ink format, merge | API or annotation work |
 | `web-client.md` | Dioxus client: routes, session, bridge.js, reader internals | client work |
 | `workflows.md` | Build/test commands, environment pitfalls, recipes, definition of done | before committing |
+| `glossary.md` | UI terms English ↔ German (agreed/proposed), key names per language | before writing or translating UI messages |
 | `status.md` | Implemented vs. missing, test gaps, known debt | planning new work |
 | `check.py` | Consistency checker for this folder | run before every commit |
 
