@@ -21,7 +21,7 @@ musicus-api (lib) compiled into both: JSON DTOs + binary ink format
 
 | Component | Path | Builds with | Role |
 | --- | --- | --- | --- |
-| musicus-api | `crates/musicus-api` | cargo (any target) | Contract: DTOs (`dto.rs`), annotation format + merge (`ink.rs`), system layout + view planner (`layout.rs`). No I/O. |
+| musicus-api | `crates/musicus-api` | cargo (any target) | Contract: DTOs (`dto.rs`), annotation format + merge (`ink.rs`), system layout + view planner (`layout.rs`), mass-import parsers and review rules (`import/`). No I/O. |
 | musicus-server | `crates/musicus-server` | cargo | API, auth, ACL, storage, background system detection (`layout`, see `layout.md`), CLI (`serve`, `create-admin`, `backup`, `healthcheck`). |
 | musicus-web | `crates/musicus-web` | `dx` (wasm32 only; excluded from workspace `default-members`) | UI. Talks only REST. Management controls appear inside the normal views for librarians/admins (d-inline-management). |
 | e2e | `e2e/smoke.mjs` | node + Playwright | Browser smoke test against a running server. |
@@ -44,13 +44,14 @@ musicus-api (lib) compiled into both: JSON DTOs + binary ink format
 - Library: `GET /api/scores?q=` → `library::list_scores` (FTS5 + `part_visible!`) → `with_parts`.
 - Programme prefetch: `GET /api/programmes/{id}` → client collects `/api/files/<sha>` URLs → `bridge.js prefetch` (in-memory Map).
 - Reading: `bridge.js renderPage` (pdf.js from in-memory bytes) ; annotations `GET/PUT /api/annotation-sets/{id}/pages/{n}`.
+- Import: `POST /api/import/batches` → `POST …/files` (hashes from the browser; duplicates; `repropose` with `musicus_api::import`) → `PUT /api/import/files/{id}/content` (staged blob, no `part_files`) → `GET /api/import/batches/{id}` (resolved review) → `PATCH /api/import/items` → `POST …/commit` (one tx per piece) / `…/undo`.
 - Upload: `PUT /api/parts/{id}/file` raw body → `BlobStore::receive` (hash+limit) → sniff → hayro (page count, thumbnail) → commit → `files` row → `part_files` version.
 
 ## Global invariants (break none without changing the linked requirements)
 
 | ID | Invariant | Requirements | Decision |
 | --- | --- | --- | --- |
-| INV-1 | Read permission is decided only by `access::part_visible!()` (librarian/admin, instrument grant via group, score grant via group). Every list/load of parts, scores, programmes, files, annotations embeds it. | R-ACL-001, R-LIB-005, R-PROG-002, R-FILE-005, R-ANN-015 | d-access |
+| INV-1 | Read permission is decided only by `access::part_visible!()` (librarian/admin, instrument grant via group, score grant via group). Every list/load of parts, scores, programmes, files, annotations embeds it. Staged import files are not library files: only librarians reach them, through their batch (d-import-staging). | R-ACL-001, R-LIB-005, R-PROG-002, R-FILE-005, R-ANN-015 | d-access |
 | INV-2 | Denied read ⇒ 404 (`AppError::NotFound`), indistinguishable from missing. Role violations on management endpoints ⇒ 403. | R-ACL-002, R-ACC-009 | d-access |
 | INV-3 | No permission/session cache in memory; every request re-reads DB. Grant/membership changes apply on next request. | R-ACL-003, R-ACC-008 | d-access, d-sessions |
 | INV-4 | Blobs immutable, named by SHA-256, written tmp→fsync→rename. Never delete/modify. | R-FILE-004, R-FILE-002 | d-blobs |

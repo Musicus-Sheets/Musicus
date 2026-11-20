@@ -7,8 +7,13 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use musicus_api::{
-    AnnotationSet, CreatedUser, Group, Id, Instrument, LoginResponse, PageConflict, Part, Programme, ProgrammeSummary,
-    Score,
+    AnnotationSet, CommittedImport, CreatedUser, Group, Id, ImportBatch, ImportReview, Instrument, InstrumentAlias,
+    LoginResponse, PageConflict, Part, Programme, ProgrammeSummary, RegisteredImportFiles, Score, UndoneImport,
+    import::{
+        Language, Level, Note, Source,
+        pattern::{PRESETS, preset},
+        review::{ItemState, ReviewPart, ReviewPiece},
+    },
     ink::{self, InkObject, PageLayer, Stroke, Tool},
 };
 use musicus_server::{bootstrap_admin, open_state, routes, state::Settings};
@@ -919,6 +924,59 @@ async fn migration_0002_keeps_old_parts() {
     // Index built on start: old parts are found by their (derived) names.
     assert_eq!(s.get("/api/scores?q=clarinet", &admin).await.json::<Vec<Score>>().len(), 1);
     assert_eq!(s.get("/api/scores?q=horn%203", &admin).await.json::<Vec<Score>>().len(), 1);
+    // Migration 0006 rebuilt the score index: old titles are still found.
+    assert_eq!(s.get("/api/scores?q=old%20mar", &admin).await.json::<Vec<Score>>().len(), 1);
+    assert_eq!(score.archive_number, None);
+}
+
+#[tokio::test]
+async fn archive_numbers_are_free_text_searchable_and_not_unique() {
+    let s = Server::start().await;
+    let lib = library(&s).await;
+    let a: Score = s
+        .ok(Method::POST, "/api/scores", &lib.admin, json!({"title": "Alte Kameraden", "archive_number": " 0304 "}))
+        .await;
+    assert_eq!(a.archive_number.as_deref(), Some("0304"), "trimmed");
+    // Not unique: a second piece may carry the same number (gaps and typos in real archives).
+    let b: Score =
+        s.ok(Method::POST, "/api/scores", &lib.admin, json!({"title": "Second copy", "archive_number": "0304"})).await;
+    assert_eq!(b.archive_number.as_deref(), Some("0304"));
+    for q in ["0304", "304", "alte%200304"] {
+        assert!(s.hits(q, &lib.admin).await >= 1, "{q}");
+    }
+    assert_eq!(s.hits("304", &lib.admin).await, 2);
+    // Numbers with separators are found without them too.
+    let c: Score = s
+        .ok(
+            Method::PUT,
+            &format!("/api/scores/{}", b.id),
+            &lib.admin,
+            json!({"title": "Second copy", "archive_number": "A-12"}),
+        )
+        .await;
+    assert_eq!(c.archive_number.as_deref(), Some("A-12"));
+    assert_eq!(s.hits("A12", &lib.admin).await, 1);
+    assert_eq!(s.hits("a-12", &lib.admin).await, 1);
+    assert_eq!(s.hits("304", &lib.admin).await, 1, "the old number is gone from the index");
+    // Blank = none; too long = 400.
+    let cleared: Score = s
+        .ok(Method::PUT, &format!("/api/scores/{}", c.id), &lib.admin, json!({"title": "x", "archive_number": " "}))
+        .await;
+    assert_eq!(cleared.archive_number, None);
+    let long =
+        s.json(Method::POST, "/api/scores", &lib.admin, json!({"title": "x", "archive_number": "9".repeat(41)})).await;
+    assert_eq!(long.status, StatusCode::BAD_REQUEST);
+    // Members see the number of the pieces they can read, and find them by it.
+    s.ok::<Score>(
+        Method::PUT,
+        &format!("/api/scores/{}", lib.score),
+        &lib.admin,
+        json!({"title": "Florentiner Marsch", "composer": "Julius Fučík", "archive_number": "17"}),
+    )
+    .await;
+    let mine: Vec<Score> = s.get("/api/scores?q=17", &lib.anna).await.json();
+    assert_eq!(mine.iter().map(|s| s.archive_number.as_deref()).collect::<Vec<_>>(), [Some("17")]);
+    assert_eq!(s.hits("304", &lib.anna).await, 0, "no parts of Alte Kameraden for anna");
 }
 
 #[tokio::test]
@@ -1041,4 +1099,394 @@ async fn librarians_correct_system_layouts_for_everyone() {
     let reset: FileLayout = reset.json();
     assert_eq!(reset.pages[0], auto.pages[0]);
     assert!(reset.pages[1].corrected);
+}
+
+// ---------------------------------------------------------------------------
+// Mass import (F-LIB-004)
+// ---------------------------------------------------------------------------
+
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    hex::encode(sha2::Sha256::digest(bytes))
+}
+
+/// Registers files (path, content) with a batch; returns the files to upload by path.
+async fn register(s: &Server, token: &str, batch: Id, files: &[(&str, &[u8])]) -> RegisteredImportFiles {
+    let list: Vec<Value> = files
+        .iter()
+        .map(|(path, bytes)| json!({"path": path, "size_bytes": bytes.len(), "sha256": sha256(bytes)}))
+        .collect();
+    s.ok(Method::POST, &format!("/api/import/batches/{batch}/files"), token, json!({ "files": list })).await
+}
+
+async fn upload_all(s: &Server, token: &str, todo: &RegisteredImportFiles, files: &[(&str, &[u8])]) {
+    for u in &todo.upload {
+        let bytes = files.iter().find(|(p, _)| *p == u.path).unwrap().1.to_vec();
+        let r = s
+            .send(
+                Method::PUT,
+                &format!("/api/import/files/{}/content", u.id),
+                Auth::Bearer(token),
+                &[],
+                Body::from(bytes),
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::OK, "{}: {}", u.path, String::from_utf8_lossy(&r.body));
+    }
+}
+
+fn piece<'a>(review: &'a ImportReview, title: &str) -> &'a ReviewPiece {
+    review.pieces.iter().find(|p| p.title.value.as_deref() == Some(title)).unwrap_or_else(|| panic!("no piece {title}"))
+}
+
+fn part<'a>(piece: &'a ReviewPiece, text: &str) -> &'a ReviewPart {
+    piece.parts.iter().find(|p| p.text == text).unwrap_or_else(|| panic!("no part {text}"))
+}
+
+#[tokio::test]
+async fn import_stages_reviews_commits_and_undoes() {
+    let s = Server::start().await;
+    let lib = library(&s).await;
+    let admin = &lib.admin;
+
+    // Members cannot use the import at all.
+    assert_eq!(s.get("/api/import/batches", &lib.anna).await.status, StatusCode::FORBIDDEN);
+    let folder = json!({"name": "Archiv", "pattern": PRESETS[0].pattern, "language": "de"});
+    assert_eq!(s.json(Method::POST, "/api/import/batches", &lib.anna, &folder).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(s.get("/api/import/aliases", &lib.anna).await.status, StatusCode::FORBIDDEN);
+    let bad = json!({"name": "x", "pattern": "{title}/{foo}.pdf", "language": "de"});
+    assert_eq!(s.json(Method::POST, "/api/import/batches", admin, bad).await.status, StatusCode::BAD_REQUEST);
+
+    let batch: ImportBatch = s.ok(Method::POST, "/api/import/batches", admin, &folder).await;
+    let trumpet = tiny_pdf(2, "import-trumpet");
+    let partitur = tiny_pdf(3, "import-partitur");
+    let direktion = tiny_pdf(2, "import-direktion");
+    let klar = tiny_pdf(1, "import-klar");
+    let flute = tiny_pdf(1, "import-flute");
+    let in_library = tiny_pdf(4, "trumpet"); // the fixture's trumpet part
+    let dir = "Märsche/0304 Alte Kameraden - Teike";
+    let files: Vec<(String, Vec<u8>)> = vec![
+        (format!("{dir}/Trompete 1 in B.pdf"), trumpet.clone()),
+        (format!("{dir}/Partitur.pdf"), partitur.clone()),
+        (format!("{dir}/Direktion.pdf"), direktion.clone()),
+        (format!("{dir}/Klar 2.pdf"), klar.clone()),
+        ("Florentiner Marsch - Julius Fučík/Flöte.pdf".into(), flute.clone()),
+        ("0305 Böhmischer Traum/Trompete 2.pdf".into(), in_library.clone()),
+        ("Zweitschrift/Trompete.pdf".into(), trumpet.clone()),
+        ("lose.pdf".into(), tiny_pdf(1, "loose")),
+    ];
+    let files: Vec<(&str, &[u8])> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
+    let todo = register(&s, admin, batch.id, &files).await;
+    // Content already in the library or twice in the folder is skipped.
+    assert_eq!(todo.files.duplicate, 2);
+    assert_eq!(todo.upload.len(), 6);
+    assert!(!todo.upload.iter().any(|u| u.path.contains("Zweitschrift") || u.path.contains("0305")));
+
+    // A file whose content differs from the announced hash is rejected.
+    let first = &todo.upload[0];
+    let wrong = s
+        .send(
+            Method::PUT,
+            &format!("/api/import/files/{}/content", first.id),
+            Auth::Bearer(admin),
+            &[],
+            Body::from(tiny_pdf(1, "other")),
+        )
+        .await;
+    assert_eq!(wrong.status, StatusCode::UNPROCESSABLE_ENTITY);
+    // Resume: registering the same folder again asks for exactly the missing files.
+    let again = register(&s, admin, batch.id, &files).await;
+    assert_eq!(again.upload.len(), 6);
+    upload_all(&s, admin, &again, &files).await;
+    assert!(register(&s, admin, batch.id, &files).await.upload.is_empty(), "nothing to upload twice");
+
+    // Staged files are not part of the library: nobody gets them through /api/files.
+    let trumpet_sha = sha256(&trumpet);
+    for token in [admin.as_str(), lib.anna.as_str()] {
+        assert_eq!(s.get(&format!("/api/files/{trumpet_sha}"), token).await.status, StatusCode::NOT_FOUND);
+    }
+    let review: ImportReview = s.get(&format!("/api/import/batches/{}", batch.id), admin).await.json();
+    assert_eq!(review.unmatched.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(), ["lose.pdf"]);
+    assert_eq!(review.duplicates.len(), 2);
+    let alte = piece(&review, "Alte Kameraden");
+    let staged = part(alte, "Trompete 1 in B").file.id;
+    assert_eq!(s.get(&format!("/api/import/files/{staged}"), admin).await.body, trumpet);
+    let thumb = s.get(&format!("/api/import/files/{staged}/thumbnail"), admin).await;
+    assert_eq!((thumb.status, thumb.headers[header::CONTENT_TYPE].to_str().unwrap()), (StatusCode::OK, "image/png"));
+    assert_eq!(s.get(&format!("/api/import/files/{staged}/thumbnail"), &lib.anna).await.status, StatusCode::FORBIDDEN);
+
+    // Review: number, title, composer, genre from the folder names; key B = B♭ in a German batch.
+    assert_eq!(
+        (alte.number.value.as_deref(), alte.composer.value.as_deref(), alte.genre.value.as_deref()),
+        (Some("0304"), Some("Teike"), Some("Märsche"))
+    );
+    let t = part(alte, "Trompete 1 in B");
+    assert_eq!(
+        (t.display_name.as_str(), t.level, t.readers.clone()),
+        ("Trumpet in B♭ 1", Level::Green, vec!["Trumpets".to_string()])
+    );
+    // Unknown instruments are red and are never created by the import.
+    for text in ["Partitur", "Direktion", "Klar 2"] {
+        assert_eq!(part(alte, text).level, Level::Red, "{text}");
+    }
+    assert_eq!(alte.level, Level::Red);
+    let refused: CommittedImport = s
+        .ok(Method::POST, &format!("/api/import/batches/{}/commit", batch.id), admin, json!({"piece_ids": [alte.id]}))
+        .await;
+    assert!(refused.committed.is_empty() && refused.errors[0].message.contains("unknown instrument"));
+
+    // The librarian creates Partitur and Direktion (two instruments) and maps "Klar" once.
+    let score_instr: Instrument = s.ok(Method::POST, "/api/instruments", admin, json!({"name": "Partitur"})).await;
+    let cond_instr: Instrument = s.ok(Method::POST, "/api/instruments", admin, json!({"name": "Direktion"})).await;
+    let clarinet: Instrument = s.ok(Method::POST, "/api/instruments", admin, json!({"name": "Klarinette"})).await;
+    let review: ImportReview = s.get(&format!("/api/import/batches/{}", batch.id), admin).await.json();
+    let alte = piece(&review, "Alte Kameraden");
+    assert_eq!(part(alte, "Partitur").instruments[0].instrument_id, Some(score_instr.id));
+    assert_eq!(part(alte, "Direktion").instruments[0].instrument_id, Some(cond_instr.id));
+    let k = part(alte, "Klar 2");
+    assert_eq!((k.instruments[0].instrument_id, k.level), (Some(clarinet.id), Level::Yellow), "abbreviation: check");
+    let alias: InstrumentAlias =
+        s.ok(Method::PUT, "/api/import/aliases", admin, json!({"alias": "Klar", "instrument_id": clarinet.id})).await;
+    assert_eq!(alias.alias, "klar");
+    let review: ImportReview = s.get(&format!("/api/import/batches/{}", batch.id), admin).await.json();
+    let alte = piece(&review, "Alte Kameraden");
+    assert_eq!((part(alte, "Klar 2").level, alte.level), (Level::Green, Level::Green));
+
+    // An existing piece with the same title and composer is only suggested.
+    let flor = piece(&review, "Florentiner Marsch");
+    assert_eq!((flor.suggestion.as_ref().map(|s| s.id), flor.level), (Some(lib.score), Level::Yellow));
+    let flute_part = part(flor, "Flöte");
+    assert_eq!(flute_part.readers, Vec::<String>::new(), "nobody has the flute");
+
+    // Commit all green: only Alte Kameraden.
+    let done: CommittedImport =
+        s.ok(Method::POST, &format!("/api/import/batches/{}/commit", batch.id), admin, json!({})).await;
+    assert_eq!((done.committed.clone(), done.errors.len()), (vec![alte.id], 0));
+    let mine: Vec<Score> = s.get("/api/scores?q=304", &lib.anna).await.json();
+    assert_eq!(mine.len(), 1, "anna finds the new piece by its number");
+    assert_eq!(mine[0].parts.iter().map(|p| p.display_name.as_str()).collect::<Vec<_>>(), ["Trumpet in B♭ 1"]);
+    assert_eq!(s.get(&format!("/api/files/{trumpet_sha}"), &lib.anna).await.status, StatusCode::OK);
+    let all: Score = s.get(&format!("/api/scores/{}", mine[0].id), admin).await.json();
+    assert_eq!(all.parts.len(), 4);
+    assert_eq!(all.archive_number.as_deref(), Some("0304"));
+    assert!(
+        all.parts.iter().any(|p| p.instrument_ids == [score_instr.id])
+            && all.parts.iter().any(|p| p.instrument_ids == [cond_instr.id])
+    );
+
+    // Confirmed: the flute part goes to the existing piece.
+    let edited: Vec<ReviewPiece> = s
+        .ok(
+            Method::PATCH,
+            "/api/import/items",
+            admin,
+            json!({"ids": [flor.id], "piece": {"target": {"existing": lib.score}}}),
+        )
+        .await;
+    assert_eq!((edited[0].level, edited[0].score.as_ref().map(|s| s.id)), (Level::Green, Some(lib.score)));
+    let done: CommittedImport = s
+        .ok(Method::POST, &format!("/api/import/batches/{}/commit", batch.id), admin, json!({"piece_ids": [flor.id]}))
+        .await;
+    assert_eq!(done.committed, [flor.id]);
+    let florentiner: Score = s.get(&format!("/api/scores/{}", lib.score), admin).await.json();
+    assert_eq!(florentiner.parts.len(), 3);
+    // Committed items cannot be edited any more.
+    let locked =
+        s.json(Method::PATCH, "/api/import/items", admin, json!({"ids": [flor.id], "piece": {"title": "x"}})).await;
+    assert_eq!(locked.status, StatusCode::CONFLICT);
+
+    // Undo is refused while a musician has annotated an imported part.
+    let imported = mine[0].parts[0].id;
+    let set: AnnotationSet =
+        s.ok(Method::POST, &format!("/api/parts/{imported}/annotation-sets"), &lib.anna, json!({"name": "Mine"})).await;
+    let undo = s.json(Method::POST, &format!("/api/import/batches/{}/undo", batch.id), admin, json!({})).await;
+    assert_eq!(undo.status, StatusCode::CONFLICT);
+    assert!(String::from_utf8_lossy(&undo.body).contains("Alte Kameraden"));
+    let r = s
+        .send(Method::DELETE, &format!("/api/annotation-sets/{}", set.id), Auth::Bearer(&lib.anna), &[], Body::empty())
+        .await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT);
+    let undone: UndoneImport =
+        s.ok(Method::POST, &format!("/api/import/batches/{}/undo", batch.id), admin, json!({})).await;
+    assert_eq!((undone.pieces, undone.parts), (1, 5));
+    assert_eq!(s.get(&format!("/api/scores/{}", mine[0].id), admin).await.status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        s.get(&format!("/api/scores/{}", lib.score), admin).await.json::<Score>().parts.len(),
+        2,
+        "existing piece kept"
+    );
+    // The files stay in the store; the batch can be committed again.
+    assert_eq!(s.get(&format!("/api/import/files/{staged}"), admin).await.status, StatusCode::OK);
+    let review: ImportReview = s.get(&format!("/api/import/batches/{}", batch.id), admin).await.json();
+    assert_eq!(piece(&review, "Alte Kameraden").state, ItemState::Pending);
+    let batches: Vec<ImportBatch> = s.get("/api/import/batches", admin).await.json();
+    assert_eq!((batches[0].pieces, batches[0].committed, batches[0].files.unmatched), (2, 0, 1));
+
+    // Aliases can be listed and removed; deleting a batch keeps the library.
+    assert_eq!(s.get("/api/import/aliases", admin).await.json::<Vec<InstrumentAlias>>().len(), 1);
+    let r = s.send(Method::DELETE, "/api/import/aliases?alias=Klar", Auth::Bearer(admin), &[], Body::empty()).await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT);
+    let r = s
+        .send(Method::DELETE, &format!("/api/import/batches/{}", batch.id), Auth::Bearer(admin), &[], Body::empty())
+        .await;
+    assert_eq!(r.status, StatusCode::NO_CONTENT);
+    assert_eq!(s.get(&format!("/api/import/batches/{}", batch.id), admin).await.status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn import_of_flat_numbered_files_groups_by_number_and_keeps_changes() {
+    let s = Server::start().await;
+    let lib = library(&s).await;
+    let admin = &lib.admin;
+    let klarinette: Instrument = s.ok(Method::POST, "/api/instruments", admin, json!({"name": "Klarinette"})).await;
+    let batch: ImportBatch = s
+        .ok(
+            Method::POST,
+            "/api/import/batches",
+            admin,
+            json!({"name": "Scans", "pattern": preset("flat-number").unwrap().pattern, "language": "en"}),
+        )
+        .await;
+    let (a, b, c, d) = (tiny_pdf(1, "k2"), tiny_pdf(1, "keb"), tiny_pdf(1, "k28"), tiny_pdf(1, "k3"));
+    // Archive number and part with different separators.
+    let files: Vec<(&str, &[u8])> = vec![
+        ("304_Klarinette 2.pdf", &a),
+        ("0304 - Klarinette in B.pdf", &b),
+        ("28 Klarinette Eb.pdf", &c),
+        ("0304 Klarinette Klar 3.pdf", &d),
+    ];
+    let todo = register(&s, admin, batch.id, &files).await;
+    upload_all(&s, admin, &todo, &files).await;
+    let review: ImportReview = s.get(&format!("/api/import/batches/{}", batch.id), admin).await.json();
+    assert_eq!(review.pieces.len(), 2, "304 and 0304 are one piece");
+    let p304 = review.pieces.iter().find(|p| p.number.value.as_deref() == Some("0304")).unwrap();
+    assert_eq!((p304.title.level, p304.level), (Level::Red, Level::Red), "the title must be typed");
+    // No key is assumed; in an English batch "B" is ambiguous and left empty.
+    let k2 = part(p304, "Klarinette 2");
+    assert_eq!((k2.key.value.clone(), k2.voices.values.clone()), (None, vec!["2".to_string()]));
+    let kb = part(p304, "Klarinette in B");
+    assert_eq!((kb.key.value.clone(), kb.key.level), (None, Level::Yellow));
+    // The same instrument named twice ("Klarinette Klar") is listed once.
+    let k3 = part(p304, "Klarinette Klar 3");
+    assert_eq!(
+        (k3.instruments.iter().map(|i| i.instrument_id).collect::<Vec<_>>(), k3.display_name.as_str(), k3.level),
+        (vec![Some(klarinette.id)], "Klarinette 3", Level::Green)
+    );
+
+    // Bulk edit and a typed title; the part's key is chosen by the librarian.
+    let ids: Vec<Id> = review.pieces.iter().map(|p| p.id).collect();
+    let edited: Vec<ReviewPiece> =
+        s.ok(Method::PATCH, "/api/import/items", admin, json!({"ids": ids, "piece": {"genre": "Marsch"}})).await;
+    assert!(edited.iter().all(|p| p.genre.value.as_deref() == Some("Marsch")));
+    s.ok::<Vec<ReviewPiece>>(
+        Method::PATCH,
+        "/api/import/items",
+        admin,
+        json!({"ids": [p304.id], "piece": {"title": "Alte Kameraden"}}),
+    )
+    .await;
+    let bad = s.json(Method::PATCH, "/api/import/items", admin, json!({"ids": [kb.id], "part": {"key": "B"}})).await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST, "ambiguous key refused");
+    s.ok::<Vec<ReviewPiece>>(
+        Method::PATCH,
+        "/api/import/items",
+        admin,
+        json!({"ids": [kb.id], "part": {"key": "in Bb"}}),
+    )
+    .await;
+    // The voices of a part are a list; "&" typed in one entry separates voices.
+    let many: Vec<String> = (1..=11).map(|i| i.to_string()).collect();
+    let bad =
+        s.json(Method::PATCH, "/api/import/items", admin, json!({"ids": [kb.id], "part": {"voices": many}})).await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST, "at most 10 voices");
+    let edited: Vec<ReviewPiece> = s
+        .ok(Method::PATCH, "/api/import/items", admin, json!({"ids": [kb.id], "part": {"voices": ["1 & 2", "1"]}}))
+        .await;
+    let kb_now = part(&edited[0], "Klarinette in B");
+    assert_eq!(
+        (kb_now.voices.values.clone(), kb_now.voices.source),
+        (vec!["1".to_string(), "2".to_string()], Some(Source::Librarian))
+    );
+
+    // Several instruments and voices for one part (a-import-instruments).
+    let trumpet = lib.trumpet_part.instrument_ids[0];
+    let set = |instruments: serde_json::Value| json!({"ids": [k2.id], "part": {"instruments": instruments}});
+    let bad = s.json(Method::PATCH, "/api/import/items", admin, set(json!([trumpet, 9999]))).await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST, "unknown instrument refused");
+    let bad = s.json(Method::PATCH, "/api/import/items", admin, set(json!((0..21).collect::<Vec<_>>()))).await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST, "at most 20 instruments");
+    let edited: Vec<ReviewPiece> = s
+        .ok(
+            Method::PATCH,
+            "/api/import/items",
+            admin,
+            json!({"ids": [k2.id], "part": {"instruments": [klarinette.id, trumpet], "voices": ["2", "3"]}}),
+        )
+        .await;
+    let k2_now = part(&edited[0], "Klarinette 2");
+    assert_eq!(
+        k2_now.instruments.iter().map(|i| (i.instrument_id, i.source, i.level)).collect::<Vec<_>>(),
+        [
+            (Some(klarinette.id), Some(Source::Librarian), Level::Green),
+            (Some(trumpet), Some(Source::Librarian), Level::Green)
+        ]
+    );
+    assert_eq!((k2_now.display_name.as_str(), k2_now.level), ("Klarinette / Trumpet 2 & 3", Level::Green));
+
+    // German: the same names are read again; changes to parts stay (by path).
+    let changed: ImportBatch =
+        s.ok(Method::PUT, &format!("/api/import/batches/{}", batch.id), admin, json!({"language": "de"})).await;
+    assert_eq!(changed.language, Language::De);
+    let review: ImportReview = s.get(&format!("/api/import/batches/{}", batch.id), admin).await.json();
+    let p304 = review.pieces.iter().find(|p| p.number.value.as_deref() == Some("0304")).unwrap();
+    assert_eq!(p304.title.value.as_deref(), Some("Alte Kameraden"), "piece changes kept (same group)");
+    assert_eq!(part(p304, "Klarinette in B").key.source, Some(Source::Librarian));
+    let done: CommittedImport = s
+        .ok(Method::POST, &format!("/api/import/batches/{}/commit", batch.id), admin, json!({"piece_ids": [p304.id]}))
+        .await;
+    assert_eq!(done.committed, [p304.id]);
+    let found: Vec<Score> = s.get("/api/scores?q=alte", admin).await.json();
+    assert_eq!(found[0].archive_number.as_deref(), Some("0304"), "the first path (in order) gives the number");
+    let names: Vec<&str> = found[0].parts.iter().map(|p| p.display_name.as_str()).collect();
+    assert_eq!(names, ["Klarinette / Trumpet 2 & 3", "Klarinette 3", "Klarinette in B♭ 1 & 2"]);
+    assert_eq!(found[0].parts[2].voices, ["1", "2"], "the commit fills the voice list");
+    assert_eq!(found[0].parts[1].instrument_ids, [klarinette.id], "an instrument named twice is committed once");
+    let mut both = vec![klarinette.id, trumpet];
+    both.sort_unstable();
+    assert_eq!(
+        (found[0].parts[0].instrument_ids.clone(), found[0].parts[0].voices.clone()),
+        (both, vec!["2".to_string(), "3".to_string()]),
+        "the commit creates the part with both instruments and both voices"
+    );
+
+    // Cross-check with the system detection: a "Partitur" whose systems have one staff.
+    s.ok::<Instrument>(Method::POST, "/api/instruments", admin, json!({"name": "Partitur"})).await;
+    let score_pdf = staff_pdf(1, 8);
+    let more: Vec<(&str, &[u8])> = vec![("29 Partitur.pdf", &score_pdf)];
+    let todo = register(&s, admin, batch.id, &more).await;
+    upload_all(&s, admin, &todo, &more).await;
+    while musicus_server::layout::worker::run_once(&s.state).await.unwrap() {}
+    let review: ImportReview = s.get(&format!("/api/import/batches/{}", batch.id), admin).await.json();
+    let p29 = review.pieces.iter().find(|p| p.number.value.as_deref() == Some("29")).unwrap();
+    let full = part(p29, "Partitur");
+    assert_eq!((full.file.staves, full.level), (Some(1), Level::Yellow));
+    assert!(full.notes.contains(&Note::ScoreWithOneStaff));
+
+    // A second import of the same folder skips what is already in the library.
+    let again: ImportBatch = s
+        .ok(
+            Method::POST,
+            "/api/import/batches",
+            admin,
+            json!({"name": "Scans", "pattern": preset("flat-number").unwrap().pattern, "language": "de"}),
+        )
+        .await;
+    let todo = register(&s, admin, again.id, &files).await;
+    assert_eq!(
+        (todo.files.duplicate, todo.upload.len()),
+        (3, 0),
+        "28 is known content but not in the library: no upload"
+    );
+    let review: ImportReview = s.get(&format!("/api/import/batches/{}", again.id), admin).await.json();
+    assert_eq!(review.pieces.len(), 1);
 }

@@ -31,6 +31,15 @@ pub struct ScoreRow {
     genre: Option<String>,
     tags: String,
     notes: Option<String>,
+    archive_number: Option<String>,
+}
+
+/// Columns of [`ScoreRow`] for `SELECT … FROM scores s`.
+#[macro_export]
+macro_rules! score_columns {
+    () => {
+        "s.id, s.title, s.subtitle, s.composer, s.arranger, s.genre, s.tags, s.notes, s.archive_number"
+    };
 }
 
 #[derive(sqlx::FromRow)]
@@ -150,6 +159,7 @@ pub async fn with_parts(app: &App, user: &AuthUser, rows: Vec<ScoreRow>) -> ApiR
             genre: r.genre,
             tags: serde_json::from_str(&r.tags).unwrap_or_default(),
             notes: r.notes,
+            archive_number: r.archive_number,
         })
         .collect())
 }
@@ -158,7 +168,9 @@ pub async fn with_parts(app: &App, user: &AuthUser, rows: Vec<ScoreRow>) -> ApiR
 /// all, members those with at least one readable part.
 pub async fn scores_by_ids(app: &App, user: &AuthUser, ids: &[Id]) -> ApiResult<Vec<Score>> {
     let rows: Vec<ScoreRow> = sqlx::query_as(concat!(
-        "SELECT s.id, s.title, s.subtitle, s.composer, s.arranger, s.genre, s.tags, s.notes FROM scores s
+        "SELECT ",
+        score_columns!(),
+        " FROM scores s
          WHERE s.id IN (SELECT value FROM json_each(?3))
            AND (?2 = 1 OR EXISTS (SELECT 1 FROM parts p WHERE p.score_id = s.id AND ",
         part_visible!(),
@@ -206,7 +218,9 @@ pub async fn list_scores(
     Query(query): Query<ScoreQuery>,
 ) -> ApiResult<Json<Vec<Score>>> {
     let rows: Vec<ScoreRow> = sqlx::query_as(concat!(
-        "SELECT s.id, s.title, s.subtitle, s.composer, s.arranger, s.genre, s.tags, s.notes FROM scores s
+        "SELECT ",
+        score_columns!(),
+        " FROM scores s
          WHERE (?3 IS NULL OR s.id IN (
                   SELECT sid FROM (
                       SELECT t.value AS term, score_fts.rowid AS sid FROM json_each(?3) t CROSS JOIN score_fts
@@ -261,7 +275,7 @@ pub async fn get_score(State(app): State<AppState>, user: AuthUser, Path(id): Pa
     scores_by_ids(&app, &user, &[id]).await?.pop().map(Json).ok_or(AppError::NotFound)
 }
 
-struct CleanScore {
+pub(crate) struct CleanScore {
     title: String,
     subtitle: Option<String>,
     composer: Option<String>,
@@ -269,9 +283,11 @@ struct CleanScore {
     genre: Option<String>,
     tags: String,
     notes: Option<String>,
+    archive_number: Option<String>,
 }
 
-fn clean_score(input: &ScoreInput) -> ApiResult<CleanScore> {
+/// Validates score details (also used by the import).
+pub(crate) fn clean_score(input: &ScoreInput) -> ApiResult<CleanScore> {
     let mut tags: Vec<String> = Vec::new();
     for tag in &input.tags {
         let tag = required("tag", tag, 40)?;
@@ -290,7 +306,31 @@ fn clean_score(input: &ScoreInput) -> ApiResult<CleanScore> {
         genre: optional("genre", input.genre.as_deref(), 60)?,
         tags: serde_json::to_string(&tags).expect("tags serialise"),
         notes: optional("notes", input.notes.as_deref(), 4000)?,
+        archive_number: optional("archive number", input.archive_number.as_deref(), 40)?,
     })
+}
+
+/// Inserts a validated score in the caller's transaction (piece editor and import).
+pub(crate) async fn insert_score(conn: &mut sqlx::SqliteConnection, s: CleanScore) -> ApiResult<Id> {
+    let search = s.archive_number.as_deref().map(naming::archive_search_text);
+    let now = now();
+    Ok(sqlx::query_scalar(
+        "INSERT INTO scores (title, subtitle, composer, arranger, genre, tags, notes, archive_number, archive_search,
+                             created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10) RETURNING id",
+    )
+    .bind(s.title)
+    .bind(s.subtitle)
+    .bind(s.composer)
+    .bind(s.arranger)
+    .bind(s.genre)
+    .bind(s.tags)
+    .bind(s.notes)
+    .bind(s.archive_number)
+    .bind(search)
+    .bind(now)
+    .fetch_one(&mut *conn)
+    .await?)
 }
 
 pub async fn create_score(
@@ -300,21 +340,9 @@ pub async fn create_score(
 ) -> ApiResult<Json<Score>> {
     user.require_librarian()?;
     let s = clean_score(&input)?;
-    let now = now();
-    let id: Id = sqlx::query_scalar(
-        "INSERT INTO scores (title, subtitle, composer, arranger, genre, tags, notes, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8) RETURNING id",
-    )
-    .bind(s.title)
-    .bind(s.subtitle)
-    .bind(s.composer)
-    .bind(s.arranger)
-    .bind(s.genre)
-    .bind(s.tags)
-    .bind(s.notes)
-    .bind(now)
-    .fetch_one(&app.db.write)
-    .await?;
+    let mut conn = app.db.write.acquire().await?;
+    let id = insert_score(&mut conn, s).await?;
+    drop(conn);
     get_score(State(app), user, Path(id)).await
 }
 
@@ -328,7 +356,7 @@ pub async fn update_score(
     let s = clean_score(&input)?;
     let done = sqlx::query(
         "UPDATE scores SET title = ?2, subtitle = ?3, composer = ?4, arranger = ?5, genre = ?6, tags = ?7,
-                           notes = ?8, updated_at = ?9 WHERE id = ?1",
+                           notes = ?8, archive_number = ?9, archive_search = ?10, updated_at = ?11 WHERE id = ?1",
     )
     .bind(id)
     .bind(s.title)
@@ -338,6 +366,8 @@ pub async fn update_score(
     .bind(s.genre)
     .bind(s.tags)
     .bind(s.notes)
+    .bind(s.archive_number.clone())
+    .bind(s.archive_number.as_deref().map(naming::archive_search_text))
     .bind(now())
     .execute(&app.db.write)
     .await?;
@@ -358,7 +388,7 @@ pub async fn delete_score(State(app): State<AppState>, user: AuthUser, Path(id):
     Ok(StatusCode::NO_CONTENT)
 }
 
-struct CleanPart {
+pub(crate) struct CleanPart {
     label: Option<String>,
     /// JSON array of the cleaned voices, in order.
     voices: String,
@@ -370,7 +400,7 @@ struct CleanPart {
 /// Validates a part. The key must be one of `naming::KEYS` (common
 /// spellings are normalised); `stored_key` is the part's current key, which
 /// may be kept even if it is an older free-text value (a-part-names).
-fn clean_part(input: &PartInput, stored_key: Option<&str>) -> ApiResult<CleanPart> {
+pub(crate) fn clean_part(input: &PartInput, stored_key: Option<&str>) -> ApiResult<CleanPart> {
     if input.instrument_ids.len() > 20 {
         return Err(AppError::BadRequest("at most 20 instruments per part".into()));
     }
@@ -421,8 +451,18 @@ pub async fn create_part(
     user.require_librarian()?;
     let p = clean_part(&input, None)?;
     let mut tx = app.db.write.begin().await?;
+    let id = insert_part(&mut tx, score_id, p).await?;
+    part_index::reindex(&mut tx, Some(&[id])).await?;
+    tx.commit().await?;
+    one_part(&app, &user, id).await
+}
+
+/// Inserts a validated part with its instruments and voices in the caller's
+/// transaction (part form and import); 404 if the score does not exist.
+/// The caller re-indexes the part name (`part_index::reindex`).
+pub(crate) async fn insert_part(conn: &mut sqlx::SqliteConnection, score_id: Id, p: CleanPart) -> ApiResult<Id> {
     let exists: Option<i64> =
-        sqlx::query_scalar("SELECT 1 FROM scores WHERE id = ?1").bind(score_id).fetch_optional(&mut *tx).await?;
+        sqlx::query_scalar("SELECT 1 FROM scores WHERE id = ?1").bind(score_id).fetch_optional(&mut *conn).await?;
     if exists.is_none() {
         return Err(AppError::NotFound);
     }
@@ -434,17 +474,15 @@ pub async fn create_part(
     .bind(p.transposition)
     .bind(p.notes)
     .bind(now())
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut *conn)
     .await?;
     sqlx::query("INSERT OR IGNORE INTO part_instruments (part_id, instrument_id) SELECT ?1, value FROM json_each(?2)")
         .bind(id)
         .bind(p.instruments)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
-    set_voices(&mut tx, id, &p.voices).await?;
-    part_index::reindex(&mut tx, Some(&[id])).await?;
-    tx.commit().await?;
-    one_part(&app, &user, id).await
+    set_voices(&mut *conn, id, &p.voices).await?;
+    Ok(id)
 }
 
 /// Replaces the voices of a part by a JSON array, keeping its order.
@@ -529,11 +567,25 @@ pub async fn upload_file(
 }
 
 async fn store_upload(app: &App, part_id: Id, pending: &crate::blobs::PendingBlob) -> ApiResult<()> {
+    let mime = sniff_pending(pending).await?;
+    let file_id = store_file(app, pending, mime).await?;
+    let mut tx = app.db.write.begin().await?;
+    add_version(&mut tx, part_id, file_id).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The type of a received upload; only PDF is accepted (415 otherwise).
+pub(crate) async fn sniff_pending(pending: &crate::blobs::PendingBlob) -> ApiResult<&'static str> {
     let mut head = vec![0u8; 1024];
     let n = tokio::fs::File::open(&pending.tmp_path).await?.read(&mut head).await?;
-    let mime =
-        processors::sniff_mime(&head[..n]).ok_or(AppError::UnsupportedMediaType("only PDF files are supported"))?;
+    processors::sniff_mime(&head[..n]).ok_or(AppError::UnsupportedMediaType("only PDF files are supported"))
+}
 
+/// Stores a received upload as a blob with its `files` row (page count,
+/// thumbnail; known content is deduplicated) and wakes the layout worker
+/// for new files. Returns the `files.id`. Used by uploads and the import.
+pub(crate) async fn store_file(app: &App, pending: &crate::blobs::PendingBlob, mime: &'static str) -> ApiResult<Id> {
     let known: Option<Id> = sqlx::query_scalar("SELECT id FROM files WHERE sha256 = ?1")
         .bind(&pending.sha256)
         .fetch_optional(&app.db.read)
@@ -575,12 +627,16 @@ async fn store_upload(app: &App, part_id: Id, pending: &crate::blobs::PendingBlo
             id
         }
     };
+    Ok(file_id)
+}
 
-    let mut tx = app.db.write.begin().await?;
+/// Makes `file_id` the current version of the part (no new version if it
+/// already is), in the caller's transaction.
+pub(crate) async fn add_version(conn: &mut sqlx::SqliteConnection, part_id: Id, file_id: Id) -> ApiResult<()> {
     let latest: Option<(i64, Id)> =
         sqlx::query_as("SELECT version, file_id FROM part_files WHERE part_id = ?1 ORDER BY version DESC LIMIT 1")
             .bind(part_id)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut *conn)
             .await?;
     if latest.is_none_or(|(_, current)| current != file_id) {
         sqlx::query("INSERT INTO part_files (part_id, version, file_id, uploaded_at) VALUES (?1, ?2, ?3, ?4)")
@@ -588,10 +644,9 @@ async fn store_upload(app: &App, part_id: Id, pending: &crate::blobs::PendingBlo
             .bind(latest.map_or(1, |(v, _)| v + 1))
             .bind(file_id)
             .bind(now())
-            .execute(&mut *tx)
+            .execute(&mut *conn)
             .await?;
     }
-    tx.commit().await?;
     Ok(())
 }
 

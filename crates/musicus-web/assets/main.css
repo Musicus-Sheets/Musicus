@@ -143,6 +143,9 @@ input.search { width: 100%; max-width: 420px; }
 .tag { font-size: 0.75rem; padding: 0.1rem 0.5rem; border-radius: 99px; background: var(--bg);
   border: 1px solid var(--border); color: var(--muted); }
 .tag.genre { color: var(--accent); }
+.archive-number { display: inline-block; margin-right: 0.5rem; padding: 0.05rem 0.4rem; border: 1px solid var(--border);
+  border-radius: 4px; font-size: 0.8rem; font-variant-numeric: tabular-nums; color: var(--muted); vertical-align: 0.15rem; }
+select.sort { width: auto; }
 .tag.warn { color: var(--warn); }
 /* Tag entry (tag_input.rs): chips like .tag, one text input as caret */
 .field { display: flex; flex-direction: column; gap: 0.25rem; }
@@ -380,3 +383,98 @@ label.check input { width: 1.2rem; height: 1.2rem; min-height: auto; }
   background: #fff; color: #d0021b; border: 1px solid #d0021b; line-height: 1; display: inline-flex;
   align-items: center; justify-content: center; font-size: 1.1rem; }
 .layout-actions { position: sticky; bottom: 0; z-index: 5; background: var(--bg); padding: 0.5rem 0; }
+
+/* Mass import (pages/import.rs, pages/import_review.rs) */
+.lvl-green { --lvl: var(--ok); }
+.lvl-yellow { --lvl: var(--warn); }
+.lvl-red { --lvl: var(--danger); }
+.lvl-done, .lvl-skip { --lvl: var(--border); }
+.lvl-skip { opacity: 0.55; }
+.count.lvl-green, .count.lvl-yellow, .count.lvl-red { color: var(--lvl); font-weight: 600; }
+.dropzone { display: flex; flex-wrap: wrap; align-items: center; gap: 0.8rem; padding: 1rem; margin: 0.6rem 0;
+  border: 2px dashed var(--border); border-radius: var(--radius); }
+.dropzone.drag { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+.button.disabled { opacity: 0.5; pointer-events: none; }
+.mono, code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
+.import-progress { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin: 0.6rem 0; }
+.import-progress progress { flex: 0 1 240px; }
+.import-summary { margin: 0.6rem 0; }
+.ichip { display: inline-flex; align-items: center; max-width: 100%; margin: 0.1rem 0.25rem 0.1rem 0; padding: 0.05rem 0.5rem;
+  border-radius: 99px; font-size: 0.85rem; overflow-wrap: anywhere;
+  border: 1px solid var(--lvl, var(--border)); background: color-mix(in srgb, var(--lvl, var(--border)) 10%, var(--surface)); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.table-scroll { overflow-x: auto; }
+table.import-preview, table.import-parts { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+/* Preview of the pattern: number, title, composer and genre keep their width,
+   the parts take the rest and wrap. The parts cell is `preview-parts`, not
+   `parts`: the library's `.parts` flex rule would turn it into a flex box
+   whose bottom border no longer lines up with the row. */
+table.import-preview { table-layout: fixed; min-width: 600px; }
+.import-preview col.no { width: 4rem; }
+.import-preview col.title { width: 24%; }
+.import-preview col.composer { width: 15%; }
+.import-preview col.genre { width: 10%; }
+.import-preview td { overflow-wrap: break-word; white-space: normal; }
+.import-preview th, .import-preview td, .import-parts th, .import-parts td { text-align: left; vertical-align: top;
+  padding: 0.35rem 0.4rem; border-bottom: 1px solid var(--border); }
+.import-preview td.lvl-yellow, .import-preview td.lvl-red, .import-parts td.lvl-yellow, .import-parts td.lvl-red {
+  box-shadow: inset 3px 0 0 var(--lvl); background: color-mix(in srgb, var(--lvl) 8%, transparent); }
+.import-preview tr, .import-parts tr { box-shadow: inset 4px 0 0 var(--lvl, transparent); }
+.batch-list { list-style: none; padding: 0; }
+.review-tools { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin: 0.8rem 0; }
+.review-tools select { width: auto; }
+.import-piece { background: var(--surface); border: 1px solid var(--border); border-left: 6px solid var(--lvl, var(--border));
+  border-radius: var(--radius); padding: 0.8rem; margin: 0 0 0.8rem; }
+.import-piece .piece-head { display: flex; gap: 0.8rem; align-items: flex-start; }
+.import-piece .piece-head > input[type=checkbox] { margin-top: 1.9rem; width: 1.3rem; height: 1.3rem; }
+.import-piece .piece-fields { flex: 1 1 auto; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.import-piece .piece-fields label { border-left: 3px solid transparent; padding-left: 0.3rem; }
+.import-piece .piece-fields label.lvl-yellow, .import-piece .piece-fields label.lvl-red { border-left-color: var(--lvl); }
+.import-piece .piece-fields label.lvl-red input { border-color: var(--danger); }
+.import-piece .piece-actions { display: flex; flex-direction: column; gap: 0.4rem; align-items: flex-end; margin-top: 1.4rem; }
+.import-piece .note, .unknown-instruments .note { color: var(--lvl, var(--warn)); margin: 0.2rem 0; }
+.import-piece .match { display: flex; flex-wrap: wrap; gap: 0.8rem; align-items: center; margin: 0.5rem 0; padding: 0.4rem 0.6rem;
+  border-radius: 6px; background: color-mix(in srgb, var(--lvl, var(--accent)) 10%, transparent); }
+.import-parts select { width: 100%; min-width: 4rem; min-height: 36px; }
+.import-parts td.file { min-width: 10rem; max-width: 16rem; overflow-wrap: anywhere; }
+.import-parts td.instruments { min-width: 12rem; }
+.import-parts td.key { min-width: 6.5rem; }
+.import-parts td.voices { min-width: 9rem; }
+.import-parts td.name { min-width: 8rem; }
+.import-parts td.readers { min-width: 6rem; }
+.ichips { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.ichips .ichip { margin: 0; }
+.import-parts .ichips { margin-bottom: 0.3rem; }
+.import-parts .ichip { min-height: 32px; padding-right: 0.15rem; }
+.import-parts .ichip:not(:has(.ichip-remove)) { padding-right: 0.5rem; }
+button.ichip-remove { position: relative; justify-content: center; min-height: 0; width: 1.6rem; height: 1.6rem; margin-left: 0.15rem;
+  padding: 0; border: none; background: transparent; color: var(--muted); border-radius: 50%; font-size: 1.05rem; line-height: 1; }
+button.ichip-remove::after { content: ""; position: absolute; inset: -6px -6px; }
+button.ichip-remove:hover, button.ichip-remove:focus-visible { color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.import-parts .picker-toggle { min-height: 32px; padding: 0.15rem 0.6rem; font-size: 0.85rem; }
+.import-parts .tag-input { min-height: 40px; padding: 0.2rem 0.4rem; }
+.import-parts .tag-entry-wrap.end { flex-basis: 2.5rem; }
+/* Narrower screens: every part is a small card (labels from data-label). */
+@media (max-width: 1024px) {
+  .import-parts, .import-parts tbody { display: block; }
+  .import-parts thead { display: none; }
+  .import-parts tr { display: grid; grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1fr); column-gap: 0.7rem;
+    padding: 0.5rem 0.2rem 0.5rem 0.7rem; border-bottom: 1px solid var(--border); }
+  .import-parts td { border-bottom: none; padding: 0.2rem 0.3rem; min-width: 0; max-width: none; }
+  .import-parts td.thumb { grid-row: 1 / span 5; padding-left: 0; }
+  .import-parts td.file, .import-parts td.instruments, .import-parts td.name { grid-column: 2 / -1; min-width: 0; }
+  .import-parts td.key, .import-parts td.voices, .import-parts td.readers { min-width: 0; }
+  .import-parts td[data-label]::before { content: attr(data-label); display: block; font-size: 0.75rem; color: var(--muted); }
+}
+.thumb-small { width: 56px; height: 79px; object-fit: cover; border: 1px solid var(--border); border-radius: 4px; background: #fff;
+  display: flex; align-items: center; justify-content: center; font-size: 0.75rem; color: var(--muted); }
+.unknown-instruments .row { border-left: 4px solid var(--lvl); padding-left: 0.6rem; flex-wrap: wrap; }
+.unknown-instruments select { width: auto; }
+.bulk-edit { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; position: sticky; top: 0; z-index: 5; }
+.bulk-edit input { flex: 1 1 10rem; width: auto; }
+.pager { display: flex; gap: 0.8rem; align-items: center; justify-content: center; margin: 1rem 0; }
+.batch-settings code { overflow-wrap: anywhere; }
+.import-piece input[type=radio], .import-parts input[type=checkbox] { min-height: auto; width: 1.2rem; height: 1.2rem; padding: 0; }
+.import-piece .match label { display: inline-flex; flex-direction: row; align-items: center; gap: 0.3rem; color: var(--text); }
+.unknown-instruments ul.rows { list-style: none; padding: 0; margin: 0; }

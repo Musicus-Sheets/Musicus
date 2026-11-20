@@ -7,7 +7,7 @@ use crate::{
     ui::{ErrorBox, Loading, can_manage},
 };
 use dioxus::prelude::*;
-use musicus_api::{Instrument, Part, Score};
+use musicus_api::{Instrument, Part, Score, naming};
 use std::collections::HashMap;
 
 /// Builds the query string for `/api/scores`.
@@ -26,6 +26,8 @@ pub fn Library() -> Element {
     // Taken once: the highlight stays while this page is open.
     let focus = use_hook(|| FOCUS_SCORE.write().take());
     let mut query = use_signal(String::new);
+    // Memory only (R-SEC-001): back to "Title" on the next visit.
+    let mut by_number = use_signal(|| false);
     let scores = use_resource(move || {
         let path = scores_path(&query());
         async move {
@@ -52,9 +54,15 @@ pub fn Library() -> Element {
             div { class: "page-head",
                 h1 { "Library" }
                 div { class: "head-tools",
-                    input { class: "search", r#type: "search", placeholder: "Search title, composer, tag…",
+                    input { class: "search", r#type: "search", placeholder: "Search title, composer, tag, number…",
                         value: "{query}", oninput: move |e| query.set(e.value()) }
+                    select { class: "sort", "aria-label": "Sort by",
+                        onchange: move |e| by_number.set(e.value() == "number"),
+                        option { value: "title", selected: !by_number(), "Sort by title" }
+                        option { value: "number", selected: by_number(), "Sort by archive number" }
+                    }
                     if manage {
+                        Link { class: "button", to: Route::Imports {}, title: "Import a whole folder of PDF parts", "Import folder" }
                         Link { class: "button primary add", to: Route::NewScore {},
                             span { class: "plus", "aria-hidden": "true", "+" }
                             "Add piece"
@@ -78,7 +86,7 @@ pub fn Library() -> Element {
                 },
                 Some(Ok(list)) => rsx! {
                     div { class: "score-list",
-                        for score in list.iter() {
+                        for score in sorted(list, by_number()).iter() {
                             ScoreCard { key: "{score.id}", score: score.clone(), names: names.clone(), programme: None,
                                 focus: focus == Some(score.id) }
                         }
@@ -87,6 +95,21 @@ pub fn Library() -> Element {
             }
         }
     }
+}
+
+/// The list as the server sent it (by title), or by archive number in
+/// natural order ("28" before "304"), pieces without a number last.
+fn sorted(list: &[Score], by_number: bool) -> Vec<Score> {
+    let mut list = list.to_vec();
+    if by_number {
+        list.sort_by(|a, b| match (&a.archive_number, &b.archive_number) {
+            (Some(x), Some(y)) => naming::natural_cmp(x, y).then_with(|| naming::natural_cmp(&a.title, &b.title)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => naming::natural_cmp(&a.title, &b.title),
+        });
+    }
+    list
 }
 
 pub fn score_byline(score: &Score) -> String {
@@ -123,6 +146,9 @@ pub fn ScoreCard(
         article { class: if focus { "score focus" } else { "score" }, id: "score-{score.id}",
             div { class: "score-head",
                 div { class: "score-title",
+                    if let Some(n) = &score.archive_number {
+                        span { class: "archive-number", title: "Archive number", "No. {n}" }
+                    }
                     h2 { "{score.title}" }
                     if let Some(sub) = &score.subtitle {
                         span { class: "muted", "{sub}" }

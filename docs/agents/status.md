@@ -11,7 +11,7 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | Requirement(s) | Topic | Notes for implementers |
 | --- | --- | --- |
 | R-ACL-005, R-ACL-006 | grants per voice / per programme / expiry | extend `part_visible!()` (d-access); new tables + migration; per voice: join `part_voices` (indexed on `voice`, a-part-voices) |
-| R-LIB-007 | extended score metadata | migration + `ScoreInput`/`Score` + `pages/forms.rs::ScoreFields` + FTS columns if searchable |
+| R-LIB-007 | extended score metadata (the archive number is done: R-LIB-015) | migration + `ScoreInput`/`Score` + `pages/forms.rs::ScoreFields` + FTS columns if searchable (FTS5 needs drop + recreate + rebuild, see 0006) |
 | R-FILE-008 | MusicXML | new processor in `processors.rs`; `sniff_mime`; annotations need musical anchors (not page coords) — design first |
 | R-FILE-009 | GC of unreferenced blobs | must respect backup consistency (grace period), conflicts with R-FILE-004 resolved by "unreferenced only" |
 | R-READ-007, R-READ-008 | half-page turns, conductor push | half-page turns kept as a page-view option (the system view covers the need on small tablets, see R-READ-007 notes); conductor push needs server push (SSE/WebSocket) — new component, ask user |
@@ -24,6 +24,9 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | R-FILE-010 | bilevel compression of scans | |
 | R-SEC-009, R-SEC-010 | watermark, download audit log | watermark must not create blobs (conflict with R-FILE-004) |
 | R-OPS-009 | continuous replication (Litestream) | |
+
+| F-LIB-004 phase 2 | mass import extensions | pattern per subfolder (archives mixing structures; today: several batches), ZIP upload, server-side paging of the review for very large batches, CSV inventory and OCR sources (R-LIB-022) |
+| R-LIB-022 | OCR / inventory list as import sources | add candidates with `Source::Ocr` / `Source::Inventory` to `PieceGuess` fields (a-import-shared) |
 
 Also not implemented (no requirement yet): user deletion, rate limiting beyond login, metrics.
 
@@ -44,6 +47,7 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 - System view: only synthetic PDFs in automated tests; real scores checked manually with `examples/layout_report.rs`
   (numbers in `layout.md`). Physical staff size depends on the device density (a-css-mm). Detection time on a
   Raspberry Pi not measured (R-PERF-008 estimate). R-READ-019 (layouts prefetched with a programme) not e2e-tested.
+- Import UI without e2e coverage: drag and drop of a folder (only the folder input is driven), resume after an interrupted upload (API-tested), bulk edit, pattern change, existing-piece confirmation, skip of single files, "Use for …" with an existing instrument (all API-tested). Preset detection and the "listed once" rule for instruments are unit-tested (`import/mod.rs`, `parts.rs`, `review.rs`) and API-tested for flat numbered files; the e2e smoke covers only the folder preset. The presets were checked on synthetic archives only (real archives with other layouts may need an own pattern). Hashing speed of very large archives in the browser not measured.
 - Client features without e2e coverage: eraser/stamps/text/undo (R-ANN-002, R-ANN-003), palm rejection (R-ANN-004), sets menu actions, migration banner, wake lock, fullscreen, programme next/previous navigation (R-READ-005); deleting pieces/parts/programmes/groups from the UI, user role changes and disable/enable (API-tested only).
 - Sharp rendering (a-device-pixels): painted = backing verified only in Chromium (real `--force-device-scale-factor`);
   Firefox and Safari (no `devicePixelContentBox`) not measured; real browser zoom (Ctrl +) and a real second screen are
@@ -70,3 +74,4 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 - Pinch zoom re-renders at up to `MAX_CANVAS_PIXELS` per canvas (crop cache ≤ 3 × that); while pinched the canvas
   position is not on whole device pixels (browser-controlled), so it is sharp but not strictly 1:1.
 - Thumbnails are blobs without a `files` row; never served except via their PDF's hash.
+- Import: `GET /api/import/batches/{id}` returns the whole review (no server paging); fine for a few thousand files, a very large batch should be split. `register_files` handles the whole list in one write transaction (one statement per new file, then `repropose`); 20 000 files per request. Files of a deleted or undone batch stay as blobs and `files` rows (no GC, R-FILE-009).

@@ -52,6 +52,70 @@ extern "C" {
     fn js_set_pending(key: &str, url: &str, revision: f64, bytes: &[u8]);
     #[wasm_bindgen(js_name = clearPending)]
     fn js_clear_pending(key: &str);
+    #[wasm_bindgen(js_name = pickFolder)]
+    fn js_pick_folder(input_id: &str) -> js_sys::Array;
+    #[wasm_bindgen(js_name = dropFolder)]
+    fn js_drop_folder(zone_id: &str) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = importSlice)]
+    fn js_import_slice(index: u32, start: f64, end: f64) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = uploadImportFile)]
+    fn js_upload_import_file(index: u32, url: &str) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = clearImportFiles)]
+    pub fn clear_import_files();
+}
+
+/// A file of a selected folder: index in the bridge's list, path, size.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FolderFile {
+    pub index: u32,
+    pub path: String,
+    pub size: f64,
+}
+
+fn folder_files(list: js_sys::Array) -> Vec<FolderFile> {
+    list.iter()
+        .enumerate()
+        .filter_map(|(i, entry)| {
+            let pair = js_sys::Array::from(&entry);
+            Some(FolderFile { index: i as u32, path: pair.get(0).as_string()?, size: pair.get(1).as_f64()? })
+        })
+        .collect()
+}
+
+/// The files of the folder chosen in `<input type=file webkitdirectory id=…>`.
+pub fn pick_folder(input_id: &str) -> Vec<FolderFile> {
+    folder_files(js_pick_folder(input_id))
+}
+
+/// Waits for the next folder dropped onto the element.
+pub async fn drop_folder(zone_id: &str) -> Vec<FolderFile> {
+    match JsFuture::from(js_drop_folder(zone_id)).await {
+        Ok(v) => folder_files(js_sys::Array::from(&v)),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// SHA-256 (hex) of a selected file, read in slices of 4 MiB so even large
+/// scans never sit in memory as a whole.
+pub async fn hash_import_file(index: u32, size: f64) -> Result<String, String> {
+    use sha2::{Digest, Sha256};
+    const CHUNK: f64 = 4.0 * 1024.0 * 1024.0;
+    let mut hasher = Sha256::new();
+    let mut start = 0.0;
+    while start < size {
+        let end = (start + CHUNK).min(size);
+        let bytes = JsFuture::from(js_import_slice(index, start, end)).await.map_err(|e| format!("{e:?}"))?;
+        hasher.update(js_sys::Uint8Array::new(&bytes).to_vec());
+        start = end;
+    }
+    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// Uploads a selected file (streamed by the browser): (HTTP status, body).
+pub async fn upload_import_file(index: u32, url: &str) -> Result<(u16, String), String> {
+    let r = JsFuture::from(js_upload_import_file(index, url)).await.map_err(|e| format!("{e:?}"))?;
+    let pair = js_sys::Array::from(&r);
+    Ok((pair.get(0).as_f64().unwrap_or(0.0) as u16, pair.get(1).as_string().unwrap_or_default()))
 }
 
 /// Registers the newest unsaved state of an annotation page, to be sent if

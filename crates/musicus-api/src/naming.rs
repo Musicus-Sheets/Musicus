@@ -189,6 +189,34 @@ pub fn normalize_key(text: &str) -> Option<&'static str> {
     key(text.trim()).map(|k| k.code).or_else(|| parse_key(text))
 }
 
+/// Matching key of an archive number: letters and digits only, lower case,
+/// leading zeros of a leading number dropped. "0304", "304" and " 304 " give
+/// "304"; "A-12" and "a12" give "a12". Used to recognise a piece by its
+/// number (import), never stored.
+pub fn archive_key(number: &str) -> String {
+    let compact: String = number.chars().filter(|c| c.is_alphanumeric()).flat_map(char::to_lowercase).collect();
+    if !compact.starts_with(|c: char| c.is_ascii_digit()) {
+        return compact;
+    }
+    let trimmed = compact.trim_start_matches('0');
+    if trimmed.is_empty() { "0".to_owned() } else { trimmed.to_owned() }
+}
+
+/// What the library search indexes for an archive number: the number as
+/// written plus the forms a librarian may type ("0304" is found with "304",
+/// "A-12" with "A12"). Written by the server into `scores.archive_search`.
+pub fn archive_search_text(number: &str) -> String {
+    let number = number.trim();
+    let compact: String = number.chars().filter(|c| c.is_alphanumeric()).collect();
+    let mut words = vec![number.to_owned()];
+    for w in [compact.clone(), compact.trim_start_matches('0').to_owned()] {
+        if !w.is_empty() && !words.contains(&w) {
+            words.push(w);
+        }
+    }
+    words.join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,6 +273,22 @@ mod tests {
             v,
             ["Clarinet 1", "Clarinet 1 & 2", "Clarinet 1 & 3", "Clarinet 2", "Clarinet 2 & 3", "Clarinet 10"]
         );
+    }
+
+    #[test]
+    fn archive_numbers() {
+        assert_eq!(archive_key("0304"), "304");
+        assert_eq!(archive_key(" 304 "), "304");
+        assert_eq!(archive_key("A-12"), "a12");
+        assert_eq!(archive_key("a12"), "a12");
+        assert_eq!(archive_key("0012b"), "12b");
+        assert_eq!(archive_key("000"), "0");
+        assert_eq!(archive_search_text("0304"), "0304 304");
+        assert_eq!(archive_search_text("A-12"), "A-12 A12");
+        assert_eq!(archive_search_text("17"), "17");
+        let mut v = vec!["0304", "28", "A-12", "302", "1"];
+        v.sort_by(|a, b| natural_cmp(a, b));
+        assert_eq!(v, ["1", "28", "302", "0304", "A-12"]);
     }
 
     #[test]
