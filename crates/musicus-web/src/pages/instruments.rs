@@ -12,8 +12,8 @@ use musicus_api::{ErrorCode, Instrument, InstrumentInput};
 use musicus_i18n::t;
 use std::collections::BTreeMap;
 
-/// Instruments by family; families in alphabetical order, those without a
-/// family last.
+/// Instruments by family; families and instruments in the UI language's
+/// order (a-browser-sort), instruments without a family last.
 fn by_family(list: &[Instrument]) -> Vec<(String, Vec<Instrument>)> {
     let mut map: BTreeMap<(bool, String), Vec<Instrument>> = BTreeMap::new();
     for i in list {
@@ -23,7 +23,12 @@ fn by_family(list: &[Instrument]) -> Vec<(String, Vec<Instrument>)> {
         };
         map.entry(key).or_default().push(i.clone());
     }
-    map.into_iter().map(|((_, name), items)| (name, items)).collect()
+    let mut out: Vec<(bool, String, Vec<Instrument>)> = map.into_iter().map(|((o, n), v)| (o, n, v)).collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| crate::locale::compare(&a.1, &b.1)));
+    for (_, _, items) in out.iter_mut() {
+        crate::locale::sort_by_text(items, |i| &i.name);
+    }
+    out.into_iter().map(|(_, name, items)| (name, items)).collect()
 }
 
 #[component]
@@ -51,7 +56,7 @@ pub fn Instruments() -> Element {
     let families: Vec<String> = match &*list.read() {
         Some(Ok(items)) => {
             let mut f: Vec<String> = items.iter().filter_map(|i| i.family.clone()).collect();
-            f.sort_by_key(|s| s.to_lowercase());
+            crate::locale::sort_by_text(&mut f, |s| s);
             f.dedup_by_key(|s| s.to_lowercase());
             f
         }

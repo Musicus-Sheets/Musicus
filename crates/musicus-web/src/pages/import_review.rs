@@ -155,7 +155,7 @@ pub fn ImportReview(id: Id) -> Element {
     let instruments: Vec<Instrument> = match &*instruments.read() {
         Some(Ok(l)) => {
             let mut l = l.clone();
-            l.sort_by(|a, b| naming::natural_cmp(&a.name, &b.name));
+            crate::locale::sort_by_text(&mut l, |i| &i.name);
             l
         }
         _ => vec![],
@@ -209,7 +209,9 @@ pub fn ImportReview(id: Id) -> Element {
 
     let (green, yellow, red) = level_counts(&r.pieces);
     let committed = r.pieces.iter().filter(|p| p.state == ItemState::Committed).count();
-    let shown: Vec<&ReviewPiece> = r.pieces.iter().filter(|p| filter().keeps(p)).collect();
+    // Sorted in the browser before paging (a-browser-sort).
+    let mut shown: Vec<&ReviewPiece> = r.pieces.iter().filter(|p| filter().keeps(p)).collect();
+    shown.sort_by(|a, b| crate::pages::import::cmp_pieces(a, b));
     let pages = shown.len().div_ceil(PAGE).max(1);
     let current = page().min(pages - 1);
     let visible: Vec<ReviewPiece> = shown.iter().skip(current * PAGE).take(PAGE).map(|p| (*p).clone()).collect();
@@ -747,7 +749,7 @@ fn PartRow(
                 if part.readers.is_empty() {
                     span { class: "warn-text", {t::import_readers_none()} }
                 } else {
-                    "{part.readers.join(\", \")}"
+                    {crate::pages::import::sorted_join(&part.readers)}
                 }
             }
             td { class: "take", "data-label": t::import_col_import(),

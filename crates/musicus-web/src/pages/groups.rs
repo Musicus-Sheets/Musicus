@@ -41,7 +41,11 @@ pub fn Groups() -> Element {
         return rsx! { NoAccess {} };
     }
     let list = match &*groups.read() {
-        Some(Ok(l)) => l.clone(),
+        Some(Ok(l)) => {
+            let mut l = l.clone();
+            crate::locale::sort_by_text(&mut l, |g| &g.name);
+            l
+        }
         Some(Err(e)) => return rsx! { main { ErrorBox { message: e.message.clone() } } },
         None => return rsx! { main { Loading {} } },
     };

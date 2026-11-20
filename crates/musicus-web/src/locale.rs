@@ -72,3 +72,33 @@ pub fn format_size(bytes: i64) -> String {
         t::common_size_kb(format_number(((bytes + 999) / 1000) as f64, 0, 0))
     }
 }
+
+thread_local! {
+    /// `Intl.Collator(<UI language>, {numeric: true, sensitivity: "base"}).compare`, made once.
+    static COLLATOR: js_sys::Function = {
+        let opts = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&opts, &"numeric".into(), &JsValue::TRUE);
+        let _ = js_sys::Reflect::set(&opts, &"sensitivity".into(), &"base".into());
+        let locales = js_sys::Array::of1(&intl_locale().into());
+        js_sys::Intl::Collator::new(&locales, &opts).compare()
+    };
+}
+
+/// Order of displayed names in the UI language (a-browser-sort, R-I18N-008):
+/// case and accents ignored at first ("Ölberg" between "Oboe" and "Posaune"),
+/// numbers by value ("Trumpet 2" before "Trumpet 10"). Ties are broken by code
+/// point so the order is total.
+pub fn compare(a: &str, b: &str) -> std::cmp::Ordering {
+    let c = COLLATOR.with(|f| f.call2(&JsValue::NULL, &a.into(), &b.into()).ok().and_then(|v| v.as_f64()));
+    match c {
+        Some(x) if x < 0.0 => std::cmp::Ordering::Less,
+        Some(x) if x > 0.0 => std::cmp::Ordering::Greater,
+        Some(_) => a.cmp(b),
+        None => musicus_api::naming::natural_cmp(a, b),
+    }
+}
+
+/// Sorts by a text key with [`compare`] (stable).
+pub fn sort_by_text<T>(items: &mut [T], key: impl Fn(&T) -> &str) {
+    items.sort_by(|a, b| compare(key(a), key(b)));
+}

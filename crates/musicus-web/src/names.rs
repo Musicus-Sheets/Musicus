@@ -32,9 +32,10 @@ pub fn key_option(code: &str) -> String {
     t::key_option(code).unwrap_or_else(|| code.to_owned())
 }
 
-/// Order of part names: by name, numbers by value.
+/// Order of part names: by the UI language's collation, numbers by value
+/// (a-browser-sort).
 pub fn cmp_names(a: &str, b: &str) -> Ordering {
-    naming::natural_cmp(a, b)
+    crate::locale::compare(a, b)
 }
 
 /// The parts in display order (by name; the server sends them by id).

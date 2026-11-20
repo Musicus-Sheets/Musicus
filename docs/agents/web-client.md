@@ -16,6 +16,28 @@ functions (`viewer::COLORS` etc. as `fn() -> String`; layout kinds `kind_name`; 
 `locale::intl_locale()` (was `"default"`); numbers `format_number` (`Intl.NumberFormat`); `format_size` "1.5 MB" /
 "12 KB" (number from `Intl`, unit from the catalogue). `ui` re-exports the three formatters.
 
+## Sorting (a-browser-sort, R-I18N-008)
+
+Every displayed list of names is sorted in the browser with `locale::compare` (`Intl.Collator(<UI language>,
+{numeric: true, sensitivity: "base"})`, ties by code point); the server's `ORDER BY … COLLATE NOCASE` is only a stable
+default and `LIMIT 1000` (library) a cap.
+
+| List | Where | Order |
+| --- | --- | --- |
+| library pieces | `library::sorted` | title; or archive number (numbers by value), pieces without number last, then title |
+| parts of a piece (library, programme view, piece editor, reader neighbours) | `names::sorted` / `cmp_names` | composed name |
+| instruments page | `instruments::by_family` | families (instruments without family "Other" last), then names |
+| family suggestions | `instruments.rs` `families` | collator, duplicates ignoring case dropped |
+| groups | `groups.rs` | name |
+| users | `users::sorted_users` | display name |
+| picker options and assigned chips (members, grants, part instruments, programme pieces, review instruments) | `picker::sorted` | label, then id |
+| tag / family suggestions | `suggest::suggestions` | rank (prefix, word prefix, contains), then collator |
+| import review pieces (before paging), import preview | `import::cmp_pieces` | archive number (none last), then title |
+| import review "Instruments to confirm" choices | `import_review.rs` | instrument name |
+| readers of a review part | `import::sorted_join` | group name |
+| programmes | server | date (not text) |
+| programme items, systems, versions, voices | server/data | position / number (not sorted) |
+
 ## Routes (`main.rs::Route`)
 
 | Path | Component | Layout | Notes |
@@ -90,7 +112,7 @@ of the programme after `bridge::retain_only` (R-READ-019).
 Management happens in the normal views (d-inline-management): the same components render for every role and add
 controls when `ui::can_manage()` / `ui::is_admin()`; members get exactly the member pages.
 
-- `library.rs`: `GET /api/scores[?q=]` (150 ms debounce via `gloo_timers`), `GET /api/instruments` for names; `select.sort` "Sort by title" / "Sort by archive number" (`sorted`: `natural_cmp` on the number, none last; signal only, not stored); `ScoreCard` shows `span.archive-number` "No. <n>" before the title; `ScoreCard` (id `score-<id>`; L: `Edit` link + warning tags "no parts yet" / "n parts without PDF") + `PartTile` (L: wrapped in `.part-cell` with an `Edit` link under the `PartLink` tile; tile = thumbnail if `has_thumbnail`); `part_route(part, programme)`. `FOCUS_SCORE: GlobalSignal<Option<i64>>` (memory only) is set by the editors before returning to `/`; `Library` takes it once on mount, highlights that card (`.score.focus`) and scrolls it into view via `document::eval`.
+- `library.rs`: `GET /api/scores[?q=]` (150 ms debounce via `gloo_timers`), `GET /api/instruments` for names; `select.sort` "Sort by title" / "Sort by archive number" (`sorted`: collator on title, or on the number (numbers by value) with none last; signal only, not stored); `ScoreCard` shows `span.archive-number` "No. <n>" before the title; `ScoreCard` (id `score-<id>`; L: `Edit` link + warning tags "no parts yet" / "n parts without PDF") + `PartTile` (L: wrapped in `.part-cell` with an `Edit` link under the `PartLink` tile; tile = thumbnail if `has_thumbnail`); `part_route(part, programme)`. `FOCUS_SCORE: GlobalSignal<Option<i64>>` (memory only) is set by the editors before returning to `/`; `Library` takes it once on mount, highlights that card (`.score.focus`) and scrolls it into view via `document::eval`.
 - `programmes.rs`: list (L: `+ New programme`); `ProgrammeView` (L: `Edit`) loads programme, `programme_urls` (unique file URLs in concert order), `bridge::retain_only(urls)`, prefetch chunks of 3, progress `loaded/total/failed` (R-PROG-003, R-PROG-004).
 - `forms.rs` (shared by the editors): `ScoreDraft` (form state, `to_input` trims/empties → `None`; `tags: Vec<String>`; `archive_number`, field "Archive number") + `ScoreFields` (tags edited by `TagInput` through `draft.map_mut(|d| &d.tags, |d| &mut d.tags)`, a `WriteSignal`, so every chip change is in the draft synchronously, before a submit handler reads it); `InstrumentPicker` (assignment picker over instruments; without `onsave` it only sets the form's `selected`, with `onsave` the caller persists; no instruments ⇒ link to the Instruments page); `upload_pdf(part, FileData)` (`read_bytes()` → `api::upload`); `PartEditor` (heading = live name; custom name/voices/key + current instruments → `PUT /api/parts/{id}` via `Save part`; instrument changes are saved at once with `PUT /api/parts/{id}` carrying the `saved` (last stored) custom name/voices/key/notes, restored on error, `Saved` for 2.5 s; `notes` are kept, no longer sent as `None`; upload/replace PDF; version list from `GET /api/parts/{id}/versions` in a `<details>`, shown when >1 version or `versions_open`; delete with confirm); `PartFields` + `preview_name` (key `<select>` over `musicus_api::naming::KEYS`, first option "— (concert pitch)" = none, a stored unknown key as "Other: …"; voices `Signal<Vec<String>>` as chips (`TagInput`, label "Voices", a-part-voices); "Custom name (optional)" whose placeholder is the derived name; a-part-names); `NewPartForm` (instruments, then key/voices/custom name, live "Shown as: …"; creates the part, then uploads the chosen PDF in a `spawn`ed task so the next part can be typed meanwhile; reports `(Part, Upload)` via `onstate`; `Upload = NoFile | Running(name) | Done(FileVersion) | Failed(msg)`); `AddedParts` (rows with upload state).
 - Part names (`names.rs`, a-client-part-names): the server sends components only; `names::part_name(&Part)` composes the name with `musicus_i18n::name_words()` (library tiles `.part-label`, `AddedParts`, `EditPart` header, layout editor, reader title, programme views), `names::compose` the live preview, `names::review_name` the import review; `names::sorted(&parts)` orders the parts of a piece by that name (library, piece editor, programme neighbours); `names::key_option` the key selection entries; `names::set_name` shows an unnamed annotation set as "My annotations". `AddedParts` adds the instrument names only when a custom name hides them.
@@ -110,7 +132,7 @@ controls when `ui::can_manage()` / `ui::is_admin()`; members get exactly the mem
 
 ## Assignment picker (`picker.rs`, a-assign-picker)
 
-Replaces checkbox-per-entry lists. `AssignList {options, assigned, onadd, onremove, add_label, empty, placeholder, busy, status}`: assigned entries as `.chip`s (label + muted detail, `×` button 44 px, `aria-label "Remove <label>"`), sorted by folded label; `empty` text when none; then `Picker` with the unassigned entries and the `Status`. Persisting is the caller's job.
+Replaces checkbox-per-entry lists. `AssignList {options, assigned, onadd, onremove, add_label, empty, placeholder, busy, status}`: assigned entries as `.chip`s (label + muted detail, `×` button 44 px, `aria-label` `t::common_remove_entry`), sorted with `locale::compare`; `empty` text when none; then `Picker` with the unassigned entries and the `Status`. Persisting is the caller's job.
 
 `Picker {options, label, placeholder, onapply, disabled, none_left}`: toggle button (`aria-expanded`) → transparent fixed `.picker-backdrop` (z 30) + `.picker-panel` (z 31, absolute under the button; ≤ 600 px: fixed sheet under the top bar, dimmed backdrop). Panel: search `input[role=combobox]` focused on mount (`MountedData::set_focus`), listbox (`aria-multiselectable`) of `div[role=option][tabindex=-1][aria-selected]` with a check box glyph, footer `n selected` + `Add n` / `Close`. Filter: query folded and split at whitespace, every term must occur in the entry's folded label + detail + extra text (`fold`: NFD via `js_sys::JsString::normalize`, combining marks dropped, ß→ss etc.). Ticked ids kept in tick order (also when filtered out). Closing — backdrop click/tap, Escape anywhere in the panel, `Add n`/`Close` — calls `onapply(ticked)` if any, clears query; keyboard closes return focus to the toggle. There is no cancel: unticking before closing or × afterwards undoes. Keys: search field ↓ → first option, Enter → toggles the first match (prevent_default, so the surrounding form is never submitted); option ↓/↑ move focus (↑ on the first → search field), Enter/Space toggle, a printable key appends to the query and refocuses the search. The backdrop swallows the outside click (it only closes): an editor cannot unmount mid-save and a click on Save/another group is not half-applied.
 
@@ -126,7 +148,7 @@ Users: group members (label display name, detail username), instrument grants an
 
 ## Suggestions (`suggest.rs`, a-tag-suggest)
 
-`suggestions(all, query, exclude)`: `picker::fold` (case, diacritics); rank 0 = starts with the query, 1 = a word starts with it, 2 = contains it; stable within a rank (server order), max 8; entries in `exclude` (ignoring case) dropped; empty query ⇒ none. `on_key(e, items, open, active)`: ↓/↑ cycle `active` (nothing active until pressed, so Enter keeps its normal meaning), Enter/Tab with an active item take it (prevented), Escape closes (prevented, propagation stopped) ⇒ `(handled, taken)`. `SuggestList`: `ul.suggest[role=listbox]`, items `li[role=option][id=<list>-<i>]`, `onmousedown` prevented (the input keeps focus, so the tag input's blur-commit does not fire), click takes. `SuggestInput {value, options, placeholder, label, required}`: input `role=combobox` + list in `.suggest-wrap`; open on input, closed on blur/take/Escape; hides a single suggestion equal to the value.
+`suggestions(all, query, exclude)`: `picker::fold` (case, diacritics); rank 0 = starts with the query, 1 = a word starts with it, 2 = contains it; within a rank by `locale::compare`, max 8; entries in `exclude` (ignoring case) dropped; empty query ⇒ none. `on_key(e, items, open, active)`: ↓/↑ cycle `active` (nothing active until pressed, so Enter keeps its normal meaning), Enter/Tab with an active item take it (prevented), Escape closes (prevented, propagation stopped) ⇒ `(handled, taken)`. `SuggestList`: `ul.suggest[role=listbox]`, items `li[role=option][id=<list>-<i>]`, `onmousedown` prevented (the input keeps focus, so the tag input's blur-commit does not fire), click takes. `SuggestInput {value, options, placeholder, label, required}`: input `role=combobox` + list in `.suggest-wrap`; open on input, closed on blur/take/Escape; hides a single suggestion equal to the value.
 
 `TagInput` (prop `suggestions`): the input sits in `span.tag-entry-wrap` (positioned), the list hangs under it wherever it is among the chips; options = known tags minus chosen ones; a taken suggestion goes through `add` like typed text; comma/Enter without an active suggestion commit the typed text. `ScoreFields` loads the known tags with `GET /api/tags`.
 

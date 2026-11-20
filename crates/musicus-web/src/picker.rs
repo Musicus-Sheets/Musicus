@@ -19,8 +19,6 @@ pub struct Choice {
     pub detail: String,
     /// Folded label + detail + extra search text.
     haystack: String,
-    /// Folded label, for sorting.
-    sort_key: String,
 }
 
 impl Choice {
@@ -29,8 +27,7 @@ impl Choice {
         let label = label.into();
         let detail = detail.into();
         let haystack = fold(&format!("{label} {detail} {extra}"));
-        let sort_key = fold(&label);
-        Self { id, label, detail, haystack, sort_key }
+        Self { id, label, detail, haystack }
     }
 
     /// Every whitespace separated term of the (folded) query occurs in the entry.
@@ -58,8 +55,9 @@ pub fn fold(s: &str) -> String {
     out
 }
 
+/// Chips and options in the UI language's order (a-browser-sort).
 fn sorted(mut options: Vec<Choice>) -> Vec<Choice> {
-    options.sort_by(|a, b| a.sort_key.cmp(&b.sort_key).then(a.id.cmp(&b.id)));
+    options.sort_by(|a, b| crate::locale::compare(&a.label, &b.label).then(a.id.cmp(&b.id)));
     options
 }
 

@@ -25,7 +25,7 @@ function check(condition, message) {
 
 // Data entered by this script is shown as entered (a-data-as-entered), never marked.
 const DATA = ['admin', 'Trumpet', 'Brass', 'Pseudo March', 'Composer X', 'Trumpets', 'Pseudo concert', 'Trumpet 1',
-  'Pseudo', '𝄞 Musicus', 'Administrator', 'Mozilla/'];
+  'Pseudo', '𝄞 Musicus', 'Administrator', 'Mozilla/', 'Oboe', 'Ölberg', 'Posaune', 'Woodwind'];
 
 await page.goto(inviteUrl);
 const pw = page.locator('input[type=password]');
@@ -44,6 +44,9 @@ const api = (method, path, body) => page.evaluate(async ([m, p, b]) => {
 const trumpet = await api('POST', '/instruments', { name: 'Trumpet', family: 'Brass' });
 const score = await api('POST', '/scores', { title: 'Pseudo March', composer: 'Composer X', tags: [] });
 const part = await api('POST', `/scores/${score.id}/parts`, { instrument_ids: [trumpet.id], voices: ['1'], transposition: 'Bb' });
+await api('POST', `/scores/${score.id}/parts`, { instrument_ids: [trumpet.id], voices: ['10'], transposition: 'Bb' });
+await api('POST', `/scores/${score.id}/parts`, { instrument_ids: [trumpet.id], voices: ['2'], transposition: 'Bb' });
+for (const name of ['Posaune', 'Ölberg', 'Oboe']) await api('POST', '/instruments', { name, family: 'Woodwind' });
 await api('POST', '/groups', { name: 'Trumpets' });
 await api('POST', '/programmes', { title: 'Pseudo concert', date: '2026-12-24' });
 
@@ -95,6 +98,18 @@ for (const [path, name] of pages) {
   const over = await overflowing();
   if (over.length) console.log(`note - ${name}: text wider than its box with +30 % length: ${over.join(' | ')}`);
 }
+// Sorting in the browser (R-I18N-008): umlauts by the language's rules, numbers by value.
+await page.goto(`${base}/instruments`);
+await page.waitForLoadState('networkidle');
+const woodwinds = await page.evaluate(() => [...document.querySelectorAll('li, tr')].map((e) => e.textContent)
+  .flatMap((t) => ['Oboe', 'Ölberg', 'Posaune'].filter((n) => t.includes(n) && !['Oboe', 'Ölberg', 'Posaune'].some((m) => m !== n && t.includes(m)))));
+check(JSON.stringify(woodwinds) === '["Oboe","Ölberg","Posaune"]', `instruments sorted with the collator (${woodwinds})`);
+await page.goto(`${base}/`);
+await page.waitForLoadState('networkidle');
+const tiles = await page.locator('.part-label').allInnerTexts();
+const voices = tiles.map((t) => t.match(/(\d+)\s*$/)?.[1]).filter(Boolean);
+check(JSON.stringify(voices) === '["1","2","10"]', `parts sorted by name, numbers by value (${tiles.join(' | ')})`);
+
 // The groups page with a group selected, and the picker open.
 await page.goto(`${base}/groups`);
 await page.locator('.group-list button, .rows button, li button').first().click().catch(() => {});

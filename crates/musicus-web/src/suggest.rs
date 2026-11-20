@@ -41,8 +41,8 @@ pub fn suggestions(all: &[String], query: &str, exclude: &[String]) -> Vec<Strin
             }
         })
         .collect();
-    // Stable: within a rank, the order of `all` (sorted by the server).
-    ranked.sort_by_key(|(rank, _)| *rank);
+    // Within a rank in the UI language's order (a-browser-sort).
+    ranked.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| crate::locale::compare(a.1, b.1)));
     ranked.into_iter().take(MAX).map(|(_, v)| v.clone()).collect()
 }
 

@@ -7,7 +7,7 @@ use crate::{
     ui::{ErrorBox, Loading, can_manage},
 };
 use dioxus::prelude::*;
-use musicus_api::{Instrument, Part, Score, naming};
+use musicus_api::{Instrument, Part, Score};
 use musicus_i18n::t;
 use std::collections::HashMap;
 
@@ -98,18 +98,24 @@ pub fn Library() -> Element {
     }
 }
 
-/// The list as the server sent it (by title), or by archive number in
-/// natural order ("28" before "304"), pieces without a number last.
+/// By title, or by archive number ("28" before "304", pieces without a
+/// number last, then by title), with the UI language's collation
+/// (a-browser-sort; the server's order is only a stable default).
 fn sorted(list: &[Score], by_number: bool) -> Vec<Score> {
+    use crate::locale::compare;
     let mut list = list.to_vec();
-    if by_number {
-        list.sort_by(|a, b| match (&a.archive_number, &b.archive_number) {
-            (Some(x), Some(y)) => naming::natural_cmp(x, y).then_with(|| naming::natural_cmp(&a.title, &b.title)),
+    list.sort_by(|a, b| {
+        let by_title = || compare(&a.title, &b.title);
+        if !by_number {
+            return by_title();
+        }
+        match (&a.archive_number, &b.archive_number) {
+            (Some(x), Some(y)) => compare(x, y).then_with(by_title),
             (Some(_), None) => std::cmp::Ordering::Less,
             (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => naming::natural_cmp(&a.title, &b.title),
-        });
-    }
+            (None, None) => by_title(),
+        }
+    });
     list
 }
 

@@ -75,7 +75,7 @@ pub fn Users() -> Element {
                         table { class: "table",
                             thead { tr { th { {t::admin_users_col_name()} } th { {t::login_username()} } th { {t::admin_users_col_role()} } th { {t::admin_users_col_status()} } th {} } }
                             tbody {
-                                for u in list.iter().cloned() {
+                                for u in sorted_users(list) {
                                     UserRow { key: "{u.id}", user: u,
                                         onchange: move |_| users.restart(),
                                         oninvite: move |l: (String, String)| link.set(Some(l)),
@@ -141,4 +141,11 @@ fn UserRow(
             }
         }
     }
+}
+
+/// Users by display name in the UI language's order (a-browser-sort).
+fn sorted_users(list: &[UserSummary]) -> Vec<UserSummary> {
+    let mut v = list.to_vec();
+    crate::locale::sort_by_text(&mut v, |u| &u.display_name);
+    v
 }

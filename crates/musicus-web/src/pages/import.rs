@@ -312,6 +312,27 @@ pub fn part_label(part: &musicus_api::import::review::ReviewPart) -> String {
     }
 }
 
+/// Order of review pieces (a-browser-sort): by archive number, pieces
+/// without one after those with one, then by title, in the UI language's
+/// collation (numbers by value).
+pub fn cmp_pieces(a: &ReviewPiece, b: &ReviewPiece) -> std::cmp::Ordering {
+    use crate::locale::compare;
+    let text = |f: &musicus_api::import::review::Field| f.value.clone().unwrap_or_default();
+    let (na, nb) = (text(&a.number), text(&b.number));
+    na.is_empty()
+        .cmp(&nb.is_empty())
+        .then_with(|| compare(&na, &nb))
+        .then_with(|| compare(&text(&a.title), &text(&b.title)))
+        .then(a.id.cmp(&b.id))
+}
+
+/// Names joined with ", " in the UI language's order.
+pub fn sorted_join(names: &[String]) -> String {
+    let mut v = names.to_vec();
+    crate::locale::sort_by_text(&mut v, |s| s);
+    v.join(", ")
+}
+
 /// Name of a structure preset in the UI language (the shared crate's English
 /// name for an unknown id).
 pub fn preset_name(p: &musicus_api::import::pattern::Preset) -> String {
@@ -321,6 +342,13 @@ pub fn preset_name(p: &musicus_api::import::pattern::Preset) -> String {
         "flat-title" => t::import_preset_flat_title(),
         _ => p.name.to_owned(),
     }
+}
+
+/// The first 12 pieces of the preview in display order.
+fn preview_pieces(pieces: &[ReviewPiece]) -> Vec<ReviewPiece> {
+    let mut v: Vec<&ReviewPiece> = pieces.iter().collect();
+    v.sort_by(|a, b| cmp_pieces(a, b));
+    v.into_iter().take(12).cloned().collect()
 }
 
 pub fn level_class(level: Level) -> &'static str {
@@ -442,7 +470,7 @@ fn NewImport() -> Element {
                             span { class: "count lvl-red", {t::import_count_unmatched(shown.unmatched.len())} }
                         }
                     }
-                    PreviewTable { pieces: shown.pieces.iter().take(12).cloned().collect::<Vec<_>>(), more: shown.pieces.len().saturating_sub(12) }
+                    PreviewTable { pieces: preview_pieces(&shown.pieces), more: shown.pieces.len().saturating_sub(12) }
                     if !shown.unmatched.is_empty() {
                         details { class: "small",
                             summary { {t::import_unmatched_files()} }
