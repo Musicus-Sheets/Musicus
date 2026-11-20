@@ -10,6 +10,7 @@ use crate::{
 use dioxus::prelude::*;
 use gloo_net::http::Method;
 use musicus_api::{Group, GroupInput, IdList, Instrument, Score, UserSummary};
+use musicus_i18n::t;
 
 #[component]
 pub fn Groups() -> Element {
@@ -47,34 +48,33 @@ pub fn Groups() -> Element {
     let current = selected().and_then(|id| list.iter().find(|g| g.id == id).cloned());
     rsx! {
         main {
-            div { class: "page-head", h1 { "Groups" } }
+            div { class: "page-head", h1 { {t::admin_groups_title()} } }
             p { class: "muted",
-                "Groups bundle musicians who read the same music. Members of a group can read every part "
-                "tagged with a granted instrument, plus every part of a granted score."
-                if !is_admin { " Only admins can create groups and change their members." }
+                {t::admin_groups_intro()}
+                if !is_admin { {t::admin_groups_intro_not_admin()} }
             }
             if let Some(e) = error() { ErrorBox { message: e } }
             div { class: "columns narrow-left",
                 section { class: "card",
-                    h2 { "Groups" }
+                    h2 { {t::admin_groups_title()} }
                     ul { class: "plain selectable",
                         for g in list.iter() {
                             li { key: "{g.id}", class: if selected() == Some(g.id) { "row on" } else { "row" },
                                 onclick: { let id = g.id; move |_| selected.set(Some(id)) },
                                 span { "{g.name}" }
-                                span { class: "muted small", "{g.member_ids.len()} members" }
+                                span { class: "muted small", {t::admin_groups_member_count(g.member_ids.len())} }
                             }
                         }
                     }
                     if is_admin {
                         form { class: "inline", onsubmit: create,
-                            input { placeholder: "New group, e.g. Trumpets", required: true, value: "{name}", oninput: move |e| name.set(e.value()) }
-                            button { r#type: "submit", "Add" }
+                            input { placeholder: t::admin_groups_new_placeholder(), required: true, value: "{name}", oninput: move |e| name.set(e.value()) }
+                            button { r#type: "submit", {t::admin_groups_add()} }
                         }
                     }
                 }
                 match current {
-                    None => rsx! { section { class: "card muted", "Select a group to edit its members and access." } },
+                    None => rsx! { section { class: "card muted", {t::admin_groups_select()} } },
                     Some(g) => rsx! {
                         GroupEditor {
                             key: "{g.id}",
@@ -106,7 +106,7 @@ fn GroupEditor(
     let id = group.id;
     let mut message = use_signal(|| None::<Result<String, String>>);
     let delete = move |_| async move {
-        if confirm("Delete this group? Its members lose the access it granted.") {
+        if confirm(&t::admin_groups_delete_confirm()) {
             match api::call(Method::DELETE, &format!("/api/groups/{id}")).await {
                 Ok(()) => ondelete.call(()),
                 Err(e) => message.set(Some(Err(e.message))),
@@ -134,46 +134,45 @@ fn GroupEditor(
         section { class: "card",
             h2 { "{group.name}" }
             p { class: "muted small",
-                "Members can read every part tagged with a granted instrument, plus every part of a granted score. "
-                "Changes are saved right away."
+                {t::admin_groups_editor_intro()}
             }
             if is_admin {
-                h3 { "Members" }
+                h3 { {t::admin_groups_members()} }
                 SavedList {
                     path: format!("/api/groups/{id}/members"),
                     initial: group.member_ids.clone(),
                     options: people,
-                    add_label: "+ Add members",
-                    empty: "No members yet.",
-                    placeholder: "Search name or username…",
+                    add_label: t::admin_groups_add_members(),
+                    empty: t::admin_groups_no_members(),
+                    placeholder: t::admin_groups_search_members(),
                     onchange,
                 }
             }
-            h3 { "Instruments" }
+            h3 { {t::admin_groups_instruments()} }
             SavedList {
                 path: format!("/api/groups/{id}/instrument-grants"),
                 initial: group.instrument_ids.clone(),
                 options: instrument_choices,
-                add_label: "+ Add instruments",
-                empty: "No instruments granted yet.",
-                placeholder: "Search instrument or family…",
+                add_label: t::admin_groups_add_instruments(),
+                empty: t::admin_groups_no_instruments(),
+                placeholder: t::common_search_instruments(),
                 onchange,
             }
-            h3 { "Whole scores (e.g. for the conductor)" }
+            h3 { {t::admin_groups_scores()} }
             SavedList {
                 path: format!("/api/groups/{id}/score-grants"),
                 initial: group.score_ids.clone(),
                 options: score_choices,
-                add_label: "+ Add scores",
-                empty: "No whole scores granted.",
-                placeholder: "Search title or composer…",
+                add_label: t::admin_groups_add_scores(),
+                empty: t::admin_groups_no_scores(),
+                placeholder: t::common_search_pieces(),
                 onchange,
             }
             if is_admin {
                 div { class: "actions",
                     Status { status: message() }
                     span { class: "grow" }
-                    button { class: "danger", onclick: delete, "Delete group" }
+                    button { class: "danger", onclick: delete, {t::admin_groups_delete()} }
                 }
             } else if message().is_some() {
                 Status { status: message() }
@@ -204,13 +203,13 @@ fn SavedList(
         ids.set(next.clone());
         busy.set(true);
         generation.set(generation() + 1);
-        status.set(Some(Ok("Saving…".into())));
+        status.set(Some(Ok(t::common_saving())));
         spawn(async move {
             let result = api::put::<_, Group>(&path(), &IdList { ids: next }).await;
             busy.set(false);
             match result {
                 Ok(_) => {
-                    status.set(Some(Ok("Saved".into())));
+                    status.set(Some(Ok(t::common_saved())));
                     onchange.call(());
                     let mine = generation() + 1;
                     generation.set(mine);

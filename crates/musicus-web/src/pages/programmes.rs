@@ -9,6 +9,7 @@ use crate::{
 };
 use dioxus::prelude::*;
 use musicus_api::{Instrument, Programme, ProgrammeSummary};
+use musicus_i18n::t;
 use std::collections::HashMap;
 
 #[component]
@@ -18,11 +19,11 @@ pub fn Programmes() -> Element {
     rsx! {
         main {
             div { class: "page-head",
-                h1 { "Programmes" }
+                h1 { {t::programmes_title()} }
                 if manage {
                     Link { class: "button primary add", to: Route::NewProgramme {},
                         span { class: "plus", "aria-hidden": "true", "+" }
-                        "New programme"
+                        {t::programmes_new()}
                     }
                 }
             }
@@ -31,7 +32,7 @@ pub fn Programmes() -> Element {
                 Some(Err(e)) => rsx! { ErrorBox { message: e.message.clone() } },
                 Some(Ok(items)) if items.is_empty() => rsx! {
                     p { class: "muted",
-                        if manage { "No programmes yet. Plan the first concert with “+ New programme”." } else { "No programmes yet." }
+                        if manage { {t::programmes_none_manage()} } else { {t::programmes_none()} }
                     }
                 },
                 Some(Ok(items)) => rsx! {
@@ -42,7 +43,7 @@ pub fn Programmes() -> Element {
                                     strong { "{p.title}" }
                                     span { class: "muted",
                                         if let Some(d) = &p.date { "{format_date(d)} · " }
-                                        "{p.item_count} pieces"
+                                        {t::programmes_piece_count(p.item_count)}
                                     }
                                 }
                             }
@@ -128,26 +129,26 @@ pub fn ProgrammeView(id: i64) -> Element {
                         div { class: "head-tools",
                             div { class: "prefetch",
                                 if total() == 0 {
-                                    span { class: "muted", "No sheets to download." }
+                                    span { class: "muted", {t::programmes_no_sheets()} }
                                 } else if loaded() == total() {
-                                    span { class: "ok", "✓ All {total()} sheets ready offline in this tab" }
+                                    span { class: "ok", {t::programmes_sheets_ready(total())} }
                                 } else {
                                     progress { max: "{total()}", value: "{loaded()}" }
-                                    span { class: "muted small", " Downloading {loaded()} / {total()}" }
+                                    span { class: "muted small", {t::programmes_downloading(loaded(), total())} }
                                 }
                                 if failed() > 0 {
-                                    span { class: "error-text", " {failed()} failed" }
+                                    span { class: "error-text", {t::programmes_failed(failed())} }
                                 }
                             }
                             if manage {
-                                Link { class: "button edit", to: Route::EditProgramme { id }, span { class: "glyph", "aria-hidden": "true", "✎" } "Edit" }
+                                Link { class: "button edit", to: Route::EditProgramme { id }, span { class: "glyph", "aria-hidden": "true", "✎" } {t::common_edit()} }
                             }
                         }
                     }
                     if let Some(n) = &p.notes { p { class: "notes", "{n}" } }
                     if p.items.is_empty() {
                         p { class: "muted",
-                            if manage { "No pieces yet. Add them with “Edit”." } else { "No pieces yet." }
+                            if manage { {t::programmes_no_pieces_manage()} } else { {t::programmes_no_pieces()} }
                         }
                     }
                     div { class: "score-list",

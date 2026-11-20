@@ -11,6 +11,7 @@ use crate::{
 use dioxus::prelude::*;
 use gloo_net::http::Method;
 use musicus_api::{FileVersion, Instrument, Part, PartInput, Score, ScoreInput, naming};
+use musicus_i18n::t;
 
 /// Score details as typed into the form.
 #[derive(Clone, PartialEq, Default)]
@@ -68,27 +69,27 @@ pub fn ScoreFields(draft: Signal<ScoreDraft>) -> Element {
     };
     rsx! {
         div { class: "grid",
-            label { "Title"
-                input { required: true, value: "{d.title}", placeholder: "e.g. Florentiner Marsch",
+            label { {t::library_field_title()}
+                input { required: true, value: "{d.title}", placeholder: t::library_title_placeholder(),
                     oninput: move |e| draft.write().title = e.value() } }
-            label { "Subtitle"
+            label { {t::library_field_subtitle()}
                 input { value: "{d.subtitle}", oninput: move |e| draft.write().subtitle = e.value() } }
-            label { "Composer"
+            label { {t::library_field_composer()}
                 input { value: "{d.composer}", oninput: move |e| draft.write().composer = e.value() } }
-            label { "Arranger"
+            label { {t::library_field_arranger()}
                 input { value: "{d.arranger}", oninput: move |e| draft.write().arranger = e.value() } }
-            label { "Genre"
-                input { placeholder: "March, polka, concert…", value: "{d.genre}",
+            label { {t::library_field_genre()}
+                input { placeholder: t::library_genre_placeholder(), value: "{d.genre}",
                     oninput: move |e| draft.write().genre = e.value() } }
-            label { "Archive number"
+            label { {t::library_archive_number()}
                 input { placeholder: "e.g. 0304", value: "{d.archive_number}", maxlength: 40,
                     oninput: move |e| draft.write().archive_number = e.value() } }
             div { class: "field wide",
-                span { id: "{tags_label}", class: "field-label", "Tags" }
-                TagInput { tags: draft.map_mut(|d| &d.tags, |d| &mut d.tags), labelledby: tags_label.clone(), placeholder: "e.g. Christmas, Encore", suggestions: known }
-                span { class: "muted small", "Press comma or Enter after each tag." }
+                span { id: "{tags_label}", class: "field-label", {t::library_field_tags()} }
+                TagInput { tags: draft.map_mut(|d| &d.tags, |d| &mut d.tags), labelledby: tags_label.clone(), placeholder: t::library_tags_placeholder(), suggestions: known }
+                span { class: "muted small", {t::library_tags_hint()} }
             }
-            label { class: "wide", "Notes"
+            label { class: "wide", {t::library_field_notes()}
                 textarea { rows: 3, value: "{d.notes}", oninput: move |e| draft.write().notes = e.value() } }
         }
     }
@@ -116,8 +117,8 @@ pub fn InstrumentPicker(
     if instruments.is_empty() {
         return rsx! {
             p { class: "muted small",
-                "No instruments yet. "
-                Link { to: Route::Instruments {}, "Add them on the Instruments page." }
+                {t::library_no_instruments()}
+                Link { to: Route::Instruments {}, {t::library_no_instruments_link()} }
             }
         };
     }
@@ -129,9 +130,9 @@ pub fn InstrumentPicker(
         AssignList {
             options: instrument_choices(&instruments),
             assigned: selected(),
-            add_label: "+ Add instruments",
-            empty: "No instruments yet: nobody gets this part through an instrument grant.",
-            placeholder: "Search instrument or family…",
+            add_label: t::admin_groups_add_instruments(),
+            empty: t::library_part_no_instruments(),
+            placeholder: t::common_search_instruments(),
             busy,
             status,
             onadd: move |added: Vec<i64>| {
@@ -171,27 +172,30 @@ pub fn PartFields(
     let voices_label = use_hook(|| format!("voices-label-{}", crate::picker::unique_id()));
     // Nothing chosen yet: an example instead of "Unnamed part".
     let none: &[&str] = &[];
-    let placeholder =
-        if derived == crate::names::compose(None, &[], None, none) { "e.g. Solo Cornet".to_owned() } else { derived };
+    let placeholder = if derived == crate::names::compose(None, &[], None, none) {
+        t::library_custom_name_placeholder()
+    } else {
+        derived
+    };
     rsx! {
         div { class: "part-fields",
-            label { class: "key", "Key"
+            label { class: "key", {t::library_field_key()}
                 select { value: "{current}", onchange: move |e| key.set(e.value()),
-                    option { value: "", selected: current.is_empty(), "— (concert pitch)" }
+                    option { value: "", selected: current.is_empty(), {t::library_key_none()} }
                     for k in naming::KEYS {
                         option { key: "{k.code}", value: "{k.code}", selected: current == k.code, {crate::names::key_option(k.code)} }
                     }
                     if let Some(l) = legacy {
-                        option { value: "{l}", selected: current == l, "Other: {l}" }
+                        option { value: "{l}", selected: current == l, {t::library_key_other(&l)} }
                     }
                 }
             }
             div { class: "field voices",
-                span { id: "{voices_label}", class: "field-label", "Voices" }
-                TagInput { tags: voices, labelledby: voices_label.clone(), placeholder: "e.g. 1, 2 or Solo", noun: "voice",
+                span { id: "{voices_label}", class: "field-label", {t::library_field_voices()} }
+                TagInput { tags: voices, labelledby: voices_label.clone(), placeholder: t::library_voices_placeholder(), entries: crate::tag_input::Entries::Voices,
                     separators: ",&", maxlength: naming::MAX_VOICE_CHARS as u32 }
             }
-            label { class: "grow", "Custom name (optional)"
+            label { class: "grow", {t::library_field_custom_name()}
                 input { placeholder: "{placeholder}", value: "{label}", maxlength: 120, oninput: move |e| label.set(e.value()) } }
         }
     }
@@ -203,13 +207,13 @@ pub async fn upload_pdf(part_id: i64, file: dioxus::html::FileData) -> Result<Pa
         Ok(bytes) => api::upload::<Part>(&format!("/api/parts/{part_id}/file"), &bytes, "application/pdf")
             .await
             .map_err(|e| e.message),
-        Err(e) => Err(format!("Could not read the file: {e}")),
+        Err(e) => Err(t::library_file_unreadable(e.to_string())),
     }
 }
 
 /// Short description of a file version: "Version 2 · 1.2 MB · 4 pages".
 pub fn describe_file(f: &FileVersion) -> String {
-    let mut s = format!("Version {} · {}", f.version, format_size(f.size_bytes));
+    let mut s = t::library_file_version(f.version, format_size(f.size_bytes));
     if let Some(n) = f.page_count {
         s.push_str(&format!(" · {}", pages(n)));
     }
@@ -267,7 +271,7 @@ pub fn PartEditor(
         match api::put::<_, Part>(&format!("/api/parts/{id}"), &input).await {
             Ok(_) => {
                 saved.set(input);
-                status.set(Some(Ok("Saved".into())));
+                status.set(Some(Ok(t::common_saved())));
                 onchange.call(());
             }
             Err(e) => status.set(Some(Err(e.message))),
@@ -278,7 +282,7 @@ pub fn PartEditor(
         selected.set(next.clone());
         instrument_busy.set(true);
         generation.set(generation() + 1);
-        instrument_status.set(Some(Ok("Saving…".into())));
+        instrument_status.set(Some(Ok(t::common_saving())));
         spawn(async move {
             let input = PartInput { instrument_ids: next, ..saved() };
             let result = api::put::<_, Part>(&format!("/api/parts/{id}"), &input).await;
@@ -286,7 +290,7 @@ pub fn PartEditor(
             match result {
                 Ok(_) => {
                     saved.set(input);
-                    instrument_status.set(Some(Ok("Saved".into())));
+                    instrument_status.set(Some(Ok(t::common_saved())));
                     onchange.call(());
                     let mine = generation() + 1;
                     generation.set(mine);
@@ -304,7 +308,7 @@ pub fn PartEditor(
         });
     };
     let delete = move |_| async move {
-        if !confirm("Delete this part? Everyone's annotations on it are deleted too.") {
+        if !confirm(&t::library_delete_part_confirm()) {
             return;
         }
         match api::call(Method::DELETE, &format!("/api/parts/{id}")).await {
@@ -315,13 +319,13 @@ pub fn PartEditor(
     let upload = move |e: FormEvent| async move {
         let Some(file) = e.files().into_iter().next() else { return };
         uploading.set(true);
-        status.set(Some(Ok(format!("Uploading {}…", file.name()))));
+        status.set(Some(Ok(t::library_uploading_file(file.name()))));
         let result = upload_pdf(id, file).await;
         uploading.set(false);
         match result {
             Ok(p) => {
                 let v = p.file.map(|f| f.version).unwrap_or_default();
-                status.set(Some(Ok(format!("Uploaded as version {v}"))));
+                status.set(Some(Ok(t::library_uploaded_version(v))));
                 versions.restart();
                 onchange.call(());
             }
@@ -337,35 +341,35 @@ pub fn PartEditor(
     rsx! {
         form { class: "part-editor", onsubmit: save, oninput: move |_| status.set(None),
             h3 { class: "part-title", "{name}" }
-            div { class: "field-label", "Instruments (saved right away)" }
+            div { class: "field-label", {t::library_instruments_saved()} }
             InstrumentPicker { instruments: instruments.clone(), selected, onsave: save_instruments,
                 busy: instrument_busy(), status: instrument_status() }
             PartFields { label, voices, transposition, derived, legacy }
             div { class: "part-file",
                 match &part.file {
                     Some(f) => rsx! {
-                        span { class: "file-badge", "PDF" }
-                        span { class: "muted small", "{describe_file(f)} · uploaded {format_time(f.uploaded_at)}" }
-                        Link { class: "button", to: Route::Viewer { id }, "Open" }
-                        Link { class: "button", to: Route::LayoutEditor { id }, "Edit systems" }
+                        span { class: "file-badge", "PDF" } // i18n-ok: file format name
+                        span { class: "muted small", {t::library_file_uploaded(describe_file(f), format_time(f.uploaded_at))} }
+                        Link { class: "button", to: Route::Viewer { id }, {t::library_open()} }
+                        Link { class: "button", to: Route::LayoutEditor { id }, {t::library_edit_systems()} }
                     },
-                    None => rsx! { span { class: "warn-text small", "No PDF yet" } },
+                    None => rsx! { span { class: "warn-text small", {t::library_no_pdf()} } },
                 }
                 label { class: "button", class: if uploading() { "disabled" },
-                    if uploading() { "Uploading…" } else if part.file.is_some() { "Replace PDF…" } else { "Upload PDF…" }
+                    if uploading() { {t::library_uploading()} } else if part.file.is_some() { {t::library_replace_pdf()} } else { {t::library_upload_pdf()} }
                     input { r#type: "file", accept: "application/pdf,.pdf", hidden: true, disabled: uploading(), onchange: upload }
                 }
             }
             if history.len() > 1 || (versions_open && !history.is_empty()) {
                 details { class: "versions", open: versions_open,
-                    summary { "All versions ({history.len()})" }
+                    summary { {t::library_all_versions(history.len())} }
                     ul { class: "plain",
                         for v in history.iter() {
                             li { key: "{v.version}", class: "row",
                                 span {
-                                    strong { "Version {v.version}" }
+                                    strong { {t::library_version(v.version)} }
                                     if part.file.as_ref().is_some_and(|f| f.version == v.version) {
-                                        span { class: "tag genre", "current" }
+                                        span { class: "tag genre", {t::library_version_current()} }
                                     }
                                 }
                                 span { class: "muted small", "{format_size(v.size_bytes)}"
@@ -376,15 +380,15 @@ pub fn PartEditor(
                         }
                     }
                     p { class: "muted small",
-                        "Old versions stay stored, so markings made on them are kept and can be moved to the current version."
+                        {t::library_versions_hint()}
                     }
                 }
             }
             div { class: "actions",
-                button { r#type: "submit", "Save part" }
+                button { r#type: "submit", {t::library_save_part()} }
                 Status { status: status() }
                 span { class: "grow" }
-                button { class: "danger", r#type: "button", onclick: delete, "Delete part" }
+                button { class: "danger", r#type: "button", onclick: delete, {t::library_delete_part()} }
             }
         }
     }
@@ -463,27 +467,27 @@ pub fn NewPartForm(score_id: i64, instruments: Vec<Instrument>, onstate: EventHa
     let derived = preview_name(&instruments, &selected.read(), "", &transposition.read(), &voices.read());
     rsx! {
         form { class: "new-part", onsubmit: add,
-            div { class: "field-label", "Instruments" }
+            div { class: "field-label", {t::admin_instruments_title()} }
             InstrumentPicker { instruments: instruments.clone(), selected }
             PartFields { label, voices, transposition, derived: derived.clone() }
             p { class: "part-name-preview", "aria-live": "polite",
-                span { class: "muted", "Shown as: " }
+                span { class: "muted", {t::library_shown_as()} }
                 strong { "{name}" }
             }
             div { class: "part-file",
                 label { class: "button",
-                    if file_name.is_some() { "Choose another PDF…" } else { "Choose PDF…" }
+                    if file_name.is_some() { {t::library_choose_another_pdf()} } else { {t::library_choose_pdf()} }
                     input { r#type: "file", accept: "application/pdf,.pdf", hidden: true,
                         onchange: move |e: FormEvent| file.set(e.files().into_iter().next()) }
                 }
                 match file_name {
-                    Some(n) => rsx! { span { class: "file-badge", "PDF" } span { class: "small", "{n}" } },
-                    None => rsx! { span { class: "muted small", "No file chosen. You can also upload it later." } },
+                    Some(n) => rsx! { span { class: "file-badge", "PDF" } span { class: "small", "{n}" } }, // i18n-ok: file format name
+                    None => rsx! { span { class: "muted small", {t::library_no_file_chosen()} } },
                 }
             }
             if let Some(e) = error() { div { class: "error", role: "alert", "{e}" } }
             div { class: "actions",
-                button { class: "primary", r#type: "submit", disabled: busy(), "+ Add part" }
+                button { class: "primary", r#type: "submit", disabled: busy(), {t::library_add_part()} }
             }
         }
     }
@@ -508,17 +512,17 @@ pub fn AddedParts(rows: Vec<(Part, Upload)>, names: std::collections::HashMap<i6
                     }
                     match state {
                         Upload::NoFile => rsx! {
-                            span { class: "warn-text small", "No PDF yet" }
-                            Link { class: "button", to: Route::EditPart { id: part.id }, "Edit" }
+                            span { class: "warn-text small", {t::library_no_pdf()} }
+                            Link { class: "button", to: Route::EditPart { id: part.id }, {t::common_edit()} }
                         },
                         Upload::Running(name) => rsx! {
                             progress { class: "uploading" }
-                            span { class: "muted small", "Uploading {name}…" }
+                            span { class: "muted small", {t::library_uploading_file(name)} }
                         },
                         Upload::Done(f) => rsx! { span { class: "ok small", "✓ {describe_file(f)}" } },
                         Upload::Failed(e) => rsx! {
-                            span { class: "error-text small", "Upload failed: {e}" }
-                            Link { class: "button", to: Route::EditPart { id: part.id }, "Edit" }
+                            span { class: "error-text small", {t::library_upload_failed(e)} }
+                            Link { class: "button", to: Route::EditPart { id: part.id }, {t::common_edit()} }
                         },
                     }
                 }

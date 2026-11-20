@@ -1,7 +1,7 @@
 //! Tag entry as chips (a-tag-input): every finished tag is an atomic chip
 //! styled like the library's tags, with a remove button; one text input
 //! sits before, between or after the chips and stands for the caret. The
-//! same component edits the voices of a part (a-part-voices): `noun` names
+//! same component edits the voices of a part (a-part-voices): `entries: Entries::Voices` names
 //! the entries ("Remove voice 2") and `separators` adds "&" as separator.
 //!
 //! - A comma (or another of `separators`), Enter (never submits the form), Tab and leaving the field
@@ -22,6 +22,7 @@ use crate::picker::unique_id;
 use crate::suggest::{self, SuggestList};
 use dioxus::html::Key;
 use dioxus::prelude::*;
+use musicus_i18n::t;
 use wasm_bindgen::JsCast;
 
 /// Splits text at any of the separator characters into trimmed, non-empty tags.
@@ -39,7 +40,7 @@ fn caret(id: &str) -> Option<(u32, u32, u32)> {
 /// Focuses the input once the current render is on screen (it may have
 /// moved to another place between the chips).
 fn refocus(id: &str) {
-    document::eval(&format!("requestAnimationFrame(() => document.getElementById('{id}')?.focus())"));
+    document::eval(&format!("requestAnimationFrame(() => document.getElementById('{id}')?.focus())")); // i18n-ok: JavaScript
 }
 
 /// Position of the input among the chips; `END` keeps it after the last
@@ -55,9 +56,9 @@ pub fn TagInput(
     /// Known tags offered while typing (a-tag-suggest).
     #[props(default)]
     suggestions: Vec<String>,
-    /// What one entry is called in the remove buttons ("Remove tag X").
-    #[props(default = "tag".to_string())]
-    noun: String,
+    /// What the entries are, for the remove buttons ("Remove tag X").
+    #[props(default)]
+    entries: Entries,
     /// Characters that finish an entry like a comma does.
     #[props(default = ",".to_string())]
     separators: String,
@@ -142,16 +143,14 @@ pub fn TagInput(
     let flashes = move |t: &str| flashing.as_deref() == Some(t.to_lowercase().as_str());
     // Chips before and after the input are two keyed lists around a fixed
     // input element: adding or moving chips never moves the focused input.
-    let noun_chips = noun.clone();
     let chip = move |t: &String| {
         let (t_click, t_remove) = (t.clone(), t.clone());
-        let noun = noun_chips.clone();
         let (id_click, id_remove) = (id_for_chips.clone(), id_for_chips.clone());
         rsx! {
             Chip {
                 key: "{t.to_lowercase()}",
                 text: t.clone(),
-                noun,
+                remove_label: entries.remove_label(t),
                 flash: flashes(t),
                 onselect: move |_| {
                     commit();
@@ -299,8 +298,31 @@ pub fn TagInput(
 }
 
 /// One finished tag: not editable; a click selects the place after it.
+/// What a [`TagInput`] holds; names the remove button of a chip.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Entries {
+    #[default]
+    Tags,
+    Voices,
+}
+
+impl Entries {
+    fn remove_label(self, text: &str) -> String {
+        match self {
+            Entries::Tags => t::common_tag_remove(text),
+            Entries::Voices => t::common_voice_remove(text),
+        }
+    }
+}
+
 #[component]
-fn Chip(text: String, noun: String, flash: bool, onselect: EventHandler<()>, onremove: EventHandler<()>) -> Element {
+fn Chip(
+    text: String,
+    remove_label: String,
+    flash: bool,
+    onselect: EventHandler<()>,
+    onremove: EventHandler<()>,
+) -> Element {
     rsx! {
         span {
             class: if flash { "tag tag-chip flash" } else { "tag tag-chip" },
@@ -312,8 +334,8 @@ fn Chip(text: String, noun: String, flash: bool, onselect: EventHandler<()>, onr
             button {
                 r#type: "button",
                 class: "tag-remove",
-                title: "Remove {noun} {text}",
-                "aria-label": "Remove {noun} {text}",
+                title: "{remove_label}",
+                "aria-label": "{remove_label}",
                 onclick: move |e| {
                     e.stop_propagation();
                     onremove.call(());

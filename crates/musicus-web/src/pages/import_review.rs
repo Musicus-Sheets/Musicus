@@ -29,6 +29,7 @@ use musicus_api::{
     },
     naming,
 };
+use musicus_i18n::t;
 use std::collections::{BTreeMap, HashSet};
 
 /// Pieces per page of the review.
@@ -53,16 +54,16 @@ impl Filter {
     }
 }
 
-fn source_text(source: Option<Source>) -> &'static str {
+fn source_text(source: Option<Source>) -> String {
     match source {
-        Some(Source::Pattern) => "from the file name",
-        Some(Source::Dictionary) => "from the instrument dictionary",
-        Some(Source::Alias) => "from a stored alias",
-        Some(Source::Library) => "from the library",
-        Some(Source::Librarian) => "entered by you",
-        Some(Source::Inventory) => "from the inventory list",
-        Some(Source::Ocr) => "recognised on the first page",
-        None => "",
+        Some(Source::Pattern) => t::import_source_pattern(),
+        Some(Source::Dictionary) => t::import_source_dictionary(),
+        Some(Source::Alias) => t::import_source_alias(),
+        Some(Source::Library) => t::import_source_library(),
+        Some(Source::Librarian) => t::import_source_librarian(),
+        Some(Source::Inventory) => t::import_source_inventory(),
+        Some(Source::Ocr) => t::import_source_ocr(),
+        None => String::new(),
     }
 }
 
@@ -70,13 +71,13 @@ fn source_text(source: Option<Source>) -> &'static str {
 fn hint(field: &Field) -> String {
     let mut t = source_hint(field.source, field.note.as_ref());
     if !field.others.is_empty() {
-        t.push_str(&format!(" (also: {})", field.others.join(", ")));
+        t.push_str(&t::import_also(field.others.join(", ")));
     }
     t
 }
 
 fn source_hint(source: Option<Source>, note: Option<&Note>) -> String {
-    let mut t = source_text(source).to_owned();
+    let mut t = source_text(source);
     if let Some(n) = note {
         if !t.is_empty() {
             t.push_str(" — ");
@@ -178,13 +179,9 @@ pub fn ImportReview(id: Id) -> Element {
         busy.set(false);
         match result {
             Ok(done) => {
-                let mut text = format!(
-                    "{} piece{} imported.",
-                    done.committed.len(),
-                    if done.committed.len() == 1 { "" } else { "s" }
-                );
+                let mut text = t::import_committed(done.committed.len());
                 for e in &done.errors {
-                    text.push_str(&format!(" Not imported: {}.", code_text(&e.code)));
+                    text.push_str(&t::import_not_committed(code_text(&e.code)));
                 }
                 message.set(Some(text));
                 reload += 1;
@@ -193,13 +190,11 @@ pub fn ImportReview(id: Id) -> Element {
         }
     };
     let undo = move |_| async move {
-        if !confirm(
-            "Undo this import? The pieces it created and the parts it added are removed from the library (the files stay on the server). This is refused if musicians already annotated them.",
-        ) {
+        if !confirm(&t::import_undo_confirm()) {
             return;
         }
         match api::post::<_, UndoneImport>(&format!("/api/import/batches/{id}/undo"), &()).await {
-            Ok(u) => message.set(Some(format!("Undone: {} pieces and {} parts removed.", u.pieces, u.parts))),
+            Ok(u) => message.set(Some(t::import_undone(u.pieces, u.parts))),
             Err(e) => message.set(Some(e.message)),
         }
         reload += 1;
@@ -224,26 +219,26 @@ pub fn ImportReview(id: Id) -> Element {
 
     rsx! {
         main { class: "import-review",
-            nav { class: "crumbs", Link { to: Route::Imports {}, "‹ Import" } }
+            nav { class: "crumbs", Link { to: Route::Imports {}, {t::import_crumb()} } }
             div { class: "page-head",
                 h1 { "{r.batch.name}" }
             }
             BatchSettings { batch: r.batch.clone(), onchange: move |_| reload += 1 }
             p { class: "import-summary",
-                "{r.pieces.len()} pieces: "
-                span { class: "count lvl-green", "{green} ready" } " · "
-                span { class: "count lvl-yellow", "{yellow} to check" } " · "
-                span { class: "count lvl-red", "{red} to complete" } " · "
-                span { class: "count", "{committed} imported" }
+                {t::import_summary_pieces(r.pieces.len())}
+                span { class: "count lvl-green", {t::import_count_ready(green)} } " · "
+                span { class: "count lvl-yellow", {t::import_count_check(yellow)} } " · "
+                span { class: "count lvl-red", {t::import_count_complete(red)} } " · "
+                span { class: "count", {t::import_count_imported(committed)} }
                 br {}
                 span { class: "muted small",
-                    "{f.total} files: {f.uploaded} uploaded, {f.duplicate} skipped (already in the library or twice in the folder), {f.unmatched} do not fit the pattern"
+                    {t::import_files_summary(f.total, f.uploaded, f.duplicate, f.unmatched)}
                 }
             }
             if missing > 0 || uploading {
                 section { class: "card banner-card",
                     if missing > 0 {
-                        p { class: "warn-text", "{missing} files are not uploaded yet. Select the same folder again to continue; files already uploaded are not sent again." }
+                        p { class: "warn-text", {t::import_resume(missing)} }
                     }
                     FolderPicker { onfiles: resume, disabled: uploading }
                     ProgressView { progress: progress() }
@@ -251,28 +246,28 @@ pub fn ImportReview(id: Id) -> Element {
             }
             UnknownInstruments { pieces: r.pieces.clone(), instruments: instruments.clone(), onchange: move |_| reload += 1 }
             div { class: "review-tools",
-                select { "aria-label": "Show",
+                select { "aria-label": t::import_filter(),
                     onchange: move |e: FormEvent| {
                         filter.set(match e.value().as_str() {
-                            "attention" => Filter::Attention,
-                            "ready" => Filter::Ready,
-                            "imported" => Filter::Imported,
+                            "attention" => Filter::Attention, // i18n-ok: option value
+                            "ready" => Filter::Ready, // i18n-ok: option value
+                            "imported" => Filter::Imported, // i18n-ok: option value
                             _ => Filter::All,
                         });
                         page.set(0);
                     },
-                    option { value: "all", "All pieces" }
-                    option { value: "attention", "Needs attention" }
-                    option { value: "ready", "Ready to import" }
-                    option { value: "imported", "Imported" }
+                    option { value: "all", {t::import_filter_all()} }
+                    option { value: "attention", {t::import_filter_attention()} }
+                    option { value: "ready", {t::import_filter_ready()} }
+                    option { value: "imported", {t::import_filter_imported()} }
                 }
                 span { class: "grow" }
                 button { class: "primary", disabled: busy() || green == 0,
                     onclick: move |_| commit(None),
-                    "Import all green ({green})"
+                    {t::import_commit_green(green)}
                 }
                 if committed > 0 {
-                    button { class: "danger", disabled: busy(), onclick: undo, "Undo import" }
+                    button { class: "danger", disabled: busy(), onclick: undo, {t::import_undo()} }
                 }
             }
             if let Some(m) = message() { div { class: "banner info", role: "status", "{m}" } }
@@ -286,20 +281,20 @@ pub fn ImportReview(id: Id) -> Element {
             }
             if pages > 1 {
                 div { class: "pager",
-                    button { disabled: current == 0, onclick: move |_| page.set(current.saturating_sub(1)), "‹ Previous" }
-                    span { "Page {current + 1} of {pages}" }
-                    button { disabled: current + 1 >= pages, onclick: move |_| page.set(current + 1), "Next ›" }
+                    button { disabled: current == 0, onclick: move |_| page.set(current.saturating_sub(1)), {t::import_previous()} }
+                    span { {t::import_page(current + 1, pages)} }
+                    button { disabled: current + 1 >= pages, onclick: move |_| page.set(current + 1), {t::import_next()} }
                 }
             }
             if !r.unmatched.is_empty() {
                 details { class: "card",
-                    summary { "{r.unmatched.len()} files do not fit the pattern" }
+                    summary { {t::import_count_unmatched(r.unmatched.len())} }
                     ul { class: "small", for f in r.unmatched.iter() { li { class: "mono", key: "{f.id}", "{f.path}" } } }
                 }
             }
             if !r.duplicates.is_empty() {
                 details { class: "card",
-                    summary { "{r.duplicates.len()} files skipped (duplicates)" }
+                    summary { {t::import_duplicates(r.duplicates.len())} }
                     ul { class: "small",
                         for f in r.duplicates.iter() {
                             li { key: "{f.id}", span { class: "mono", "{f.path}" } " — " span { class: "muted", {f.problem.as_ref().map(code_text).unwrap_or_default()} } }
@@ -320,9 +315,7 @@ fn BatchSettings(batch: musicus_api::ImportBatch, onchange: EventHandler<()>) ->
     let mut language = use_signal(|| batch.language);
     let mut error = use_signal(|| None::<String>);
     let save = move |_| async move {
-        if !confirm(
-            "Read the file names again? Changes to pieces whose grouping changes are lost; changes to parts are kept.",
-        ) {
+        if !confirm(&t::import_read_again_confirm()) {
             return;
         }
         let body = UpdateImportBatch { name: None, pattern: Some(pattern()), language: Some(language()) };
@@ -335,38 +328,38 @@ fn BatchSettings(batch: musicus_api::ImportBatch, onchange: EventHandler<()>) ->
             Err(e) => error.set(Some(e.message)),
         }
     };
-    let lang = if batch.language == Language::De { "German" } else { "English" };
+    let lang = if batch.language == Language::De { t::import_language_name_de() } else { t::import_language_name_en() };
     if !editing() {
         return rsx! {
             p { class: "muted small batch-settings",
-                "Pattern " code { "{batch.pattern}" } " · naming language {lang} "
-                button { class: "link", onclick: move |_| editing.set(true), "Change" }
+                {t::import_settings_pattern()} code { "{batch.pattern}" } {t::import_settings_language(lang)}
+                button { class: "link", onclick: move |_| editing.set(true), {t::import_settings_change()} }
             }
         };
     }
     rsx! {
         section { class: "card",
             div { class: "grid",
-                label { class: "wide", "Pattern"
+                label { class: "wide", {t::import_pattern()}
                     input { class: "mono", value: "{pattern}", oninput: move |e| pattern.set(e.value()) }
-                    span { class: "muted small", "Presets: "
+                    span { class: "muted small", {t::import_presets()}
                         for p in PRESETS.iter() {
-                            button { class: "link", key: "{p.id}", onclick: move |_| pattern.set(p.pattern.to_owned()), "{p.name}" }
+                            button { class: "link", key: "{p.id}", onclick: move |_| pattern.set(p.pattern.to_owned()), {crate::pages::import::preset_name(p)} }
                             " "
                         }
                     }
                 }
-                label { "Naming language"
+                label { {t::import_naming_language()}
                     select { onchange: move |e: FormEvent| language.set(Language::parse(&e.value()).unwrap_or_default()),
-                        option { value: "de", selected: language() == Language::De, "German: B = B♭, Es = E♭, H = B♮" }
-                        option { value: "en", selected: language() == Language::En, "English: B is not read as a key" }
+                        option { value: "de", selected: language() == Language::De, {t::import_language_de()} }
+                        option { value: "en", selected: language() == Language::En, {t::import_language_en()} }
                     }
                 }
             }
             if let Some(e) = error() { ErrorBox { message: e } }
             div { class: "actions",
-                button { onclick: move |_| editing.set(false), "Cancel" }
-                button { class: "primary", onclick: save, "Read names again" }
+                button { onclick: move |_| editing.set(false), {t::common_cancel()} }
+                button { class: "primary", onclick: save, {t::import_read_again()} }
             }
         }
     }
@@ -399,10 +392,9 @@ fn UnknownInstruments(pieces: Vec<ReviewPiece>, instruments: Vec<Instrument>, on
     }
     rsx! {
         section { class: "card unknown-instruments",
-            h2 { "Instruments to confirm" }
+            h2 { {t::import_confirm_title()} }
             p { class: "muted small",
-                "Musicus never creates instruments by itself: the instrument decides who can read a part. "
-                "Choose what each word means once; Musicus remembers it for this and every later import."
+                {t::import_confirm_intro()}
             }
             if let Some(e) = error() { ErrorBox { message: e } }
             ul { class: "rows",
@@ -469,24 +461,24 @@ fn AliasRow(
         }
     };
     let exists = instruments.iter().any(|i| i.name.eq_ignore_ascii_case(&new_name));
-    let what = if level == Level::Red { "unknown" } else { "abbreviation" };
+    let unknown = if level == Level::Red { "unknown" } else { "abbreviation" }; // i18n-ok: selector
     rsx! {
         li { class: "row {level_class(level)}",
             div { class: "grow",
                 strong { "“{text}”" }
-                span { class: "muted small", " {what}, in {count} file" if count != 1 { "s" } }
-                if let Some(e) = &entry { span { class: "muted small", " — probably {e}" } }
+                span { class: "muted small", {t::import_word_count(unknown, count)} }
+                if let Some(e) = &entry { span { class: "muted small", {t::import_word_probably(e)} } }
             }
-            select { "aria-label": "Instrument for {text}",
+            select { "aria-label": t::import_word_instrument(&text),
                 onchange: move |e: FormEvent| choice.set(e.value().parse().ok()),
-                option { value: "", selected: choice().is_none(), "— choose instrument —" }
+                option { value: "", selected: choice().is_none(), {t::import_word_choose()} }
                 for i in instruments.iter() {
                     option { key: "{i.id}", value: "{i.id}", selected: choice() == Some(i.id), "{i.name}" }
                 }
             }
-            button { disabled: choice().is_none(), onclick: use_it, "Use for “{text}”" }
+            button { disabled: choice().is_none(), onclick: use_it, {t::import_word_use(&text)} }
             if !exists {
-                button { onclick: create, "Create instrument “{new_name}”" }
+                button { onclick: create, {t::import_word_create(&new_name)} }
             }
         }
     }
@@ -501,7 +493,7 @@ fn BulkEdit(review: Signal<Option<Review>>, error: Signal<Option<String>>, selec
     let count = selected.read().len();
     if count == 0 {
         return rsx! {
-            p { class: "muted small", "Tick pieces to give them the same genre, composer or arranger at once." }
+            p { class: "muted small", {t::import_bulk_hint()} }
         };
     }
     let apply = move |_| async move {
@@ -520,12 +512,12 @@ fn BulkEdit(review: Signal<Option<Review>>, error: Signal<Option<String>>, selec
     };
     rsx! {
         section { class: "card bulk-edit",
-            strong { "{count} selected" }
-            input { placeholder: "Genre", value: "{genre}", oninput: move |e| genre.set(e.value()) }
-            input { placeholder: "Composer", value: "{composer}", oninput: move |e| composer.set(e.value()) }
-            input { placeholder: "Arranger", value: "{arranger}", oninput: move |e| arranger.set(e.value()) }
-            button { class: "primary", onclick: apply, "Apply to {count} pieces" }
-            button { class: "link", onclick: move |_| selected.write().clear(), "Clear selection" }
+            strong { {t::common_picker_selected(count)} }
+            input { placeholder: t::library_field_genre(), value: "{genre}", oninput: move |e| genre.set(e.value()) }
+            input { placeholder: t::library_field_composer(), value: "{composer}", oninput: move |e| composer.set(e.value()) }
+            input { placeholder: t::library_field_arranger(), value: "{arranger}", oninput: move |e| arranger.set(e.value()) }
+            button { class: "primary", onclick: apply, {t::import_bulk_apply(count)} }
+            button { class: "link", onclick: move |_| selected.write().clear(), {t::import_bulk_clear()} }
         }
     }
 }
@@ -533,7 +525,7 @@ fn BulkEdit(review: Signal<Option<Review>>, error: Signal<Option<String>>, selec
 /// One editable value of a piece.
 #[component]
 fn PieceField(
-    label: &'static str,
+    label: String,
     field: Field,
     disabled: bool,
     #[props(default)] wide: bool,
@@ -583,27 +575,27 @@ fn PieceRow(
         article { class: "import-piece {status}", id: "import-piece-{id}",
             div { class: "piece-head",
                 if !done {
-                    input { r#type: "checkbox", checked: ticked, "aria-label": "Select piece",
+                    input { r#type: "checkbox", checked: ticked, "aria-label": t::import_select_piece(),
                         onchange: move |e: FormEvent| {
                             if e.checked() { selected.write().insert(id); } else { selected.write().remove(&id); }
                         } }
                 }
                 div { class: "grid piece-fields",
-                    PieceField { label: "Number", field: piece.number.clone(), disabled: done, onsave: set(|o, v| o.number = Some(v)) }
-                    PieceField { label: "Title", field: piece.title.clone(), disabled: done, wide: true, onsave: set(|o, v| o.title = Some(v)) }
-                    PieceField { label: "Composer", field: piece.composer.clone(), disabled: done, onsave: set(|o, v| o.composer = Some(v)) }
-                    PieceField { label: "Arranger", field: piece.arranger.clone(), disabled: done, onsave: set(|o, v| o.arranger = Some(v)) }
-                    PieceField { label: "Genre", field: piece.genre.clone(), disabled: done, onsave: set(|o, v| o.genre = Some(v)) }
+                    PieceField { label: t::import_field_number(), field: piece.number.clone(), disabled: done, onsave: set(|o, v| o.number = Some(v)) }
+                    PieceField { label: t::library_field_title(), field: piece.title.clone(), disabled: done, wide: true, onsave: set(|o, v| o.title = Some(v)) }
+                    PieceField { label: t::library_field_composer(), field: piece.composer.clone(), disabled: done, onsave: set(|o, v| o.composer = Some(v)) }
+                    PieceField { label: t::library_field_arranger(), field: piece.arranger.clone(), disabled: done, onsave: set(|o, v| o.arranger = Some(v)) }
+                    PieceField { label: t::library_field_genre(), field: piece.genre.clone(), disabled: done, onsave: set(|o, v| o.genre = Some(v)) }
                 }
                 div { class: "piece-actions",
                     if done {
-                        span { class: "ok small", "✓ Imported" }
+                        span { class: "ok small", {t::import_piece_done()} }
                         if let Some(s) = &piece.score {
-                            Link { class: "button", to: Route::EditScore { id: s.id }, "Open piece" }
+                            Link { class: "button", to: Route::EditScore { id: s.id }, {t::import_open_piece()} }
                         }
                     } else {
                         button { class: "primary", disabled: !piece.can_commit(), title: piece.blocking_note().map(|n| note_text(&n)).unwrap_or_default(),
-                            onclick: move |_| oncommit.call(id), "Import piece" }
+                            onclick: move |_| oncommit.call(id), {t::import_commit_piece()} }
                     }
                 }
             }
@@ -615,11 +607,11 @@ fn PieceRow(
                     let chosen_new = piece.target == Some(Target::New);
                     rsx! {
                         div { class: if piece.target.is_none() { "match lvl-yellow" } else { "match" },
-                            span { "An existing piece matches: {label}. " }
+                            span { {t::import_match(&label)} }
                             label { input { r#type: "radio", name: "target-{id}", checked: chosen_existing,
-                                onchange: move |_| target(Target::Existing(sid)) } " Add the parts to it" }
+                                onchange: move |_| target(Target::Existing(sid)) } {t::import_match_add()} }
                             label { input { r#type: "radio", name: "target-{id}", checked: chosen_new,
-                                onchange: move |_| target(Target::New) } " Import as a new piece" }
+                                onchange: move |_| target(Target::New) } {t::import_match_new()} }
                         }
                     }
                 }
@@ -628,7 +620,7 @@ fn PieceRow(
                 p { class: "note small", {note_text(n)} }
             }
             table { class: "import-parts",
-                thead { tr { th { "Page 1" } th { "File" } th { "Instruments" } th { "Key" } th { "Voices" } th { "Name" } th { "Readable by" } th { "Import" } } }
+                thead { tr { th { {t::import_col_page()} } th { {t::import_col_file()} } th { {t::admin_instruments_title()} } th { {t::library_field_key()} } th { {t::library_field_voices()} } th { {t::import_col_name()} } th { {t::import_col_readers()} } th { {t::import_col_import()} } } }
                 tbody {
                     for part in piece.parts.iter() {
                         PartRow { key: "{part.id}", part: part.clone(), instruments: instruments.clone(), review, error }
@@ -670,23 +662,19 @@ fn PartRow(
     let addable: Vec<Choice> =
         instrument_choices(&instruments).into_iter().filter(|c| !chosen.contains(&c.id)).collect();
     let path = part.file.path.clone();
-    let staves = part
-        .file
-        .staves
-        .map(|n| if n == 1 { ", 1 staff per system".to_owned() } else { format!(", {n} staves per system") })
-        .unwrap_or_default();
-    let pages = part.file.page_count.map(|n| format!("{n} p.")).unwrap_or_default();
+    let staves = part.file.staves.map(t::import_staves).unwrap_or_default();
+    let pages = part.file.page_count.map(t::import_pages_short).unwrap_or_default();
     rsx! {
         tr { class: "{level}",
             td { class: "thumb",
                 if part.file.has_thumbnail {
-                    a { href: "/api/import/files/{part.file.id}", target: "_blank", title: "Open the PDF",
+                    a { href: "/api/import/files/{part.file.id}", target: "_blank", title: t::import_open_pdf(),
                         img { class: "thumb-small", src: "{thumb}", alt: "", loading: "lazy" } }
                 } else {
-                    div { class: "thumb-small empty", "PDF" }
+                    div { class: "thumb-small empty", "PDF" } // i18n-ok: file format name
                 }
             }
-            td { class: "file", "data-label": "File",
+            td { class: "file", "data-label": t::import_col_file(),
                 span { class: "mono small", "{part.file.path}" }
                 br {}
                 span { class: "muted small", "{pages} {format_size(part.file.size_bytes)}{staves}" }
@@ -694,8 +682,8 @@ fn PartRow(
             // Any number of instruments: chips with ×, plus the picker of the
             // part editor (a-assign-picker); an unknown word stays red until
             // it is mapped under "Instruments to confirm".
-            td { class: "instruments", "data-label": "Instruments",
-                div { class: "ichips", role: "group", "aria-label": "Instruments of {path}",
+            td { class: "instruments", "data-label": t::admin_instruments_title(),
+                div { class: "ichips", role: "group", "aria-label": t::import_instruments_of(&path),
                     for (i, ins) in part.instruments.iter().enumerate() {
                         {
                             let name = ins.name.clone().unwrap_or_else(|| format!("? {}", ins.text));
@@ -707,7 +695,7 @@ fn PartRow(
                                     span { "{name}" }
                                     if !done {
                                         button { r#type: "button", class: "ichip-remove",
-                                            title: "Remove {name}", "aria-label": "Remove instrument {name}",
+                                            title: t::common_remove_entry(&name), "aria-label": t::import_remove_instrument(&name),
                                             onclick: move |_| change(PartOverrides { instruments: Some(rest.clone()), ..Default::default() }),
                                             "×"
                                         }
@@ -718,8 +706,8 @@ fn PartRow(
                     }
                 }
                 if !done {
-                    Picker { options: addable, label: "+ Add instrument", placeholder: "Search instrument or family…",
-                        none_left: "Every instrument is chosen already.",
+                    Picker { options: addable, label: t::import_add_instrument(), placeholder: t::common_search_instruments(),
+                        none_left: t::import_all_instruments_chosen(),
                         onapply: {
                             let picks = picks.clone();
                             move |ids: Vec<i64>| {
@@ -730,8 +718,8 @@ fn PartRow(
                         } }
                 }
             }
-            td { class: "key {level_class(part.key.level)}", "data-label": "Key", title: "{hint(&part.key)}",
-                select { disabled: done, "aria-label": "Key of {part.file.path}",
+            td { class: "key {level_class(part.key.level)}", "data-label": t::library_field_key(), title: "{hint(&part.key)}",
+                select { disabled: done, "aria-label": t::import_key_of(&part.file.path),
                     onchange: move |e: FormEvent| change(PartOverrides { key: Some(e.value()), ..Default::default() }),
                     option { value: "", selected: key.is_empty(), "—" }
                     for k in naming::KEYS.iter() {
@@ -741,7 +729,7 @@ fn PartRow(
                 }
             }
             // The voices as chips, the input of the part editor (a-import-voices).
-            td { class: "voices {level_class(part.voices.level)}", "data-label": "Voices",
+            td { class: "voices {level_class(part.voices.level)}", "data-label": t::library_field_voices(),
                 title: "{source_hint(part.voices.source, part.voices.note.as_ref())}",
                 if done {
                     {part.voices.values.join(&musicus_i18n::t::part_name_voice_sep())}
@@ -749,24 +737,24 @@ fn PartRow(
                     VoicesCell { id, path: path.clone(), values: part.voices.values.clone(), review, error }
                 }
             }
-            td { class: "name", "data-label": "Name",
+            td { class: "name", "data-label": t::import_col_name(),
                 strong { {part_label(&part)} }
                 for n in part.notes.iter().filter(|n| !matches!(n, Note::NoReaders)) {
                     div { class: "note small", {note_text(n)} }
                 }
             }
-            td { class: "small readers", "data-label": "Readable by",
+            td { class: "small readers", "data-label": t::import_col_readers(),
                 if part.readers.is_empty() {
-                    span { class: "warn-text", "nobody yet" }
+                    span { class: "warn-text", {t::import_readers_none()} }
                 } else {
                     "{part.readers.join(\", \")}"
                 }
             }
-            td { class: "take", "data-label": "Import",
+            td { class: "take", "data-label": t::import_col_import(),
                 if done {
                     span { class: "ok", "✓" }
                 } else {
-                    input { r#type: "checkbox", checked: !part.skip, "aria-label": "Import {part.file.path}",
+                    input { r#type: "checkbox", checked: !part.skip, "aria-label": t::import_take(&part.file.path),
                         onchange: move |e: FormEvent| change(PartOverrides { skip: Some(!e.checked()), ..Default::default() }) }
                 }
             }
@@ -809,8 +797,8 @@ fn VoicesCell(
     });
     let label_id = use_hook(|| format!("voices-of-{}", crate::picker::unique_id()));
     rsx! {
-        span { id: "{label_id}", class: "visually-hidden", "Voices of {path}" }
-        TagInput { tags: voices, labelledby: label_id.clone(), placeholder: "—", noun: "voice",
+        span { id: "{label_id}", class: "visually-hidden", {t::import_voices_of(&path)} }
+        TagInput { tags: voices, labelledby: label_id.clone(), placeholder: "—", entries: crate::tag_input::Entries::Voices,
             separators: ",&", maxlength: naming::MAX_VOICE_CHARS as u32 }
     }
 }

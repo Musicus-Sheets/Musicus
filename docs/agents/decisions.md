@@ -354,7 +354,7 @@ Implementation state of each decision: see its **State** line (and `status.md`).
 - Decision: message ids are `<area>-<page or component>-<what>` in lower kebab case (`library-score-edit`, `reader-sets-new`, `common-save`); the generated Rust function is the id with `_` (`t::library_score_edit()`). An id is never reused for another meaning: a changed meaning gets a new id. One message per visible string (no attributes), arguments named in the message (`{ $count }`); counts are numbers so plural selectors work. Comments above a message (`# …`) tell translators where it appears. Files per area: `common`, `names`, `library`, `reader`, `import`, `admin`, `account`, `programmes`. Text that is user data never enters the catalogue.
 - Why: stable, greppable ids; translation tools key on ids, so reusing one would silently keep an old translation of another meaning.
 - Serves: R-I18N-003, R-I18N-010.
-- State: decided (phase 0); applied from phase 1 on.
+- State: applied (phases 1–4): about 450 English messages in 8 files; the client has no literal UI text (lint `scripts/check-ui-literals.py`, except `errors.rs`, whose English error texts move to the catalogue in a commit of their own).
 - If you change it: renaming an id loses its translations in every language (and in Weblate); prefer adding a new id and deleting the old one.
 
 ### a-data-as-entered

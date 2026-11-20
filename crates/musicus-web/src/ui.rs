@@ -48,23 +48,23 @@ pub fn Shell() -> Element {
             Link { class: "brand", to: Route::Library {}, "𝄞 Musicus" }
             button {
                 class: "menu-toggle",
-                "aria-label": "Menu",
+                "aria-label": t::common_nav_menu(),
                 onclick: move |_| menu_open.toggle(),
                 "☰"
             }
             nav { class: if menu_open() { "open" } else { "" }, onclick: move |_| menu_open.set(false),
-                Link { to: Route::Library {}, active_class: "active", "Library" }
-                Link { to: Route::Programmes {}, active_class: "active", "Programmes" }
-                Link { to: Route::Instruments {}, active_class: "active", "Instruments" }
+                Link { to: Route::Library {}, active_class: "active", {t::common_nav_library()} }
+                Link { to: Route::Programmes {}, active_class: "active", {t::common_nav_programmes()} }
+                Link { to: Route::Instruments {}, active_class: "active", {t::common_nav_instruments()} }
                 if user.role.can_manage_library() {
-                    Link { to: Route::Groups {}, active_class: "active", "Groups" }
-                    Link { to: Route::Imports {}, active_class: "active", "Import" }
+                    Link { to: Route::Groups {}, active_class: "active", {t::common_nav_groups()} }
+                    Link { to: Route::Imports {}, active_class: "active", {t::common_nav_import()} }
                 }
                 if user.role.is_admin() {
-                    Link { to: Route::Users {}, active_class: "active", "Users" }
+                    Link { to: Route::Users {}, active_class: "active", {t::common_nav_users()} }
                 }
                 Link { to: Route::Account {}, active_class: "active", "{user.display_name}" }
-                button { class: "link", onclick: logout, "Log out" }
+                button { class: "link", onclick: logout, {t::common_nav_log_out()} }
             }
         }
         Outlet::<Route> {}
@@ -91,11 +91,23 @@ pub fn Status(status: Option<Result<String, String>>) -> Element {
 pub fn NoAccess() -> Element {
     rsx! {
         main { class: "narrow",
-            h1 { "Not available" }
-            p { class: "muted", "Your role does not include this page." }
-            Link { to: Route::Library {}, "Back to the library" }
+            h1 { {t::common_no_access_title()} }
+            p { class: "muted", {t::common_no_access_text()} }
+            Link { to: Route::Library {}, {t::common_back_to_library()} }
         }
     }
+}
+
+/// Stands for an argument shown in bold: `WithStrong` splits the formatted
+/// message here.
+pub const MARK: &str = "\u{E000}";
+
+/// A message with one argument in bold: `text` is the message formatted with
+/// [`MARK`] in place of that argument, `strong` the argument.
+#[component]
+pub fn WithStrong(text: String, strong: String) -> Element {
+    let (before, after) = text.split_once(MARK).unwrap_or((text.as_str(), ""));
+    rsx! { "{before}" strong { "{strong}" } "{after}" }
 }
 
 #[component]

@@ -6,8 +6,13 @@ Dioxus 0.7.10, features `web` + `router`; compiled to wasm32 by `dx`; assets `as
 
 `main` calls `locale::init()` before launching: language = first entry of `navigator.languages` whose primary subtag is
 shipped (`musicus_i18n::LANGUAGES`, today `en`), `en-XA` = pseudo-locale, else English; `<html lang>` = the matched
-preference ("en-GB"); nothing stored. Texts: `musicus_i18n::t::<message_id>(args)` (generated, English fallback per
-message). Dates/times: `locale::format_time`/`format_date` = `toLocaleString`/`toLocaleDateString` with
+preference ("en-GB"); nothing stored. Texts: every visible text, placeholder, title, ARIA label, `confirm`/`prompt` text and suggested name is
+`musicus_i18n::t::<message_id>(args)` (generated, English fallback per message; R-I18N-010, lint
+`scripts/check-ui-literals.py`, pseudo-locale run `e2e/pseudo.mjs`); user data is shown as entered. A message
+with one bold argument: `ui::WithStrong {text: t::x(ui::MARK, …), strong}`. Fixed option lists carry message
+functions (`viewer::COLORS` etc. as `fn() -> String`; layout kinds `kind_name`; import presets
+`import::preset_name`, sources `source_text`). Error codes, notes, pattern and ink errors are rendered by `errors.rs`
+(English literals until they move to the catalogue). Dates/times: `locale::format_time`/`format_date` = `toLocaleString`/`toLocaleDateString` with
 `locale::intl_locale()` (was `"default"`); numbers `format_number` (`Intl.NumberFormat`); `format_size` "1.5 MB" /
 "12 KB" (number from `Intl`, unit from the catalogue). `ui` re-exports the three formatters.
 
@@ -113,9 +118,9 @@ Users: group members (label display name, detail username), instrument grants an
 
 ## Tag entry (`tag_input.rs`, a-tag-input)
 
-`TagInput {tags: WriteSignal<Vec<String>>, labelledby, placeholder, noun = "tag", separators = ",", maxlength}` inside `div.tag-input[role=group]` styled like an input. Children: one `span.tag.tag-chip` per tag (text `.tag-text`, `button.tag-remove` "×", `aria-label "Remove <noun> <t>"`, 44 px hit area via `::after`) and one `input.tag-entry` at `cursor` (index among chips; `END = usize::MAX` = after the last chip, so tags loaded later keep the input at the end). Keyed list (`chip-<lowercase>`, `entry`), so moving the input is a DOM move; it is refocused with `requestAnimationFrame`.
+`TagInput {tags: WriteSignal<Vec<String>>, labelledby, placeholder, entries = Entries::Tags (remove button `t::common_tag_remove`, `Voices`: `t::common_voice_remove`), separators = ",", maxlength}` inside `div.tag-input[role=group]` styled like an input. Children: one `span.tag.tag-chip` per tag (text `.tag-text`, `button.tag-remove` "×", `aria-label` from `entries`, 44 px hit area via `::after`) and one `input.tag-entry` at `cursor` (index among chips; `END = usize::MAX` = after the last chip, so tags loaded later keep the input at the end). Keyed list (`chip-<lowercase>`, `entry`), so moving the input is a DOM move; it is refocused with `requestAnimationFrame`.
 
-- Same component for the voices of a part (`forms::PartFields`, a-part-voices): `noun: "voice"`, `separators: ",&"` ("&" is the separator of derived names, so typing "1 & 2" gives two chips), `maxlength` 20; no suggestions. Everything below that says "comma" means any character of `separators`.
+- Same component for the voices of a part (`forms::PartFields`, a-part-voices): `entries: Entries::Voices`, `separators: ",&"` ("&" is the separator of derived names, so typing "1 & 2" gives two chips), `maxlength` 20; no suggestions. Everything below that says "comma" means any character of `separators`.
 - Commit (`add`): split at commas, trim, skip empty, skip duplicates ignoring case (that chip gets `.flash` for 0.9 s), insert at the input's place. Triggers: keydown `,` (prevented), Enter (always prevented: never submits the form), Tab (not prevented), blur (so a tag typed without comma is kept when the user clicks Save/Next), and the input event when the value contains a comma (Android keyboards send `Unidentified` keydowns): text before the last comma becomes chips, the rest stays typed; if the value grew by more than one character at once (paste, keyboard suggestion) everything becomes chips.
 - Caret moves: ←/→/Home/End only when the input is empty; Backspace with the caret at 0 removes the chip before, Delete with the caret at the end the chip after (caret read synchronously through `web_sys::HtmlInputElement::selection_start/end`). Clicking a chip puts the input after it; clicking free space puts it at the end. Chip removal and placement look chips up by text, because a blur just before the click may already have inserted a chip.
 

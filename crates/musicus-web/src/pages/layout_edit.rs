@@ -14,21 +14,22 @@ use musicus_api::{
     Part,
     layout::{FileLayout, LayoutState, MIN_BAND_HEIGHT, PageCorrection, PageLayout, RegionKind},
 };
+use musicus_i18n::t;
 
 const CANVAS: &str = "layout-canvas";
 const OVERLAY: &str = "layout-overlay";
 /// Arrow keys move a focused cut line by this much (0..1 of the page height).
 const KEY_STEP: f32 = 0.004;
 
-const KINDS: [(RegionKind, &str); 4] = [
-    (RegionKind::System, "System"),
-    (RegionKind::Header, "Header (title)"),
-    (RegionKind::Footer, "Footer"),
-    (RegionKind::Hidden, "Hidden"),
-];
+const KINDS: [RegionKind; 4] = [RegionKind::System, RegionKind::Header, RegionKind::Footer, RegionKind::Hidden];
 
-fn kind_name(k: RegionKind) -> &'static str {
-    KINDS.iter().find(|(x, _)| *x == k).map(|(_, n)| *n).unwrap_or("?")
+fn kind_name(k: RegionKind) -> String {
+    match k {
+        RegionKind::System => t::reader_systems_kind_system(),
+        RegionKind::Header => t::reader_systems_kind_header(),
+        RegionKind::Footer => t::reader_systems_kind_footer(),
+        RegionKind::Hidden => t::reader_systems_kind_hidden(),
+    }
 }
 
 fn kind_value(k: RegionKind) -> &'static str {
@@ -68,7 +69,7 @@ pub fn LayoutEditor(id: i64) -> Element {
                 None => rsx! { Loading {} },
                 Some(Err(e)) => rsx! { ErrorBox { message: e.message.clone() } },
                 Some(Ok(p)) => match &p.file {
-                    None => rsx! { p { "This part has no PDF yet." } },
+                    None => rsx! { p { {t::reader_systems_no_pdf()} } },
                     Some(f) => rsx! { Editor { key: "{f.sha256}", part: p.clone(), sha256: f.sha256.clone() } },
                 },
             }
@@ -122,7 +123,7 @@ fn Editor(part: Part, sha256: String) -> Element {
                 match bridge::render_page(&url, p, CANVAS, width, 100_000.0, bridge::pixel_ratio()).await {
                     Ok(Some(s)) => size.set(Some(s)),
                     Ok(None) => {}
-                    Err(e) => status.set(Some(Err(format!("Could not render the page: {e}")))),
+                    Err(e) => status.set(Some(Err(t::reader_systems_render_failed(e.to_string())))),
                 }
             });
         }
@@ -142,12 +143,12 @@ fn Editor(part: Part, sha256: String) -> Element {
         let Some(d) = draft() else { return };
         let p = page();
         spawn(async move {
-            status.set(Some(Ok("Saving…".into())));
+            status.set(Some(Ok(t::common_saving())));
             match api::put::<_, FileLayout>(&format!("/api/files/{sha}/layout/pages/{p}"), &d).await {
                 Ok(l) => {
                     layouts::forget(&sha);
                     layout.set(Some(Ok(l)));
-                    status.set(Some(Ok("Saved — every member now sees this page this way".into())));
+                    status.set(Some(Ok(t::reader_systems_saved())));
                 }
                 Err(e) => status.set(Some(Err(e.message))),
             }
@@ -162,7 +163,7 @@ fn Editor(part: Part, sha256: String) -> Element {
                 Ok(()) => {
                     layouts::forget(&sha);
                     layout.restart();
-                    status.set(Some(Ok("Back to the automatic detection".into())));
+                    status.set(Some(Ok(t::reader_systems_reset_done())));
                 }
                 Err(e) => status.set(Some(Err(e.message))),
             }
@@ -173,7 +174,7 @@ fn Editor(part: Part, sha256: String) -> Element {
         if target < 0 || target >= page_count as i64 {
             return;
         }
-        if dirty() && !confirm("Discard the changes on this page?") {
+        if dirty() && !confirm(&t::reader_systems_discard_confirm()) {
             return;
         }
         page.set(target as usize);
@@ -201,14 +202,14 @@ fn Editor(part: Part, sha256: String) -> Element {
     };
     let header = rsx! {
         div { class: "crumbs",
-            Link { to: Route::EditPart { id: part.id }, "‹ Edit part" }
+            Link { to: Route::EditPart { id: part.id }, {t::reader_systems_crumb()} }
         }
         div { class: "page-head",
             div {
-                h1 { "Systems" }
-                p { class: "muted", "{crate::names::part_name(&part)} · current version" }
+                h1 { {t::reader_systems_title()} }
+                p { class: "muted", {t::reader_systems_subtitle(crate::names::part_name(&part))} }
             }
-            Link { class: "button", to: Route::Viewer { id: part.id }, "Open" }
+            Link { class: "button", to: Route::Viewer { id: part.id }, {t::library_open()} }
         }
     };
     if l.state != LayoutState::Done {
@@ -216,12 +217,12 @@ fn Editor(part: Part, sha256: String) -> Element {
             {header}
             p { class: "muted",
                 if l.state == LayoutState::Pending {
-                    "The systems of this file are still being detected. Try again in a few seconds."
+                    {t::reader_systems_pending()}
                 } else {
-                    "The systems of this file could not be detected; the reader shows its pages whole."
+                    {t::reader_systems_failed()}
                 }
             }
-            button { onclick: move |_| layout.restart(), "Reload" }
+            button { onclick: move |_| layout.restart(), {t::reader_systems_reload()} }
         };
     }
     let d = draft().unwrap_or_default();
@@ -232,28 +233,26 @@ fn Editor(part: Part, sha256: String) -> Element {
     rsx! {
         {header}
         p { class: "muted small",
-            "Each coloured band is one line of music (system) as the system view shows it. Drag a red line to move "
-            "a cut, “Split” a band that holds two systems, × removes a cut (joins two bands). Headers are shown "
-            "with the first page, hidden bands never. Saved changes apply to every musician."
+            {t::reader_systems_hint()}
         }
         div { class: "layout-toolbar",
-            button { onclick: move |_| go(-1), disabled: page() == 0, "‹ Previous page" }
-            span { class: "page-no-dark", "Page {page() + 1} / {page_count}" }
-            button { onclick: move |_| go(1), disabled: page() + 1 >= page_count, "Next page ›" }
+            button { onclick: move |_| go(-1), disabled: page() == 0, {t::reader_systems_previous_page()} }
+            span { class: "page-no-dark", {t::reader_systems_page(page() + 1, page_count)} }
+            button { onclick: move |_| go(1), disabled: page() + 1 >= page_count, {t::reader_systems_next_page()} }
             span { class: "grow" }
             if corrected {
-                span { class: "tag genre", "corrected" }
+                span { class: "tag genre", {t::reader_systems_corrected()} }
             }
             if let Some(p) = &shown {
                 if !p.corrected {
-                    span { class: "muted small", "confidence {p.confidence:.2}" }
+                    span { class: "muted small", {t::reader_systems_confidence(crate::locale::format_number(p.confidence as f64, 2, 2))} }
                 }
             }
         }
         label { class: "check",
             input { r#type: "checkbox", checked: d.full_page,
                 onchange: move |e| { let on = e.checked(); edit(&|d: &mut PageCorrection| d.full_page = on); } }
-            "Show this page as a whole page"
+            {t::reader_systems_whole_page()}
         }
         div { class: "layout-page", style: "width: {w}px; height: {h}px",
             canvas { id: CANVAS }
@@ -274,21 +273,21 @@ fn Editor(part: Part, sha256: String) -> Element {
                         style: "top: {d.bounds[i] * 100.0}%; height: {(d.bounds[i + 1] - d.bounds[i]) * 100.0}%",
                         div { class: "band-tools",
                             select {
-                                "aria-label": "Kind of band {i + 1}",
+                                "aria-label": t::reader_systems_band_kind(i + 1),
                                 onchange: move |e| {
                                     let v = e.value();
-                                    if let Some((kind, _)) = KINDS.iter().find(|(x, _)| kind_value(*x) == v) {
+                                    if let Some(kind) = KINDS.iter().find(|x| kind_value(**x) == v) {
                                         let kind = *kind;
                                         edit(&|d: &mut PageCorrection| d.kinds[i] = kind);
                                     }
                                 },
-                                for (kind, name) in KINDS {
-                                    option { value: kind_value(kind), selected: kind == k, "{name}" }
+                                for kind in KINDS {
+                                    option { value: kind_value(kind), selected: kind == k, {kind_name(kind)} }
                                 }
                             }
                             button {
-                                "aria-label": "Split band {i + 1}",
-                                title: "Split this band in two (then drag the new line)",
+                                "aria-label": t::reader_systems_split_band(i + 1),
+                                title: t::reader_systems_split_hint(),
                                 onclick: move |_| edit(&|d: &mut PageCorrection| {
                                     let mid = (d.bounds[i] + d.bounds[i + 1]) / 2.0;
                                     if d.bounds[i + 1] - d.bounds[i] >= 2.0 * MIN_BAND_HEIGHT {
@@ -297,7 +296,7 @@ fn Editor(part: Part, sha256: String) -> Element {
                                         d.kinds.insert(i + 1, kind);
                                     }
                                 }),
-                                "Split"
+                                {t::reader_systems_split()}
                             }
                         }
                         span { class: "band-label", "{kind_name(k)}" }
@@ -312,7 +311,7 @@ fn Editor(part: Part, sha256: String) -> Element {
                             class: "grip",
                             role: "separator",
                             tabindex: "0",
-                            "aria-label": "Cut {j + 1}",
+                            "aria-label": t::reader_systems_cut(j + 1),
                             "aria-valuenow": "{(d.bounds[j] * 1000.0).round() / 10.0}",
                             onpointerdown: move |e: PointerEvent| {
                                 e.prevent_default();
@@ -338,8 +337,8 @@ fn Editor(part: Part, sha256: String) -> Element {
                         if j > 0 && j + 1 < n_bounds {
                             button {
                                 class: "cut-remove",
-                                "aria-label": "Remove cut {j + 1}",
-                                title: "Remove this cut: join the bands above and below",
+                                "aria-label": t::reader_systems_remove_cut(j + 1),
+                                title: t::reader_systems_remove_cut_hint(),
                                 onclick: move |_| edit(&|d: &mut PageCorrection| {
                                     // The joined band keeps "System" if either part was one.
                                     let kind = if d.kinds[j - 1] == RegionKind::System || d.kinds[j] == RegionKind::System {
@@ -359,14 +358,14 @@ fn Editor(part: Part, sha256: String) -> Element {
             }
         }
         div { class: "actions layout-actions",
-            button { class: "primary", disabled: !dirty(), onclick: save, "Save page" }
+            button { class: "primary", disabled: !dirty(), onclick: save, {t::reader_systems_save()} }
             if corrected {
-                button { onclick: reset, "Reset to automatic" }
+                button { onclick: reset, {t::reader_systems_reset()} }
             }
             match status() {
                 Some(Ok(s)) => rsx! { span { class: "ok small", "{s}" } },
                 Some(Err(e)) => rsx! { span { class: "error-text small", "{e}" } },
-                None if dirty() => rsx! { span { class: "muted small", "Unsaved changes" } },
+                None if dirty() => rsx! { span { class: "muted small", {t::reader_systems_unsaved()} } },
                 None => rsx! {},
             }
         }

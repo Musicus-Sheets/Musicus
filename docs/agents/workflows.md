@@ -15,6 +15,8 @@ dx build --platform web --package musicus-web            # debug → target/dx/m
 dx bundle --platform web --package musicus-web --release # release (needs wasm-opt)
 cargo run -p musicus-server -- serve --data-dir /tmp/m --web-dir target/dx/musicus-web/debug/web/public --insecure-cookies
 node e2e/smoke.mjs <admin-invite-url-from-log> some.pdf /tmp/shots   # fresh data dir required; BROWSER=firefox for Firefox
+python3 scripts/check-ui-literals.py  # no literal UI text in the client (R-I18N-010)
+node e2e/pseudo.mjs <admin-invite-url>   # pseudo-locale run (fresh data dir; every UI text marked)
 python3 docs/agents/check.py [--since <ref>]
 uv run docs/requirements/tools/validate.py
 docker compose up -d --build
@@ -98,7 +100,7 @@ Read the entry in `decisions.md` (Serves / If you change it). If a served requir
 ## Definition of done (every change)
 
 - [ ] `cargo test`, `cargo clippy --all-targets`, `cargo fmt --check` clean; web clippy clean if client touched.
-- [ ] Client changes: built with `dx build` and exercised (ideally `e2e/smoke.mjs`).
+- [ ] Client changes: built with `dx build` and exercised (ideally `e2e/smoke.mjs`); `scripts/check-ui-literals.py` clean; new texts in the catalogue (`e2e/pseudo.mjs` for new pages).
 - [ ] `docs/agents/*` describe the new state; `python3 docs/agents/check.py --since <base>` passes.
 - [ ] Requirements updated and validated; docs submodule pull requests merged first, then pointers updated with
       `./scripts/update-submodules.sh` so that `./scripts/check-submodules.sh` passes.

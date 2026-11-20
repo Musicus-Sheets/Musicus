@@ -60,6 +60,8 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 
 ## Known debt / quirks
 
+- i18n: only English is shipped (`locales/en`); the German catalogue is a later branch. The error texts of `errors.rs` are still English literals (not yet in the catalogue). The pseudo-locale run (`e2e/pseudo.mjs`) covers 13 pages without the reader with a file, the import review and the system editor (those are covered only by the lint). Button overflow with long translations is only reported, not failed.
+
 - `annotation_sets` name uniqueness is case-sensitive (SQLite UNIQUE without NOCASE) while users/groups/instruments are case-insensitive.
 - `LoginLimiter` is in-memory: resets on restart, per process.
 - i18n (F-I18N-001): errors, import notes, pattern/ink errors and staged-file problems are codes rendered by the client

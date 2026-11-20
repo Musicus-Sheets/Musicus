@@ -13,6 +13,7 @@ use crate::{
 use dioxus::prelude::*;
 use gloo_net::http::Method;
 use musicus_api::{Instrument, Part, Score};
+use musicus_i18n::t;
 use std::collections::HashMap;
 
 fn instrument_names(list: &[Instrument]) -> HashMap<i64, String> {
@@ -38,9 +39,9 @@ fn Steps(current: u8) -> Element {
         }
     };
     rsx! {
-        ol { class: "steps", "aria-label": "Progress",
-            li { class: class(1), span { class: "step-no", if current > 1 { "✓" } else { "1" } } "Details" }
-            li { class: class(2), span { class: "step-no", "2" } "Parts and PDFs" }
+        ol { class: "steps", "aria-label": t::library_steps(),
+            li { class: class(1), span { class: "step-no", if current > 1 { "✓" } else { "1" } } {t::library_step_details()} }
+            li { class: class(2), span { class: "step-no", "2" } {t::library_step_parts()} }
         }
     }
 }
@@ -90,47 +91,46 @@ pub fn NewScore() -> Element {
     let uploading = rows.read().iter().any(|(_, s)| matches!(s, Upload::Running(_)));
     rsx! {
         main { class: "medium",
-            div { class: "crumbs", Link { to: Route::Library {}, "‹ Library" } }
-            h1 { "Add piece" }
+            div { class: "crumbs", Link { to: Route::Library {}, {t::library_crumb()} } }
+            h1 { {t::library_add_piece()} }
             Steps { current: step() }
             if let Some(e) = error() { ErrorBox { message: e } }
             if step() == 1 {
                 form { class: "card", onsubmit: next,
-                    h2 { "Details" }
-                    p { class: "muted small", "Only the title is required. Genre and tags help musicians find the piece." }
+                    h2 { {t::library_step_details()} }
+                    p { class: "muted small", {t::library_details_hint()} }
                     ScoreFields { draft }
                     div { class: "actions",
-                        Link { class: "button", to: Route::Library {}, "Cancel" }
+                        Link { class: "button", to: Route::Library {}, {t::common_cancel()} }
                         span { class: "grow" }
-                        button { class: "primary", r#type: "submit", "Next: parts ›" }
+                        button { class: "primary", r#type: "submit", {t::library_next_parts()} }
                     }
                 }
             } else if let Some(s) = score() {
                 section { class: "card",
-                    h2 { "Parts of “{s.title}”" }
+                    h2 { {t::library_parts_of(&s.title)} }
                     p { class: "muted small",
-                        "Add one part per sheet: its instruments, key and voices give its name, e.g. “Trumpet in B♭ 1”; "
-                        "a custom name is optional. Groups get access by instrument."
+                        {t::library_parts_hint()}
                     }
                     if rows.read().is_empty() {
-                        p { class: "muted", "No parts yet." }
+                        p { class: "muted", {t::library_parts_none()} }
                     } else {
                         AddedParts { rows: rows(), names: instrument_names(&all) }
                     }
                 }
                 section { class: "card",
-                    h2 { if rows.read().is_empty() { "Add the first part" } else { "Add another part" } }
+                    h2 { if rows.read().is_empty() { {t::library_add_first_part()} } else { {t::library_add_another_part()} } }
                     NewPartForm { score_id: s.id, instruments: all.clone(), onstate: on_part }
                 }
                 div { class: "actions wizard-actions",
-                    button { onclick: move |_| step.set(1), "‹ Details" }
+                    button { onclick: move |_| step.set(1), {t::library_back_details()} }
                     span { class: "grow" }
-                    if uploading { span { class: "muted small", "Waiting for uploads…" } }
+                    if uploading { span { class: "muted small", {t::library_waiting_uploads()} } }
                     button {
                         class: "primary",
                         disabled: uploading,
                         onclick: move |_| back_to_library(nav, score().map(|s| s.id)),
-                        "Finish"
+                        {t::library_finish()}
                     }
                 }
             }
@@ -167,14 +167,14 @@ pub fn EditScore(id: i64) -> Element {
         e.prevent_default();
         match api::put::<_, Score>(&format!("/api/scores/{id}"), &draft().to_input()).await {
             Ok(_) => {
-                status.set(Some(Ok("Saved".into())));
+                status.set(Some(Ok(t::common_saved())));
                 score.restart();
             }
             Err(e) => status.set(Some(Err(e.message))),
         }
     };
     let delete = move |_| async move {
-        if !confirm("Delete this piece with all its parts? Everyone's annotations on it are deleted too.") {
+        if !confirm(&t::library_delete_piece_confirm()) {
             return;
         }
         match api::call(Method::DELETE, &format!("/api/scores/{id}")).await {
@@ -188,37 +188,37 @@ pub fn EditScore(id: i64) -> Element {
     };
     rsx! {
         main { class: "medium",
-            div { class: "crumbs", Link { to: Route::Library {}, "‹ Library" } }
+            div { class: "crumbs", Link { to: Route::Library {}, {t::library_crumb()} } }
             match &*score.read() {
                 None => rsx! { Loading {} },
                 Some(Err(e)) => rsx! { ErrorBox { message: e.message.clone() } },
                 Some(Ok(s)) => rsx! {
                     div { class: "page-head",
                         div {
-                            h1 { "Edit piece" }
+                            h1 { {t::library_edit_piece_title()} }
                             p { class: "muted", "{s.title}" }
                         }
-                        button { class: "primary", onclick: move |_| back_to_library(nav, Some(id)), "Done" }
+                        button { class: "primary", onclick: move |_| back_to_library(nav, Some(id)), {t::library_done()} }
                     }
                     if let Some(e) = error() { ErrorBox { message: e } }
                     form { class: "card", onsubmit: save, oninput: move |_| status.set(None),
-                        h2 { "Details" }
+                        h2 { {t::library_step_details()} }
                         ScoreFields { draft }
                         div { class: "actions",
-                            button { class: "primary", r#type: "submit", "Save details" }
+                            button { class: "primary", r#type: "submit", {t::library_save_details()} }
                             Status { status: status() }
                         }
                     }
                     section { class: "card",
-                        h2 { "Parts ({s.parts.len()})" }
-                        if s.parts.is_empty() { p { class: "muted", "No parts yet." } }
+                        h2 { {t::library_parts_count(s.parts.len())} }
+                        if s.parts.is_empty() { p { class: "muted", {t::library_parts_none()} } }
                         for p in crate::names::sorted(&s.parts) {
                             PartEditor { key: "{p.id}", part: p.clone(), instruments: all.clone(),
                                 onchange: move |_| score.restart(), ondelete: move |_| score.restart() }
                         }
                     }
                     section { class: "card",
-                        h2 { "Add a part" }
+                        h2 { {t::library_add_part_title()} }
                         if let Some(row) = added() {
                             AddedParts { rows: vec![row], names: instrument_names(&all) }
                         }
@@ -232,13 +232,11 @@ pub fn EditScore(id: i64) -> Element {
                             } }
                     }
                     section { class: "card danger-zone",
-                        h2 { "Delete piece" }
+                        h2 { {t::library_delete_piece()} }
                         p { class: "muted small",
-                            "Deletes the piece with all its parts and files from the library. "
-                            strong { "Everyone's annotations on it are deleted too." }
-                            " Programmes keep their other pieces."
+                            crate::ui::WithStrong { text: t::library_delete_piece_text(crate::ui::MARK), strong: t::library_delete_piece_warning() }
                         }
-                        button { class: "danger", onclick: delete, "Delete piece" }
+                        button { class: "danger", onclick: delete, {t::library_delete_piece()} }
                     }
                 },
             }
@@ -272,16 +270,16 @@ pub fn EditPart(id: i64) -> Element {
                     let score_id = score.id;
                     rsx! {
                         div { class: "crumbs",
-                            Link { to: Route::Library {}, "‹ Library" }
+                            Link { to: Route::Library {}, {t::library_crumb()} }
                             span { class: "muted", " / " }
                             Link { to: Route::EditScore { id: score_id }, "{score.title}" }
                         }
                         div { class: "page-head",
                             div {
-                                h1 { "Edit part" }
+                                h1 { {t::library_edit_part_title()} }
                                 p { class: "muted", "{crate::names::part_name(&part)} · {score.title}" }
                             }
-                            button { class: "primary", onclick: move |_| back_to_library(nav, Some(score_id)), "Done" }
+                            button { class: "primary", onclick: move |_| back_to_library(nav, Some(score_id)), {t::library_done()} }
                         }
                         section { class: "card",
                             PartEditor { key: "{part.id}", part: part.clone(), instruments: all.clone(), versions_open: true,
@@ -289,8 +287,8 @@ pub fn EditPart(id: i64) -> Element {
                                 ondelete: move |_| { nav.replace(Route::EditScore { id: score_id }); } }
                         }
                         p { class: "muted small",
-                            "Other parts, the details of the piece and deleting it: "
-                            Link { to: Route::EditScore { id: score_id }, "Edit piece" }
+                            {t::library_edit_part_more()}
+                            Link { to: Route::EditScore { id: score_id }, {t::library_edit_piece_title()} }
                         }
                     }
                 }

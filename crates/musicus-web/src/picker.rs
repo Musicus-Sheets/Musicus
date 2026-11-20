@@ -6,6 +6,7 @@
 
 use dioxus::html::Key;
 use dioxus::prelude::*;
+use musicus_i18n::t;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -86,7 +87,7 @@ fn reveal(panel_id: &str) {
 }
 
 fn focus_element(id: &str) {
-    document::eval(&format!("document.getElementById('{id}')?.focus()"));
+    document::eval(&format!("document.getElementById('{id}')?.focus()")); // i18n-ok: JavaScript
 }
 
 /// Assigned entries as chips with a remove button, followed by the picker
@@ -132,8 +133,8 @@ pub fn AssignList(
                                 r#type: "button",
                                 class: "chip-remove",
                                 disabled: busy,
-                                title: "Remove {c.label}",
-                                "aria-label": "Remove {c.label}",
+                                title: t::common_remove_entry(&c.label),
+                                "aria-label": t::common_remove_entry(&c.label),
                                 onclick: {
                                     let id = c.id;
                                     move |_| onremove.call(id)
@@ -167,7 +168,7 @@ pub fn Picker(
     onapply: EventHandler<Vec<i64>>,
     #[props(default)] disabled: bool,
     /// Shown in the dropdown when there is nothing to choose.
-    #[props(default = "Everything is assigned already.".to_string())]
+    #[props(default = t::common_picker_none_left())]
     none_left: String,
 ) -> Element {
     let uid = use_hook(unique_id);
@@ -288,7 +289,7 @@ pub fn Picker(
                         if options.is_empty() {
                             p { class: "muted small picker-none", "{none_left}" }
                         } else if filtered.is_empty() {
-                            p { class: "muted small picker-none", "No matches." }
+                            p { class: "muted small picker-none", {t::common_picker_no_matches()} }
                         }
                         for (i, c) in filtered.iter().enumerate() {
                             {
@@ -340,10 +341,10 @@ pub fn Picker(
                     }
                     div { class: "picker-foot",
                         span { class: "muted small", role: "status",
-                            if count == 0 { "Tick one or more" } else { "{count} selected" }
+                            if count == 0 { {t::common_picker_tick()} } else { {t::common_picker_selected(count)} }
                         }
                         button { r#type: "button", class: "primary", onclick: move |_| apply(true),
-                            if count == 0 { "Close" } else { "Add {count}" }
+                            if count == 0 { {t::common_close()} } else { {t::common_picker_add(count)} }
                         }
                     }
                 }

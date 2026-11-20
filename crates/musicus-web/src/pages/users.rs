@@ -7,6 +7,7 @@ use crate::{
 };
 use dioxus::prelude::*;
 use musicus_api::{CreateUser, CreatedUser, Invite, Role, UpdateUser, UserSummary};
+use musicus_i18n::t;
 
 fn invite_link(invite: &Invite) -> String {
     let origin = web_sys::window().and_then(|w| w.location().origin().ok()).unwrap_or_default();
@@ -41,38 +42,38 @@ pub fn Users() -> Element {
     }
     rsx! {
         main {
-            div { class: "page-head", h1 { "Users" } }
+            div { class: "page-head", h1 { {t::admin_users_title()} } }
             if let Some(e) = error() { ErrorBox { message: e } }
             if let Some((name, url)) = link() {
                 div { class: "card highlight",
-                    p { "Send this one-time link to " strong { "{name}" } ". It is valid for 7 days and lets them choose a password." }
+                    p { crate::ui::WithStrong { text: t::admin_users_invite_text(crate::ui::MARK), strong: name.clone() } }
                     div { class: "inline",
                         input { class: "grow", readonly: true, value: "{url}" }
-                        button { onclick: move |_| { let url = url.clone(); async move { bridge::copy_text(&url).await; } }, "Copy" }
+                        button { onclick: move |_| { let url = url.clone(); async move { bridge::copy_text(&url).await; } }, {t::admin_users_copy()} }
                     }
                 }
             }
             section { class: "card",
-                h2 { "New user" }
+                h2 { {t::admin_users_new()} }
                 form { class: "inline", onsubmit: create,
-                    input { placeholder: "Username", required: true, value: "{username}", oninput: move |e| username.set(e.value()) }
-                    input { placeholder: "Display name", required: true, value: "{display}", oninput: move |e| display.set(e.value()) }
+                    input { placeholder: t::login_username(), required: true, value: "{username}", oninput: move |e| username.set(e.value()) }
+                    input { placeholder: t::admin_users_display_name(), required: true, value: "{display}", oninput: move |e| display.set(e.value()) }
                     select { onchange: move |e| role.set(Role::parse(&e.value()).unwrap_or(Role::Member)),
-                        option { value: "member", selected: role() == Role::Member, "Member" }
-                        option { value: "librarian", selected: role() == Role::Librarian, "Librarian" }
-                        option { value: "admin", selected: role() == Role::Admin, "Admin" }
+                        option { value: "member", selected: role() == Role::Member, {t::common_role_member()} }
+                        option { value: "librarian", selected: role() == Role::Librarian, {t::common_role_librarian()} }
+                        option { value: "admin", selected: role() == Role::Admin, {t::common_role_admin()} }
                     }
-                    button { class: "primary", r#type: "submit", "Create and get invite link" }
+                    button { class: "primary", r#type: "submit", {t::admin_users_create()} }
                 }
             }
             section { class: "card",
-                h2 { "Users" }
+                h2 { {t::admin_users_title()} }
                 match &*users.read() {
                     None => rsx! { Loading {} },
                     Some(Err(e)) => rsx! { ErrorBox { message: e.message.clone() } },
                     Some(Ok(list)) => rsx! {
                         table { class: "table",
-                            thead { tr { th { "Name" } th { "Username" } th { "Role" } th { "Status" } th {} } }
+                            thead { tr { th { {t::admin_users_col_name()} } th { {t::login_username()} } th { {t::admin_users_col_role()} } th { {t::admin_users_col_status()} } th {} } }
                             tbody {
                                 for u in list.iter().cloned() {
                                     UserRow { key: "{u.id}", user: u,
@@ -121,21 +122,21 @@ fn UserRow(
             td {
                 select {
                     onchange: move |e| update(UpdateUser { role: Role::parse(&e.value()), ..Default::default() }),
-                    option { value: "member", selected: user.role == Role::Member, "Member" }
-                    option { value: "librarian", selected: user.role == Role::Librarian, "Librarian" }
-                    option { value: "admin", selected: user.role == Role::Admin, "Admin" }
+                    option { value: "member", selected: user.role == Role::Member, {t::common_role_member()} }
+                    option { value: "librarian", selected: user.role == Role::Librarian, {t::common_role_librarian()} }
+                    option { value: "admin", selected: user.role == Role::Admin, {t::common_role_admin()} }
                 }
             }
             td {
-                if disabled { "Disabled" } else if user.has_password { "Active" } else { span { class: "muted", "Invited" } }
+                if disabled { {t::admin_users_disabled()} } else if user.has_password { {t::admin_users_active()} } else { span { class: "muted", {t::admin_users_invited()} } }
             }
             td { class: "actions",
                 if !disabled {
-                    button { onclick: invite, if user.has_password { "Reset link" } else { "New invite link" } }
+                    button { onclick: invite, if user.has_password { {t::admin_users_reset_link()} } else { {t::admin_users_new_invite()} } }
                 }
                 button {
                     onclick: move |_| update(UpdateUser { disabled: Some(!disabled), ..Default::default() }),
-                    if disabled { "Enable" } else { "Disable" }
+                    if disabled { {t::admin_users_enable()} } else { {t::admin_users_disable()} }
                 }
             }
         }

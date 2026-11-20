@@ -9,6 +9,7 @@ use crate::{
 use dioxus::prelude::*;
 use gloo_net::http::Method;
 use musicus_api::{ErrorCode, Instrument, InstrumentInput};
+use musicus_i18n::t;
 use std::collections::BTreeMap;
 
 /// Instruments by family; families in alphabetical order, those without a
@@ -18,7 +19,7 @@ fn by_family(list: &[Instrument]) -> Vec<(String, Vec<Instrument>)> {
     for i in list {
         let key = match &i.family {
             Some(f) => (false, f.clone()),
-            None => (true, "Other".to_owned()),
+            None => (true, t::admin_instruments_other_family()),
         };
         map.entry(key).or_default().push(i.clone());
     }
@@ -58,22 +59,21 @@ pub fn Instruments() -> Element {
     };
     rsx! {
         main { class: "medium",
-            div { class: "page-head", h1 { "Instruments" } }
+            div { class: "page-head", h1 { {t::admin_instruments_title()} } }
             p { class: "muted",
-                "The instruments of the ensemble. Every part is tagged with the instruments it is for, "
-                "and groups get access to the parts by instrument."
+                {t::admin_instruments_intro()}
             }
             if let Some(e) = error() { ErrorBox { message: e } }
             if manage {
                 form { class: "card", onsubmit: add, oninput: move |_| added.set(None),
-                    h2 { "Add an instrument" }
+                    h2 { {t::admin_instruments_add_title()} }
                     div { class: "inline",
-                        input { placeholder: "Instrument, e.g. Trumpet", required: true, value: "{name}",
-                            "aria-label": "Instrument", oninput: move |e| name.set(e.value()) }
-                        SuggestInput { value: family, options: families.clone(), placeholder: "Family, e.g. Brass", label: "Family" }
-                        button { class: "primary", r#type: "submit", "+ Add" }
+                        input { placeholder: t::admin_instruments_name_placeholder(), required: true, value: "{name}",
+                            "aria-label": t::admin_instruments_name(), oninput: move |e| name.set(e.value()) }
+                        SuggestInput { value: family, options: families.clone(), placeholder: t::admin_instruments_family_placeholder(), label: t::admin_instruments_family() }
+                        button { class: "primary", r#type: "submit", {t::admin_instruments_add()} }
                     }
-                    if let Some(n) = added() { span { class: "ok", role: "status", "Added “{n}”." } }
+                    if let Some(n) = added() { span { class: "ok", role: "status", {t::admin_instruments_added(n)} } }
                 }
             }
             match &*list.read() {
@@ -81,7 +81,7 @@ pub fn Instruments() -> Element {
                 Some(Err(e)) => rsx! { ErrorBox { message: e.message.clone() } },
                 Some(Ok(items)) if items.is_empty() => rsx! {
                     p { class: "muted",
-                        if manage { "No instruments yet. Add the instruments of your ensemble above." } else { "No instruments yet." }
+                        if manage { {t::admin_instruments_none_manage()} } else { {t::admin_instruments_none()} }
                     }
                 },
                 Some(Ok(items)) => rsx! {
@@ -132,7 +132,7 @@ fn InstrumentRow(
     let delete = move |_| {
         let label = label.clone();
         async move {
-            if !confirm(&format!("Delete the instrument “{label}”?")) {
+            if !confirm(&t::admin_instruments_delete_confirm(&label)) {
                 return;
             }
             match api::call(Method::DELETE, &format!("/api/instruments/{id}")).await {
@@ -149,9 +149,9 @@ fn InstrumentRow(
         return rsx! {
             li { class: "row editing",
                 form { class: "inline grow", onsubmit: save,
-                    input { required: true, value: "{name}", "aria-label": "Instrument", oninput: move |e| name.set(e.value()) }
-                    SuggestInput { value: family, options: families.clone(), placeholder: "Family", label: "Family" }
-                    button { class: "primary", r#type: "submit", "Save" }
+                    input { required: true, value: "{name}", "aria-label": t::admin_instruments_name(), oninput: move |e| name.set(e.value()) }
+                    SuggestInput { value: family, options: families.clone(), placeholder: t::admin_instruments_family(), label: t::admin_instruments_family() }
+                    button { class: "primary", r#type: "submit", {t::common_save()} }
                     button {
                         r#type: "button",
                         onclick: move |_| {
@@ -159,7 +159,7 @@ fn InstrumentRow(
                             family.set(original.family.clone().unwrap_or_default());
                             editing.set(false);
                         },
-                        "Cancel"
+                        {t::common_cancel()}
                     }
                 }
             }
@@ -169,8 +169,8 @@ fn InstrumentRow(
         li { class: "row",
             span { class: "grow", strong { "{instrument.name}" } }
             if manage {
-                button { onclick: move |_| editing.set(true), "Edit" }
-                button { class: "danger", onclick: delete, "Delete" }
+                button { onclick: move |_| editing.set(true), {t::common_edit()} }
+                button { class: "danger", onclick: delete, {t::common_delete()} }
             }
         }
     }

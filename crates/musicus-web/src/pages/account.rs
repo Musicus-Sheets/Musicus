@@ -7,6 +7,7 @@ use crate::{
 use dioxus::prelude::*;
 use gloo_net::http::Method;
 use musicus_api::{ChangePassword, SessionInfo};
+use musicus_i18n::t;
 
 #[component]
 pub fn Account() -> Element {
@@ -22,7 +23,7 @@ pub fn Account() -> Element {
             Ok(()) => {
                 current.set(String::new());
                 new.set(String::new());
-                message.set(Some(Ok("Password changed. Your other devices were logged out.".into())));
+                message.set(Some(Ok(t::account_password_changed())));
                 sessions.restart();
             }
             Err(e) => message.set(Some(Err(e.message))),
@@ -31,31 +32,31 @@ pub fn Account() -> Element {
     let user = s.user.read().clone();
     rsx! {
         main { class: "narrow",
-            h1 { "Account" }
+            h1 { {t::account_title()} }
             if let Some(u) = user {
-                p { "{u.display_name} · username " strong { "{u.username}" } " · role {u.role.as_str()}" }
+                p { crate::ui::WithStrong { text: t::account_user_line(&u.display_name, crate::ui::MARK, u.role.as_str()), strong: u.username.clone() } }
             }
             section { class: "card",
-                h2 { "Change password" }
+                h2 { {t::account_change_password()} }
                 match message() {
                     Some(Ok(m)) => rsx! { p { class: "ok", "{m}" } },
                     Some(Err(m)) => rsx! { ErrorBox { message: m } },
                     None => rsx! {},
                 }
                 form { onsubmit: change,
-                    label { "Current password"
+                    label { {t::account_current_password()}
                         input { r#type: "password", autocomplete: "current-password", required: true,
                             value: "{current}", oninput: move |e| current.set(e.value()) }
                     }
-                    label { "New password (at least 8 characters)"
+                    label { {t::account_new_password()}
                         input { r#type: "password", autocomplete: "new-password", minlength: 8, required: true,
                             value: "{new}", oninput: move |e| new.set(e.value()) }
                     }
-                    button { class: "primary", r#type: "submit", "Change password" }
+                    button { class: "primary", r#type: "submit", {t::account_change_password()} }
                 }
             }
             section { class: "card",
-                h2 { "Logged-in devices" }
+                h2 { {t::account_devices()} }
                 match &*sessions.read() {
                     None => rsx! { Loading {} },
                     Some(Err(e)) => rsx! { ErrorBox { message: e.message.clone() } },
@@ -64,10 +65,10 @@ pub fn Account() -> Element {
                             for d in list.iter() {
                                 li { key: "{d.id}", class: "row",
                                     div {
-                                        div { "{d.user_agent.clone().unwrap_or_else(|| \"Unknown device\".into())}" }
+                                        div { {d.user_agent.clone().unwrap_or_else(t::account_unknown_device)} }
                                         div { class: "muted small",
-                                            "Last used {format_time(d.last_seen_at)}"
-                                            if d.current { " · this device" }
+                                            {t::account_last_used(format_time(d.last_seen_at))}
+                                            if d.current { {t::account_this_device()} }
                                         }
                                     }
                                     if !d.current {
@@ -80,7 +81,7 @@ pub fn Account() -> Element {
                                                     }
                                                 }
                                             },
-                                            "Log out"
+                                            {t::account_log_out_device()}
                                         }
                                     }
                                 }

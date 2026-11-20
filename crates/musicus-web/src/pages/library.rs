@@ -8,6 +8,7 @@ use crate::{
 };
 use dioxus::prelude::*;
 use musicus_api::{Instrument, Part, Score, naming};
+use musicus_i18n::t;
 use std::collections::HashMap;
 
 /// Builds the query string for `/api/scores`.
@@ -52,20 +53,20 @@ pub fn Library() -> Element {
     rsx! {
         main {
             div { class: "page-head",
-                h1 { "Library" }
+                h1 { {t::library_title()} }
                 div { class: "head-tools",
-                    input { class: "search", r#type: "search", placeholder: "Search title, composer, tag, number…",
+                    input { class: "search", r#type: "search", placeholder: t::library_search(),
                         value: "{query}", oninput: move |e| query.set(e.value()) }
-                    select { class: "sort", "aria-label": "Sort by",
-                        onchange: move |e| by_number.set(e.value() == "number"),
-                        option { value: "title", selected: !by_number(), "Sort by title" }
-                        option { value: "number", selected: by_number(), "Sort by archive number" }
+                    select { class: "sort", "aria-label": t::library_sort(),
+                        onchange: move |e| by_number.set(e.value() == "number"), // i18n-ok: option value
+                        option { value: "title", selected: !by_number(), {t::library_sort_title()} }
+                        option { value: "number", selected: by_number(), {t::library_sort_number()} }
                     }
                     if manage {
-                        Link { class: "button", to: Route::Imports {}, title: "Import a whole folder of PDF parts", "Import folder" }
+                        Link { class: "button", to: Route::Imports {}, title: t::library_import_folder_hint(), {t::library_import_folder()} }
                         Link { class: "button primary add", to: Route::NewScore {},
                             span { class: "plus", "aria-hidden": "true", "+" }
-                            "Add piece"
+                            {t::library_add_piece()}
                         }
                     }
                 }
@@ -76,11 +77,11 @@ pub fn Library() -> Element {
                 Some(Ok(list)) if list.is_empty() => rsx! {
                     p { class: "muted",
                         if !query().trim().is_empty() {
-                            "Nothing found."
+                            {t::library_nothing_found()}
                         } else if manage {
-                            "The library is empty. Add the first piece with “+ Add piece”."
+                            {t::library_empty_manage()}
                         } else {
-                            "No sheets have been shared with you yet."
+                            {t::library_empty()}
                         }
                     }
                 },
@@ -147,7 +148,7 @@ pub fn ScoreCard(
             div { class: "score-head",
                 div { class: "score-title",
                     if let Some(n) = &score.archive_number {
-                        span { class: "archive-number", title: "Archive number", "No. {n}" }
+                        span { class: "archive-number", title: t::library_archive_number(), {t::library_archive_number_badge(n)} }
                     }
                     h2 { "{score.title}" }
                     if let Some(sub) = &score.subtitle {
@@ -164,14 +165,14 @@ pub fn ScoreCard(
                             span { class: "tag", "{t}" }
                         }
                         if manage && score.parts.is_empty() {
-                            span { class: "tag warn", "no parts yet" }
+                            span { class: "tag warn", {t::library_no_parts()} }
                         } else if manage && missing > 0 {
-                            span { class: "tag warn", if missing == 1 { "1 part without PDF" } else { "{missing} parts without PDF" } }
+                            span { class: "tag warn", {t::library_parts_without_pdf(missing)} }
                         }
                     }
                 }
                 if manage {
-                    Link { class: "button edit", to: Route::EditScore { id: score.id }, title: "Edit this piece", span { class: "glyph", "aria-hidden": "true", "✎" } "Edit" }
+                    Link { class: "button edit", to: Route::EditScore { id: score.id }, title: t::library_edit_piece(), span { class: "glyph", "aria-hidden": "true", "✎" } {t::common_edit()} }
                 }
             }
             div { class: "parts",
@@ -192,7 +193,7 @@ fn PartTile(part: Part, names: HashMap<i64, String>, programme: Option<i64>, man
     rsx! {
         div { class: "part-cell",
             PartLink { part, names, programme }
-            Link { class: "button part-edit", to: Route::EditPart { id }, title: "Edit this part", span { class: "glyph", "aria-hidden": "true", "✎" } "Edit" }
+            Link { class: "button part-edit", to: Route::EditPart { id }, title: t::library_edit_part(), span { class: "glyph", "aria-hidden": "true", "✎" } {t::common_edit()} }
         }
     }
 }
@@ -208,7 +209,7 @@ fn PartLink(part: Part, names: HashMap<i64, String>, programme: Option<i64>) -> 
     };
     let Some(file) = part.file.clone() else {
         return rsx! {
-            div { class: "part disabled", title: "No file uploaded yet",
+            div { class: "part disabled", title: t::library_no_file(),
                 div { class: "thumb empty", "—" }
                 span { class: "part-label", {crate::names::part_name(&part)} }
                 if !instruments.is_empty() {
@@ -222,7 +223,7 @@ fn PartLink(part: Part, names: HashMap<i64, String>, programme: Option<i64>) -> 
             if file.has_thumbnail {
                 img { class: "thumb", src: api::thumbnail_url(&file.sha256), alt: "", loading: "lazy" }
             } else {
-                div { class: "thumb empty", "PDF" }
+                div { class: "thumb empty", "PDF" } // i18n-ok: file format name
             }
             span { class: "part-label", {crate::names::part_name(&part)} }
             if !instruments.is_empty() {
