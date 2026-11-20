@@ -21,9 +21,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent / "crates" / "musicus-web" / "src"
-# The English error texts of `errors.rs` (error codes, notes, pattern and ink errors) move to the
-# catalogue in a commit of their own; until then the module is skipped.
-EXCLUDE = {"errors.rs"}
+# Files skipped by the lint (none: every text, also every error text, is a catalogue message).
+EXCLUDE: set[str] = set()
 ALLOW = {"𝄞 Musicus", "Musicus", "×", "↑", "↓", "☰", "✓", "✎", "▸", "▾", "—", "–", "·", "…"}
 NON_TEXT = {
     "class", "id", "key", "r#type", "name", "value", "role", "href", "src", "to", "accept", "autocomplete",

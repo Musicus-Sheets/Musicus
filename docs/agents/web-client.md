@@ -12,7 +12,7 @@ preference ("en-GB"); nothing stored. Texts: every visible text, placeholder, ti
 with one bold argument: `ui::WithStrong {text: t::x(ui::MARK, …), strong}`. Fixed option lists carry message
 functions (`viewer::COLORS` etc. as `fn() -> String`; layout kinds `kind_name`; import presets
 `import::preset_name`, sources `source_text`). Error codes, notes, pattern and ink errors are rendered by `errors.rs`
-(English literals until they move to the catalogue). Dates/times: `locale::format_time`/`format_date` = `toLocaleString`/`toLocaleDateString` with
+from `errors.ftl` (a-error-codes). Dates/times: `locale::format_time`/`format_date` = `toLocaleString`/`toLocaleDateString` with
 `locale::intl_locale()` (was `"default"`); numbers `format_number` (`Intl.NumberFormat`); `format_size` "1.5 MB" /
 "12 KB" (number from `Intl`, unit from the catalogue). `ui` re-exports the three formatters.
 
