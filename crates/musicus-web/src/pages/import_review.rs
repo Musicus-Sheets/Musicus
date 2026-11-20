@@ -8,6 +8,7 @@
 use crate::{
     Route, api,
     bridge::{self, FolderFile},
+    errors::{code_text, note_text},
     pages::{
         forms::instrument_choices,
         import::{FolderPicker, Progress, ProgressView, Selection, level_class, level_counts, part_label, send_folder},
@@ -80,7 +81,7 @@ fn source_hint(source: Option<Source>, note: Option<&Note>) -> String {
         if !t.is_empty() {
             t.push_str(" — ");
         }
-        t.push_str(&n.message());
+        t.push_str(&note_text(n));
     }
     t
 }
@@ -183,7 +184,7 @@ pub fn ImportReview(id: Id) -> Element {
                     if done.committed.len() == 1 { "" } else { "s" }
                 );
                 for e in &done.errors {
-                    text.push_str(&format!(" Not imported: {}.", e.message));
+                    text.push_str(&format!(" Not imported: {}.", code_text(&e.code)));
                 }
                 message.set(Some(text));
                 reload += 1;
@@ -301,7 +302,7 @@ pub fn ImportReview(id: Id) -> Element {
                     summary { "{r.duplicates.len()} files skipped (duplicates)" }
                     ul { class: "small",
                         for f in r.duplicates.iter() {
-                            li { key: "{f.id}", span { class: "mono", "{f.path}" } " — " span { class: "muted", {f.message.clone().unwrap_or_default()} } }
+                            li { key: "{f.id}", span { class: "mono", "{f.path}" } " — " span { class: "muted", {f.problem.as_ref().map(code_text).unwrap_or_default()} } }
                         }
                     }
                 }
@@ -546,7 +547,7 @@ fn PieceField(
             span { class: "field-label", "{label}" }
             input { value: "{value}", disabled,
                 onchange: move |e: FormEvent| onsave.call(e.value()) }
-            if let Some(n) = &field.note { span { class: "note small", {n.message()} } }
+            if let Some(n) = &field.note { span { class: "note small", {note_text(n)} } }
         }
     }
 }
@@ -601,7 +602,7 @@ fn PieceRow(
                             Link { class: "button", to: Route::EditScore { id: s.id }, "Open piece" }
                         }
                     } else {
-                        button { class: "primary", disabled: !piece.can_commit(), title: piece.blocking_note().map(|n| n.message()).unwrap_or_default(),
+                        button { class: "primary", disabled: !piece.can_commit(), title: piece.blocking_note().map(|n| note_text(&n)).unwrap_or_default(),
                             onclick: move |_| oncommit.call(id), "Import piece" }
                     }
                 }
@@ -624,7 +625,7 @@ fn PieceRow(
                 }
             }
             for n in piece.notes.iter().filter(|n| !matches!(n, Note::ConfirmTarget(_))) {
-                p { class: "note small", {n.message()} }
+                p { class: "note small", {note_text(n)} }
             }
             table { class: "import-parts",
                 thead { tr { th { "Page 1" } th { "File" } th { "Instruments" } th { "Key" } th { "Voices" } th { "Name" } th { "Readable by" } th { "Import" } } }
@@ -702,7 +703,7 @@ fn PartRow(
                             let rest: Vec<InstrumentPick> = picks.iter().filter(|p| Some(*p) != gone.as_ref()).cloned().collect();
                             rsx! {
                                 span { key: "{i}", class: "ichip {level_class(ins.level)}",
-                                    title: "{source_text(ins.source)} {ins.note.as_ref().map(|n| n.message()).unwrap_or_default()}",
+                                    title: "{source_text(ins.source)} {ins.note.as_ref().map(|n| note_text(n)).unwrap_or_default()}",
                                     span { "{name}" }
                                     if !done {
                                         button { r#type: "button", class: "ichip-remove",
@@ -751,7 +752,7 @@ fn PartRow(
             td { class: "name", "data-label": "Name",
                 strong { {part_label(&part)} }
                 for n in part.notes.iter().filter(|n| !matches!(n, Note::NoReaders)) {
-                    div { class: "note small", {n.message()} }
+                    div { class: "note small", {note_text(n)} }
                 }
             }
             td { class: "small readers", "data-label": "Readable by",

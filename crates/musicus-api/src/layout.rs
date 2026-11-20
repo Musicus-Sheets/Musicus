@@ -13,6 +13,7 @@
 //! rendered, i.e. with the page rotation applied), like annotation
 //! coordinates, so the same numbers work at any zoom.
 
+use crate::error::ErrorCode;
 use serde::{Deserialize, Serialize};
 
 /// What a horizontal band of a page is.
@@ -105,22 +106,22 @@ pub struct PageCorrection {
 pub const MAX_CORRECTED_BANDS: usize = 60;
 
 impl PageCorrection {
-    /// Checks the invariants; returns a message for a 400 response.
-    pub fn validate(&self) -> Result<(), &'static str> {
+    /// Checks the invariants; the error is the code of the 400 response.
+    pub fn validate(&self) -> Result<(), ErrorCode> {
         if self.kinds.len() > MAX_CORRECTED_BANDS {
-            return Err("too many bands");
+            return Err(ErrorCode::CorrectionTooManyBands { max: MAX_CORRECTED_BANDS as u32 });
         }
         if self.full_page && self.kinds.is_empty() {
             return Ok(());
         }
         if self.bounds.len() != self.kinds.len() + 1 || self.kinds.is_empty() {
-            return Err("bounds must have one entry more than kinds");
+            return Err(ErrorCode::CorrectionBoundsCount);
         }
         if self.bounds.iter().any(|b| !b.is_finite() || !(0.0..=1.0).contains(b)) {
-            return Err("bounds must lie between 0 and 1");
+            return Err(ErrorCode::CorrectionBoundsRange);
         }
         if self.bounds.windows(2).any(|w| w[1] - w[0] < MIN_BAND_HEIGHT) {
-            return Err("bounds must increase");
+            return Err(ErrorCode::CorrectionBoundsOrder);
         }
         Ok(())
     }

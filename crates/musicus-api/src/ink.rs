@@ -170,23 +170,63 @@ pub struct TextNote {
     pub text: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Why a layer was rejected (sent as data in `ErrorCode::InvalidInk`; the
+/// client renders the text). JSON: `{"kind": snake_case, "detail": …}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum InkError {
     Empty,
     UnsupportedVersion(u8),
+    /// More than [`MAX_ENCODED_BYTES`].
     TooLarge,
-    Malformed(String),
-    LimitExceeded(&'static str),
+    /// Not decodable (postcard).
+    Malformed,
+    DuplicateId(u64),
+    /// `pressure.len() != deltas.len() + 1`.
+    PressureMismatch,
+    LimitExceeded(InkLimit),
 }
 
+/// The limit an [`InkError::LimitExceeded`] layer breaks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InkLimit {
+    /// [`MAX_OBJECTS_PER_PAGE`]
+    ObjectsPerPage,
+    /// [`MAX_POINTS_PER_STROKE`]
+    PointsPerStroke,
+    /// [`MAX_TEXT_CHARS`]
+    TextLength,
+}
+
+impl InkLimit {
+    pub fn max(self) -> usize {
+        match self {
+            InkLimit::ObjectsPerPage => MAX_OBJECTS_PER_PAGE,
+            InkLimit::PointsPerStroke => MAX_POINTS_PER_STROKE,
+            InkLimit::TextLength => MAX_TEXT_CHARS,
+        }
+    }
+}
+
+/// English, for API users and logs.
 impl std::fmt::Display for InkError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             InkError::Empty => write!(f, "empty annotation layer"),
             InkError::UnsupportedVersion(v) => write!(f, "unsupported annotation format version {v}"),
             InkError::TooLarge => write!(f, "annotation layer larger than {MAX_ENCODED_BYTES} bytes"),
-            InkError::Malformed(e) => write!(f, "malformed annotation layer: {e}"),
-            InkError::LimitExceeded(what) => write!(f, "annotation layer exceeds the limit for {what}"),
+            InkError::Malformed => write!(f, "malformed annotation layer"),
+            InkError::DuplicateId(id) => write!(f, "malformed annotation layer: duplicate object id {id}"),
+            InkError::PressureMismatch => write!(f, "malformed annotation layer: pressure and point counts differ"),
+            InkError::LimitExceeded(l) => {
+                let what = match l {
+                    InkLimit::ObjectsPerPage => "objects per page",
+                    InkLimit::PointsPerStroke => "points per stroke",
+                    InkLimit::TextLength => "text length",
+                };
+                write!(f, "annotation layer exceeds the limit for {what} ({})", l.max())
+            }
         }
     }
 }
@@ -209,31 +249,31 @@ pub fn decode(bytes: &[u8]) -> Result<PageLayer, InkError> {
     if bytes.len() > MAX_ENCODED_BYTES {
         return Err(InkError::TooLarge);
     }
-    let layer: PageLayer = postcard::from_bytes(body).map_err(|e| InkError::Malformed(e.to_string()))?;
+    let layer: PageLayer = postcard::from_bytes(body).map_err(|_| InkError::Malformed)?;
     validate(&layer)?;
     Ok(layer)
 }
 
 fn validate(layer: &PageLayer) -> Result<(), InkError> {
     if layer.objects.len() > MAX_OBJECTS_PER_PAGE {
-        return Err(InkError::LimitExceeded("objects per page"));
+        return Err(InkError::LimitExceeded(InkLimit::ObjectsPerPage));
     }
     let mut ids = HashSet::with_capacity(layer.objects.len());
     for object in &layer.objects {
         if !ids.insert(object.id()) {
-            return Err(InkError::Malformed(format!("duplicate object id {}", object.id())));
+            return Err(InkError::DuplicateId(object.id()));
         }
         match object {
             InkObject::Stroke(s) => {
                 if s.deltas.len() + 1 > MAX_POINTS_PER_STROKE {
-                    return Err(InkError::LimitExceeded("points per stroke"));
+                    return Err(InkError::LimitExceeded(InkLimit::PointsPerStroke));
                 }
                 if s.pressure.len() != s.deltas.len() + 1 {
-                    return Err(InkError::Malformed("pressure and point counts differ".into()));
+                    return Err(InkError::PressureMismatch);
                 }
             }
             InkObject::Text(t) if t.text.chars().count() > MAX_TEXT_CHARS => {
-                return Err(InkError::LimitExceeded("text length"));
+                return Err(InkError::LimitExceeded(InkLimit::TextLength));
             }
             _ => {}
         }
@@ -328,15 +368,15 @@ mod tests {
     fn decode_rejects_bad_input() {
         assert_eq!(decode(&[]), Err(InkError::Empty));
         assert_eq!(decode(&[9, 0]), Err(InkError::UnsupportedVersion(9)));
-        assert!(matches!(decode(&[FORMAT_VERSION, 0xff, 0xff]), Err(InkError::Malformed(_))));
+        assert_eq!(decode(&[FORMAT_VERSION, 0xff, 0xff]), Err(InkError::Malformed));
 
         let dup = PageLayer { objects: vec![stroke(1, 2), stroke(1, 3)] };
-        assert!(matches!(decode(&encode(&dup)), Err(InkError::Malformed(_))));
+        assert_eq!(decode(&encode(&dup)), Err(InkError::DuplicateId(1)));
 
         let mut bad = Stroke::from_points(1, Tool::Pen, 0, 1, &[(0, 0, 0), (1, 1, 1)]);
         bad.pressure.pop();
         let layer = PageLayer { objects: vec![InkObject::Stroke(bad)] };
-        assert!(matches!(decode(&encode(&layer)), Err(InkError::Malformed(_))));
+        assert_eq!(decode(&encode(&layer)), Err(InkError::PressureMismatch));
     }
 
     #[test]

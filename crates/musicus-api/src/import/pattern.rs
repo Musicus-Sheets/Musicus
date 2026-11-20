@@ -85,16 +85,23 @@ pub struct Pattern {
     alternatives: Vec<Vec<Atom>>,
 }
 
-/// Why a pattern cannot be used (shown under the pattern field).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Why a pattern cannot be used (shown under the pattern field; the client
+/// renders the text). JSON: `{"kind": snake_case, "detail": …}`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum PatternError {
     UnknownPlaceholder(String),
     Unbalanced,
     MissingPart,
     MissingTitleOrNumber,
-    Twice(&'static str),
+    /// The placeholder name (`title`, …) that appears more than once.
+    Twice(String),
+    /// More than [`MAX_OPTIONALS`] groups.
     TooManyOptionals,
 }
+
+/// Upper limit of optional groups `[…]` in a pattern.
+pub const MAX_OPTIONALS: usize = 6;
 
 impl std::fmt::Display for PatternError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -107,7 +114,7 @@ impl std::fmt::Display for PatternError {
             Self::MissingPart => f.write_str("the pattern needs {part}"),
             Self::MissingTitleOrNumber => f.write_str("the pattern needs {title} or {number}"),
             Self::Twice(p) => write!(f, "{{{p}}} may appear only once"),
-            Self::TooManyOptionals => f.write_str("at most 6 optional groups [ ]"),
+            Self::TooManyOptionals => write!(f, "at most {MAX_OPTIONALS} optional groups [ ]"),
         }
     }
 }
@@ -257,16 +264,19 @@ impl Pattern {
             _ => {}
         });
         if let Some(p) = twice {
-            return Err(PatternError::Twice(match p {
-                Placeholder::Number => "number",
-                Placeholder::Title => "title",
-                Placeholder::Composer => "composer",
-                Placeholder::Arranger => "arranger",
-                Placeholder::Genre => "genre",
-                _ => "part",
-            }));
+            return Err(PatternError::Twice(
+                match p {
+                    Placeholder::Number => "number",
+                    Placeholder::Title => "title",
+                    Placeholder::Composer => "composer",
+                    Placeholder::Arranger => "arranger",
+                    Placeholder::Genre => "genre",
+                    _ => "part",
+                }
+                .into(),
+            ));
         }
-        if optionals > 6 {
+        if optionals > MAX_OPTIONALS {
             return Err(PatternError::TooManyOptionals);
         }
         if !seen.contains(&Placeholder::Part) {
@@ -509,7 +519,7 @@ mod tests {
         assert_eq!(Pattern::parse("[{title}/{part}"), Err(PatternError::Unbalanced));
         assert_eq!(Pattern::parse("{title}"), Err(PatternError::MissingPart));
         assert_eq!(Pattern::parse("{composer}/{part}"), Err(PatternError::MissingTitleOrNumber));
-        assert_eq!(Pattern::parse("{title}/{title} {part}"), Err(PatternError::Twice("title")));
+        assert_eq!(Pattern::parse("{title}/{title} {part}"), Err(PatternError::Twice("title".into())));
         assert!(Pattern::parse("{number}/{part}").is_ok());
         for p in PRESETS {
             let pattern = Pattern::parse(p.pattern).unwrap();

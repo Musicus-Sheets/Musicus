@@ -184,7 +184,9 @@ async fn load_page(store: SharedStore, key: Key) -> Result<(), String> {
         return Ok(());
     }
     let (server, revision) = match api::get_page(key.0, key.1 as i64).await.map_err(|e| e.message)? {
-        PageBytes::Found { bytes, revision } => (model::decode(&bytes).map_err(|e| e.to_string())?, revision),
+        PageBytes::Found { bytes, revision } => {
+            (model::decode(&bytes).map_err(|e| crate::errors::ink_error_text(&e))?, revision)
+        }
         PageBytes::Missing => (PageLayer::default(), 0),
     };
     let mut s = store.borrow_mut();
@@ -246,7 +248,7 @@ async fn save_page(store: SharedStore, key: Key) -> Result<(), String> {
                 st.saving = false;
                 let (server_layer, server_revision) = match server? {
                     PageBytes::Found { bytes, revision } => {
-                        (model::decode(&bytes).map_err(|e| e.to_string())?, revision)
+                        (model::decode(&bytes).map_err(|e| crate::errors::ink_error_text(&e))?, revision)
                     }
                     PageBytes::Missing => (PageLayer::default(), 0),
                 };

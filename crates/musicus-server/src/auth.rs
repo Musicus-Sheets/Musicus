@@ -11,6 +11,7 @@ use axum::{
     extract::{ConnectInfo, FromRequestParts},
     http::{HeaderMap, HeaderValue, Method, header, request::Parts},
 };
+use musicus_api::ErrorCode;
 use musicus_api::{CSRF_HEADER, Id, Role, SESSION_COOKIE};
 use sha2::{Digest, Sha256};
 use std::{
@@ -26,10 +27,10 @@ pub const MAX_PASSWORD_CHARS: usize = 256;
 pub fn check_password_policy(password: &str) -> ApiResult<()> {
     let n = password.chars().count();
     if n < MIN_PASSWORD_CHARS {
-        return Err(AppError::BadRequest(format!("the password needs at least {MIN_PASSWORD_CHARS} characters")));
+        return Err(AppError::BadRequest(ErrorCode::PasswordTooShort { min: MIN_PASSWORD_CHARS as u32 }));
     }
     if n > MAX_PASSWORD_CHARS {
-        return Err(AppError::BadRequest(format!("the password may have at most {MAX_PASSWORD_CHARS} characters")));
+        return Err(AppError::BadRequest(ErrorCode::PasswordTooLong { max: MAX_PASSWORD_CHARS as u32 }));
     }
     Ok(())
 }
@@ -145,11 +146,11 @@ impl AuthUser {
     }
 
     pub fn require_librarian(&self) -> ApiResult<()> {
-        if self.is_librarian() { Ok(()) } else { Err(AppError::Forbidden("only librarians may do this")) }
+        if self.is_librarian() { Ok(()) } else { Err(AppError::Forbidden(ErrorCode::LibrarianOnly)) }
     }
 
     pub fn require_admin(&self) -> ApiResult<()> {
-        if self.role.is_admin() { Ok(()) } else { Err(AppError::Forbidden("only admins may do this")) }
+        if self.role.is_admin() { Ok(()) } else { Err(AppError::Forbidden(ErrorCode::AdminOnly)) }
     }
 }
 
@@ -163,7 +164,7 @@ impl FromRequestParts<AppState> for AuthUser {
         };
         let safe = matches!(parts.method, Method::GET | Method::HEAD | Method::OPTIONS);
         if via_cookie && !safe && !parts.headers.contains_key(CSRF_HEADER) {
-            return Err(AppError::Forbidden("missing CSRF header"));
+            return Err(AppError::Forbidden(ErrorCode::CsrfMissing));
         }
         let now = now();
         let row: Option<(Id, Id, i64, String)> = sqlx::query_as(

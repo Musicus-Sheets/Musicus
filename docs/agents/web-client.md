@@ -40,7 +40,7 @@ Server serves `index.html` for any non-`/api` path, so deep links work.
 
 ## HTTP (`api.rs`)
 
-`builder()` always adds `x-musicus-csrf: 1` (INV-12). Helpers: `get`, `send/post/put/patch` (JSON), `call` (no body, expects 2xx), `call_json`, `upload` (raw bytes + content type). Errors → `ApiErr {status, message}` (message from `ApiError`, capitalised; status 0 = network). Ink: `get_page(set, page)` → `PageBytes::Found{bytes, revision from ETag}` | `Missing` (204); `put_page(set, page, expected_rev, bytes)` → `SaveOutcome::Saved(rev)` | `Conflict` (409). URLs: `file_url(sha)`, `thumbnail_url(sha)`.
+`builder()` always adds `x-musicus-csrf: 1` (INV-12). Helpers: `get`, `send/post/put/patch` (JSON), `call` (no body, expects 2xx), `call_json`, `upload` (raw bytes + content type). Errors → `ApiErr {status, code: Option<ErrorCode>, message}`; `message` comes from `errors.rs` (`api_error_text`: the client's text for the code; for `unknown` or an unparseable body the server's English `message`; status 0 = network, `network_text`). The server sends no prose (a-error-codes); import notes (`note_text`), pattern errors (`pattern_error_text`), ink errors (`ink_error_text`), staged-file problems and commit errors (`code_text`) are rendered there too. English only for now; the later catalogue replaces the arms of these matches. Ink: `get_page(set, page)` → `PageBytes::Found{bytes, revision from ETag}` | `Missing` (204); `put_page(set, page, expected_rev, bytes)` → `SaveOutcome::Saved(rev)` | `Conflict` (409). URLs: `file_url(sha)`, `thumbnail_url(sha)`.
 
 ## Bridge (`bridge.rs` ↔ `js/bridge.js`)
 

@@ -83,7 +83,8 @@ pub enum Source {
     Ocr,
 }
 
-/// Why a value is yellow or red; `message()` is the text the review shows.
+/// Why a value is yellow or red. The server sends it as data; the client
+/// renders the text (a-error-codes, R-I18N-004).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum Note {
@@ -105,45 +106,39 @@ pub enum Note {
     TargetGone,
     NoParts,
     NotUploaded,
-    UploadFailed(String),
+    /// The content was rejected; why (`StagedFile::problem`).
+    UploadFailed(Option<Box<crate::error::ErrorCode>>),
     ScoreWithOneStaff,
     ManyStaves(u32),
     NoReaders,
 }
 
 impl Note {
-    pub fn message(&self) -> String {
+    /// The serialised `kind` (stable, for logs and English API messages).
+    pub fn kind(&self) -> &'static str {
         match self {
-            Self::AmbiguousKey(k) => {
-                format!(
-                    "\"{k}\" is a key name in German only (B = B♭, Es = E♭, H = B♮): choose the key, or set the batch language to German"
-                )
-            }
-            Self::UnknownKey(k) => format!("\"{k}\" is not a known key"),
-            Self::InvalidKey(k) => format!("unknown key \"{k}\""),
-            Self::TwoKeys(k) => format!("several keys in the name: {k}"),
-            Self::SeveralVoices(v) => {
-                format!("numbers without a separator in the name ({v}): check the voices (also a copy or page number?)")
-            }
-            Self::Abbreviation(t) => format!("\"{t}\" is an abbreviation: check the instrument"),
-            Self::Guessed(t) => format!("\"{t}\" was guessed from the beginning of the word: check the instrument"),
-            Self::AmbiguousInstrument(t) => format!("\"{t}\" can mean several instruments: check it"),
-            Self::UnknownInstrument(t) => format!("unknown instrument \"{t}\": choose an instrument or create it"),
-            Self::NoInstrument => "no instrument: nobody could get this part through an instrument grant".into(),
-            Self::Unrecognised(t) => format!("not understood: \"{t}\""),
-            Self::Contradictory(v) => format!("the files of this piece disagree: {v}"),
-            Self::TitleMissing => "the file names contain no title: type it".into(),
-            Self::SimilarTitle(t) => format!("a piece with a similar title exists: {t}"),
-            Self::ConfirmTarget(t) => {
-                format!("this may be the existing piece {t}: add the parts to it or import as a new piece")
-            }
-            Self::TargetGone => "the chosen existing piece was deleted".into(),
-            Self::NoParts => "no parts to import".into(),
-            Self::NotUploaded => "file not uploaded yet: select the folder again to continue".into(),
-            Self::UploadFailed(m) => format!("upload failed: {m}"),
-            Self::ScoreWithOneStaff => "named as full score, but its systems have only one staff".into(),
-            Self::ManyStaves(n) => format!("a single part, but its systems have {n} staves: a score?"),
-            Self::NoReaders => "no group can read this part yet".into(),
+            Self::AmbiguousKey(_) => "ambiguous_key",
+            Self::UnknownKey(_) => "unknown_key",
+            Self::InvalidKey(_) => "invalid_key",
+            Self::TwoKeys(_) => "two_keys",
+            Self::SeveralVoices(_) => "several_voices",
+            Self::Abbreviation(_) => "abbreviation",
+            Self::Guessed(_) => "guessed",
+            Self::AmbiguousInstrument(_) => "ambiguous_instrument",
+            Self::UnknownInstrument(_) => "unknown_instrument",
+            Self::NoInstrument => "no_instrument",
+            Self::Unrecognised(_) => "unrecognised",
+            Self::Contradictory(_) => "contradictory",
+            Self::TitleMissing => "title_missing",
+            Self::SimilarTitle(_) => "similar_title",
+            Self::ConfirmTarget(_) => "confirm_target",
+            Self::TargetGone => "target_gone",
+            Self::NoParts => "no_parts",
+            Self::NotUploaded => "not_uploaded",
+            Self::UploadFailed(_) => "upload_failed",
+            Self::ScoreWithOneStaff => "score_with_one_staff",
+            Self::ManyStaves(_) => "many_staves",
+            Self::NoReaders => "no_readers",
         }
     }
 }
@@ -282,8 +277,10 @@ mod tests {
     }
 
     #[test]
-    fn notes_have_messages() {
-        assert!(Note::AmbiguousKey("B".into()).message().contains("German"));
+    fn notes_serialise_as_kind_and_detail() {
+        let failed = Note::UploadFailed(Some(Box::new(crate::ErrorCode::NotPdf)));
+        assert_eq!(serde_json::to_string(&failed).unwrap(), r#"{"kind":"upload_failed","detail":{"code":"not_pdf"}}"#);
+        assert_eq!(failed.kind(), "upload_failed");
         let json = serde_json::to_string(&Note::ManyStaves(5)).unwrap();
         assert_eq!(json, r#"{"kind":"many_staves","detail":5}"#);
         assert_eq!(serde_json::to_string(&Note::TitleMissing).unwrap(), r#"{"kind":"title_missing"}"#);

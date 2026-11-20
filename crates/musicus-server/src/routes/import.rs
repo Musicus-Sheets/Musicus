@@ -17,7 +17,7 @@ use crate::{
     auth::AuthUser,
     blobs::{UploadError, is_sha256_hex},
     db::{json_ids, now},
-    error::{ApiResult, AppError, required},
+    error::{ApiResult, AppError, required, too_long},
     part_index, part_visible,
     routes::{files::serve_blob, library},
     state::{App, AppState},
@@ -45,6 +45,7 @@ use musicus_api::{
     },
     naming,
 };
+use musicus_api::{ErrorCode, Field, import::pattern::PatternError};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 
@@ -69,7 +70,7 @@ impl BatchRow {
     }
 
     fn pattern(&self) -> ApiResult<Pattern> {
-        Pattern::parse(&self.pattern).map_err(|e| AppError::BadRequest(e.to_string()))
+        Pattern::parse(&self.pattern).map_err(invalid_pattern)
     }
 }
 
@@ -129,8 +130,8 @@ pub async fn list_batches(State(app): State<AppState>, user: AuthUser) -> ApiRes
 }
 
 fn check_pattern(pattern: &str) -> ApiResult<String> {
-    let pattern = required("pattern", pattern, 300)?;
-    Pattern::parse(&pattern).map_err(|e| AppError::BadRequest(e.to_string()))?;
+    let pattern = required(Field::Pattern, pattern, 300)?;
+    Pattern::parse(&pattern).map_err(invalid_pattern)?;
     Ok(pattern)
 }
 
@@ -140,7 +141,7 @@ pub async fn create_batch(
     Json(input): Json<NewImportBatch>,
 ) -> ApiResult<Json<ImportBatch>> {
     user.require_librarian()?;
-    let name = required("name", &input.name, 200)?;
+    let name = required(Field::Name, &input.name, 200)?;
     let pattern = check_pattern(&input.pattern)?;
     let id: Id = sqlx::query_scalar(
         "INSERT INTO import_batches (name, pattern, language, created_by, created_at, updated_at)
@@ -167,7 +168,7 @@ pub async fn update_batch(
     user.require_librarian()?;
     let row = batch_row(&app, id).await?;
     let name = match &input.name {
-        Some(n) => required("name", n, 200)?,
+        Some(n) => required(Field::Name, n, 200)?,
         None => row.name.clone(),
     };
     let pattern_text = match &input.pattern {
@@ -175,7 +176,7 @@ pub async fn update_batch(
         None => row.pattern.clone(),
     };
     let language = input.language.unwrap_or(row.language());
-    let pattern = Pattern::parse(&pattern_text).map_err(|e| AppError::BadRequest(e.to_string()))?;
+    let pattern = Pattern::parse(&pattern_text).map_err(invalid_pattern)?;
     let mut tx = app.db.write.begin().await?;
     sqlx::query("UPDATE import_batches SET name = ?2, pattern = ?3, language = ?4, updated_at = ?5 WHERE id = ?1")
         .bind(id)
@@ -211,12 +212,25 @@ fn check_path(path: &str) -> ApiResult<String> {
         || path.split('/').any(|s| s.is_empty() || s == "." || s == "..")
         || path.chars().any(char::is_control)
     {
-        return Err(AppError::BadRequest(format!("invalid path \"{path}\"")));
+        return Err(AppError::BadRequest(ErrorCode::InvalidPath { path }));
     }
     if !is_pdf_name(&path) {
-        return Err(AppError::BadRequest(format!("not a PDF file name: \"{path}\"")));
+        return Err(AppError::BadRequest(ErrorCode::NotPdfName { path }));
     }
     Ok(path)
+}
+
+fn invalid_pattern(reason: PatternError) -> AppError {
+    AppError::BadRequest(ErrorCode::InvalidPattern { reason })
+}
+
+/// `import_files.problem` holds the JSON of an [`ErrorCode`].
+fn problem_json(code: &ErrorCode) -> String {
+    serde_json::to_string(code).expect("error codes serialise")
+}
+
+fn parse_problem(json: &str) -> ErrorCode {
+    serde_json::from_str(json).unwrap_or(ErrorCode::Unknown)
 }
 
 /// Registers the file list of the selected folder (again, after an
@@ -234,7 +248,7 @@ pub async fn register_files(
     let row = batch_row(&app, batch_id).await?;
     let pattern = row.pattern()?;
     if input.files.len() > MAX_FILES {
-        return Err(AppError::BadRequest(format!("at most {MAX_FILES} files per request")));
+        return Err(AppError::BadRequest(ErrorCode::TooManyFiles { max: MAX_FILES as u32 }));
     }
     let mut files = Vec::with_capacity(input.files.len());
     let mut seen = HashSet::new();
@@ -242,7 +256,7 @@ pub async fn register_files(
         let path = check_path(&f.path)?;
         let sha = f.sha256.trim().to_ascii_lowercase();
         if !is_sha256_hex(&sha) || f.size_bytes < 0 {
-            return Err(AppError::BadRequest(format!("invalid hash or size for \"{path}\"")));
+            return Err(AppError::BadRequest(ErrorCode::InvalidFileHash { path }));
         }
         if seen.insert(path.clone()) {
             files.push((path, f.size_bytes, sha));
@@ -292,16 +306,16 @@ pub async fn register_files(
         .await?;
         let stored: Option<Id> =
             sqlx::query_scalar("SELECT id FROM files WHERE sha256 = ?1").bind(sha).fetch_optional(&mut *tx).await?;
-        let (state, file_id, message) = match (in_library, in_batch, stored) {
-            (Some(title), _, _) => (FileState::Duplicate, None, Some(format!("already in the library: {title}"))),
-            (None, Some(other), _) => (FileState::Duplicate, None, Some(format!("same file as {other}"))),
+        let (state, file_id, problem) = match (in_library, in_batch, stored) {
+            (Some(title), _, _) => (FileState::Duplicate, None, Some(ErrorCode::DuplicateInLibrary { title })),
+            (None, Some(path), _) => (FileState::Duplicate, None, Some(ErrorCode::DuplicateInBatch { path })),
             (None, None, Some(id)) => (FileState::Uploaded, Some(id), None),
             (None, None, None) => (FileState::Pending, None, None),
         };
         sqlx::query(
-            "INSERT INTO import_files (batch_id, path, size_bytes, sha256, state, file_id, message)
+            "INSERT INTO import_files (batch_id, path, size_bytes, sha256, state, file_id, problem)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-             ON CONFLICT (batch_id, path) DO UPDATE SET size_bytes = ?3, sha256 = ?4, state = ?5, file_id = ?6, message = ?7",
+             ON CONFLICT (batch_id, path) DO UPDATE SET size_bytes = ?3, sha256 = ?4, state = ?5, file_id = ?6, problem = ?7",
         )
         .bind(batch_id)
         .bind(path)
@@ -309,7 +323,7 @@ pub async fn register_files(
         .bind(sha)
         .bind(state.as_str())
         .bind(file_id)
-        .bind(message)
+        .bind(problem.as_ref().map(problem_json))
         .execute(&mut *tx)
         .await?;
     }
@@ -453,7 +467,8 @@ struct FileRow {
     page_count: Option<i64>,
     has_thumbnail: Option<bool>,
     staves: Option<i64>,
-    message: Option<String>,
+    /// JSON of an [`ErrorCode`] (migration 0008).
+    problem: Option<String>,
     matched: bool,
 }
 
@@ -468,7 +483,7 @@ impl From<FileRow> for StagedFile {
             page_count: r.page_count,
             has_thumbnail: r.has_thumbnail.unwrap_or(false),
             staves: r.staves.and_then(|n| u32::try_from(n).ok()),
-            message: r.message,
+            problem: r.problem.as_deref().map(parse_problem),
         }
     }
 }
@@ -478,7 +493,7 @@ async fn staged_files(app: &App, batch_id: Id, file_id: Option<Id>) -> ApiResult
         "SELECT f.id, f.path, f.size_bytes, f.sha256, f.state, fl.page_count,
                 fl.thumbnail_sha256 IS NOT NULL AS has_thumbnail, ",
         staves!(),
-        " AS staves, f.message, EXISTS (SELECT 1 FROM import_items i WHERE i.file_id = f.id) AS matched
+        " AS staves, f.problem, EXISTS (SELECT 1 FROM import_items i WHERE i.file_id = f.id) AS matched
          FROM import_files f LEFT JOIN files fl ON fl.id = f.file_id
          WHERE f.batch_id = ?1 AND (?2 IS NULL OR f.id = ?2) ORDER BY f.path"
     ))
@@ -611,7 +626,7 @@ async fn review(
                 page_count: file.page_count,
                 has_thumbnail: file.has_thumbnail,
                 staves: file.staves,
-                message: file.message.clone(),
+                problem: file.problem.clone(),
                 matched: true,
             });
             guesses.push((part, parse(&part.proposal)?, parse(&part.overrides)?, staged));
@@ -669,14 +684,15 @@ pub async fn upload_content(
     if state == "pending" || state == "failed" {
         let pending = app.blobs.receive(body, app.settings.max_upload_bytes).await.map_err(|e| match e {
             UploadError::TooLarge(limit) => AppError::PayloadTooLarge(limit),
-            UploadError::Body(e) => AppError::BadRequest(format!("upload interrupted: {e}")),
+            UploadError::Body(e) => {
+                tracing::debug!(%e, "upload interrupted");
+                AppError::BadRequest(ErrorCode::UploadInterrupted)
+            }
             UploadError::Io(e) => AppError::internal(e),
         })?;
         let result = async {
             if pending.sha256 != expected {
-                return Err(AppError::Unprocessable(
-                    "the file changed after it was checked; select the folder again".into(),
-                ));
+                return Err(AppError::Unprocessable(ErrorCode::FileChanged));
             }
             let mime = library::sniff_pending(&pending).await?;
             library::store_file(&app, &pending, mime).await
@@ -685,7 +701,7 @@ pub async fn upload_content(
         match result {
             Ok(file_id) => {
                 sqlx::query(
-                    "UPDATE import_files SET file_id = ?2, message = NULL,
+                    "UPDATE import_files SET file_id = ?2, problem = NULL,
                        state = CASE WHEN EXISTS (SELECT 1 FROM part_files WHERE file_id = ?2) THEN 'duplicate' ELSE 'uploaded' END
                      WHERE id = ?1",
                 )
@@ -696,9 +712,9 @@ pub async fn upload_content(
             }
             Err(e) => {
                 app.blobs.discard(&pending).await;
-                sqlx::query("UPDATE import_files SET state = 'failed', message = ?2 WHERE id = ?1")
+                sqlx::query("UPDATE import_files SET state = 'failed', problem = ?2 WHERE id = ?1")
                     .bind(id)
-                    .bind(e.to_string())
+                    .bind(problem_json(&e.code()))
                     .execute(&app.db.write)
                     .await?;
                 return Err(e);
@@ -751,7 +767,7 @@ pub async fn update_items(
 ) -> ApiResult<Json<Vec<ReviewPiece>>> {
     user.require_librarian()?;
     if input.ids.is_empty() || input.ids.len() > MAX_ITEMS {
-        return Err(AppError::BadRequest(format!("1 to {MAX_ITEMS} items")));
+        return Err(AppError::BadRequest(ErrorCode::ItemCount { max: MAX_ITEMS as u32 }));
     }
     let rows: Vec<(Id, Id, String, Option<Id>, String, String)> = sqlx::query_as(
         "SELECT id, batch_id, kind, piece_id, overrides, state FROM import_items WHERE id IN (SELECT value FROM json_each(?1))",
@@ -764,17 +780,17 @@ pub async fn update_items(
         None => return Err(AppError::NotFound),
     };
     if rows.len() != input.ids.iter().collect::<HashSet<_>>().len() || rows.iter().any(|r| r.1 != batch_id) {
-        return Err(AppError::BadRequest("unknown items, or items of several batches".into()));
+        return Err(AppError::BadRequest(ErrorCode::UnknownItems));
     }
     if rows.iter().any(|r| r.5 == "committed") {
-        return Err(AppError::Conflict("already imported; undo the batch to change it".into()));
+        return Err(AppError::Conflict(ErrorCode::ImportCommitted));
     }
     // Validate the changes before storing them.
     if let Some(PieceOverrides { target: Some(Target::Existing(score)), .. }) = &input.piece {
         let exists: Option<i64> =
             sqlx::query_scalar("SELECT 1 FROM scores WHERE id = ?1").bind(score).fetch_optional(&app.db.read).await?;
         if exists.is_none() {
-            return Err(AppError::BadRequest("unknown piece".into()));
+            return Err(AppError::BadRequest(ErrorCode::UnknownScore));
         }
     }
     let mut part_changes = input.part.clone();
@@ -782,6 +798,9 @@ pub async fn update_items(
         if let Some(picks) = &p.instruments {
             // Instruments of the library must exist; kept words are matched
             // against the file name when the review is built (a-import-instruments).
+            if picks.len() > MAX_PART_INSTRUMENTS {
+                return Err(AppError::BadRequest(ErrorCode::TooManyInstruments { max: MAX_PART_INSTRUMENTS as u32 }));
+            }
             let ids: Vec<Id> = picks
                 .iter()
                 .filter_map(|x| match x {
@@ -794,41 +813,47 @@ pub async fn update_items(
                     .bind(json_ids(&ids))
                     .fetch_one(&app.db.read)
                     .await?;
-            let long_word = picks.iter().any(|x| matches!(x, InstrumentPick::Word(w) if w.chars().count() > 120));
-            if known as usize != ids.iter().collect::<HashSet<_>>().len()
-                || picks.len() > MAX_PART_INSTRUMENTS
-                || long_word
-            {
-                return Err(AppError::BadRequest(format!(
-                    "unknown instruments (at most {MAX_PART_INSTRUMENTS} per part)"
-                )));
+            if known as usize != ids.iter().collect::<HashSet<_>>().len() {
+                return Err(AppError::BadRequest(ErrorCode::UnknownInstruments));
+            }
+            if picks.iter().any(|x| matches!(x, InstrumentPick::Word(w) if w.chars().count() > 120)) {
+                return Err(too_long(Field::InstrumentWord, 120));
             }
         }
         if let Some(k) = p.key.as_ref().map(|k| k.trim().to_owned()).filter(|k| !k.is_empty()) {
-            let code = naming::normalize_key(&k).ok_or_else(|| AppError::BadRequest(format!("unknown key \"{k}\"")))?;
+            let code = naming::normalize_key(&k)
+                .ok_or_else(|| AppError::BadRequest(ErrorCode::UnknownKey { key: k.clone() }))?;
             p.key = Some(code.to_owned());
         }
         if let Some(v) = &p.voices {
             let v = naming::clean_voices(v);
-            if v.len() > naming::MAX_VOICES || v.iter().any(|x| x.chars().count() > naming::MAX_VOICE_CHARS) {
-                return Err(AppError::BadRequest(format!(
-                    "at most {} voices of at most {} characters",
-                    naming::MAX_VOICES,
-                    naming::MAX_VOICE_CHARS
-                )));
+            if v.len() > naming::MAX_VOICES {
+                return Err(AppError::BadRequest(ErrorCode::TooManyVoices { max: naming::MAX_VOICES as u32 }));
+            }
+            if let Some(x) = v.iter().find(|x| x.chars().count() > naming::MAX_VOICE_CHARS) {
+                return Err(AppError::BadRequest(ErrorCode::VoiceTooLong {
+                    voice: x.clone(),
+                    max: naming::MAX_VOICE_CHARS as u32,
+                }));
             }
             p.voices = Some(v);
         }
         if p.label.as_ref().is_some_and(|v| v.trim().chars().count() > 120) {
-            return Err(AppError::BadRequest("custom name at most 120 characters".into()));
+            return Err(too_long(Field::Label, 120));
         }
     }
     if let Some(p) = &input.piece {
-        let too_long = [(&p.title, 200), (&p.composer, 200), (&p.arranger, 200), (&p.genre, 60), (&p.number, 40)]
-            .iter()
-            .any(|(v, max)| v.as_ref().is_some_and(|v| v.trim().chars().count() > *max));
-        if too_long {
-            return Err(AppError::BadRequest("value too long".into()));
+        let fields = [
+            (&p.title, Field::Title, 200),
+            (&p.composer, Field::Composer, 200),
+            (&p.arranger, Field::Arranger, 200),
+            (&p.genre, Field::Genre, 60),
+            (&p.number, Field::ArchiveNumber, 40),
+        ];
+        if let Some((_, field, max)) =
+            fields.iter().find(|(v, _, max)| v.as_ref().is_some_and(|v| v.trim().chars().count() > *max))
+        {
+            return Err(too_long(*field, *max));
         }
     }
     let mut tx = app.db.write.begin().await?;
@@ -876,16 +901,19 @@ pub async fn commit(
     let mut result = CommittedImport::default();
     if let Some(ids) = &input.piece_ids {
         for id in ids.iter().filter(|id| !pieces.iter().any(|p| p.id == **id)) {
-            result.errors.push(ImportItemError { id: *id, message: "not a piece of this batch".into() });
+            result.errors.push(ImportItemError::new(*id, ErrorCode::NotInBatch));
         }
     }
     for piece in &pieces {
         let chosen = match input.piece_ids {
             Some(_) => {
                 if !piece.can_commit() {
-                    let why = piece.blocking_note().map(|n| n.message()).unwrap_or_else(|| "not ready".into());
-                    let why = if piece.state == ItemState::Committed { "already imported".into() } else { why };
-                    result.errors.push(ImportItemError { id: piece.id, message: why });
+                    let why = if piece.state == ItemState::Committed {
+                        ErrorCode::ImportCommitted
+                    } else {
+                        ErrorCode::ImportBlocked { note: piece.blocking_note() }
+                    };
+                    result.errors.push(ImportItemError::new(piece.id, why));
                     continue;
                 }
                 true
@@ -897,7 +925,7 @@ pub async fn commit(
         }
         match commit_piece(&app, piece).await {
             Ok(()) => result.committed.push(piece.id),
-            Err(e) => result.errors.push(ImportItemError { id: piece.id, message: e.to_string() }),
+            Err(e) => result.errors.push(ImportItemError::new(piece.id, e.code())),
         }
     }
     Ok(Json(result))
@@ -910,7 +938,7 @@ async fn commit_piece(app: &App, piece: &ReviewPiece) -> ApiResult<()> {
         .fetch_optional(&mut *tx)
         .await?;
     if state.as_deref() != Some("pending") {
-        return Err(AppError::Conflict("already imported".into()));
+        return Err(AppError::Conflict(ErrorCode::ImportCommitted));
     }
     let (score_id, created) = match piece.effective_target() {
         Target::Existing(id) => (id, false),
@@ -935,7 +963,8 @@ async fn commit_piece(app: &App, piece: &ReviewPiece) -> ApiResult<()> {
                 .fetch_optional(&mut *tx)
                 .await?
                 .flatten();
-        let file_id = file_id.ok_or_else(|| AppError::Conflict(format!("{} is not uploaded", part.file.path)))?;
+        let file_id =
+            file_id.ok_or_else(|| AppError::Conflict(ErrorCode::FileNotUploaded { path: part.file.path.clone() }))?;
         let input = PartInput {
             label: part.label.clone(),
             instrument_ids: part.instruments.iter().filter_map(|i| i.instrument_id).collect(),
@@ -1007,10 +1036,7 @@ pub async fn undo(
     .fetch_all(&app.db.read)
     .await?;
     if !annotated.is_empty() {
-        return Err(AppError::Conflict(format!(
-            "cannot undo: musicians have annotated imported parts of {}",
-            annotated.join(", ")
-        )));
+        return Err(AppError::Conflict(ErrorCode::UndoAnnotated { pieces: annotated }));
     }
     let changed: Vec<String> = sqlx::query_scalar(concat!(
         "SELECT DISTINCT s.title FROM scores s JOIN parts p ON p.score_id = s.id
@@ -1026,10 +1052,7 @@ pub async fn undo(
     .fetch_all(&app.db.read)
     .await?;
     if !changed.is_empty() {
-        return Err(AppError::Conflict(format!(
-            "cannot undo: these imported pieces got other parts or are in a programme since: {}",
-            changed.join(", ")
-        )));
+        return Err(AppError::Conflict(ErrorCode::UndoChanged { pieces: changed }));
     }
     let mut tx = app.db.write.begin().await?;
     let removed_parts = sqlx::query("DELETE FROM parts WHERE id IN (SELECT value FROM json_each(?1))")
@@ -1077,14 +1100,17 @@ pub async fn put_alias(
 ) -> ApiResult<Json<InstrumentAlias>> {
     user.require_librarian()?;
     let alias = alias_key(&input.alias);
-    if alias.is_empty() || alias.chars().count() > 80 {
-        return Err(AppError::BadRequest("alias must have 1 to 80 characters".into()));
+    if alias.is_empty() {
+        return Err(AppError::BadRequest(ErrorCode::FieldEmpty { field: Field::Alias }));
+    }
+    if alias.chars().count() > 80 {
+        return Err(too_long(Field::Alias, 80));
     }
     let name: String = sqlx::query_scalar("SELECT name FROM instruments WHERE id = ?1")
         .bind(input.instrument_id)
         .fetch_optional(&app.db.read)
         .await?
-        .ok_or_else(|| AppError::BadRequest("unknown instrument".into()))?;
+        .ok_or(AppError::BadRequest(ErrorCode::UnknownInstrument))?;
     sqlx::query(
         "INSERT INTO instrument_aliases (alias, instrument_id, created_by, created_at) VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT (alias) DO UPDATE SET instrument_id = ?2, created_by = ?3, created_at = ?4",

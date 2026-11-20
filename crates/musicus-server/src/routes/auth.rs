@@ -12,6 +12,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use musicus_api::ErrorCode;
 use musicus_api::layout::{ReaderMode, ReaderSettings, StaffSize};
 use musicus_api::{
     AcceptInvite, ChangePassword, CurrentUser, Id, InviteInfo, LoginRequest, LoginResponse, Role, SessionInfo,
@@ -148,7 +149,7 @@ pub async fn change_password(
         .fetch_one(&app.db.read)
         .await?;
     if !auth::verify_password(&app, hash.as_deref(), &req.current_password).await? {
-        return Err(AppError::Forbidden("the current password is wrong"));
+        return Err(AppError::Forbidden(ErrorCode::WrongPassword));
     }
     check_password_policy(&req.new_password)?;
     let new_hash = auth::hash_password(&app, &req.new_password).await?;

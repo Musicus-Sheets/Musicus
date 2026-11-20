@@ -26,6 +26,7 @@ use axum::{
 use musicus_api::{
     AnnotationSet, Id, NewAnnotationSet, PageConflict, PageRevision, SavedPage, UpdateAnnotationSet, ink,
 };
+use musicus_api::{ErrorCode, Field};
 use std::collections::HashMap;
 
 /// Pages are numbered from 0; this caps the page index of files whose page
@@ -118,7 +119,7 @@ async fn check_programme(app: &App, programme_id: Option<Id>) -> ApiResult<()> {
         let exists: Option<i64> =
             sqlx::query_scalar("SELECT 1 FROM programmes WHERE id = ?1").bind(id).fetch_optional(&app.db.read).await?;
         if exists.is_none() {
-            return Err(AppError::BadRequest("unknown programme".into()));
+            return Err(AppError::BadRequest(ErrorCode::UnknownProgramme));
         }
     }
     Ok(())
@@ -133,13 +134,13 @@ pub async fn create(
     Json(req): Json<NewAnnotationSet>,
 ) -> ApiResult<Json<AnnotationSet>> {
     ensure_part_readable(&app, &user, part_id).await?;
-    let name = required("name", &req.name, 100)?;
+    let name = required(Field::Name, &req.name, 100)?;
     check_programme(&app, req.programme_id).await?;
     let source = match req.copy_from {
         Some(id) => {
             let src = own_set(&app, &user, id).await?;
             if src.part_id != part_id {
-                return Err(AppError::BadRequest("the set to copy belongs to another part".into()));
+                return Err(AppError::BadRequest(ErrorCode::CopyFromOtherPart));
             }
             Some(src)
         }
@@ -151,7 +152,7 @@ pub async fn create(
             .bind(part_id)
             .fetch_optional(&app.db.read)
             .await?
-            .ok_or_else(|| AppError::Conflict("this part has no file yet".into()))?,
+            .ok_or(AppError::Conflict(ErrorCode::PartHasNoFile))?,
     };
     let now = now();
     let mut tx = app.db.write.begin().await?;
@@ -196,7 +197,7 @@ pub async fn update(
     Json(req): Json<UpdateAnnotationSet>,
 ) -> ApiResult<Json<AnnotationSet>> {
     let set = own_set(&app, &user, set_id).await?;
-    let name = req.name.as_deref().map(|n| required("name", n, 100)).transpose()?;
+    let name = req.name.as_deref().map(|n| required(Field::Name, n, 100)).transpose()?;
     if let Some(programme) = req.programme_id {
         check_programme(&app, programme).await?;
     }
@@ -258,7 +259,7 @@ pub async fn migrate(
             .fetch_one(&app.db.read)
             .await?;
         if pages.is_none() || pages != old_pages {
-            return Err(AppError::Conflict("the new file version has a different page count".into()));
+            return Err(AppError::Conflict(ErrorCode::PageCountChanged));
         }
         sqlx::query("UPDATE annotation_sets SET file_id = ?2, updated_at = ?3 WHERE id = ?1")
             .bind(set_id)
@@ -304,15 +305,13 @@ pub async fn get_page(
 }
 
 fn expected_revision(headers: &HeaderMap) -> ApiResult<i64> {
-    let value = headers
-        .get(header::IF_MATCH)
-        .ok_or(AppError::PreconditionRequired("send If-Match with the revision you edited (\"0\" for a new page)"))?;
+    let value = headers.get(header::IF_MATCH).ok_or(AppError::PreconditionRequired(ErrorCode::IfMatchRequired))?;
     value
         .to_str()
         .ok()
         .map(|v| v.trim().trim_start_matches("W/").trim_matches('"'))
         .and_then(|v| v.parse::<i64>().ok())
-        .ok_or_else(|| AppError::BadRequest("If-Match must be a revision number".into()))
+        .ok_or(AppError::BadRequest(ErrorCode::IfMatchInvalid))
 }
 
 pub async fn put_page(
@@ -331,7 +330,7 @@ pub async fn put_page(
     if page < 0 || page >= page_count.unwrap_or(MAX_PAGES) {
         return Err(AppError::NotFound);
     }
-    ink::decode(&body).map_err(|e| AppError::Unprocessable(e.to_string()))?;
+    ink::decode(&body).map_err(|reason| AppError::Unprocessable(ErrorCode::InvalidInk { reason }))?;
     let compressed = zstd::encode_all(body.as_ref(), 3).map_err(AppError::internal)?;
 
     let now = now();

@@ -4,7 +4,8 @@
 
 ```sh
 cargo build                       # api + server (web excluded from default-members)
-cargo test                        # 53 api unit, 17 server unit, 15 API integration tests
+cargo test                        # 62 api unit, 19 server unit, 15 API integration tests, 1 source check (no_prose)
+cargo test -p musicus-web         # client unit tests on the host (errors.rs texts); not in default-members
 cargo run --release -p musicus-server --example layout_report -- a.pdf …   # system detection per page (regressions)
 cargo clippy --all-targets        # must be warning-free
 cargo fmt --check                 # rustfmt.toml: max_width 120
