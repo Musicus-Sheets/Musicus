@@ -37,7 +37,7 @@ CODE = [
     "crates/*", "Cargo.toml", "Dockerfile", "compose.yaml", "deploy/*", "scripts/*", "e2e/*",
     ".env.example", ".dockerignore",
 ]
-REQ_ID = re.compile(r"\b(G-\d{3}|[FR]-[A-Z]+-\d{3})\b")
+REQ_ID = re.compile(r"\b(G-\d{3}|[FR]-[A-Z][A-Z0-9]*-\d{3})\b")
 DEC_ID = re.compile(r"(?<![\w-])([da]-[a-z][a-z0-9]*(?:-[a-z0-9]+)+|d-[a-z0-9]+|a-[a-z][a-z0-9]+)(?![\w-])")
 DEC_IGNORE = {"a-z"}
 INV_ID = re.compile(r"\bINV-\d+\b")

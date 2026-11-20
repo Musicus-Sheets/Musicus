@@ -4,6 +4,7 @@
 
 mod api;
 mod bridge;
+mod errors;
 mod ink;
 mod layouts;
 mod pages;

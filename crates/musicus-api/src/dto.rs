@@ -3,6 +3,7 @@
 //! Timestamps are Unix seconds (UTC). Dates without a time (concert dates)
 //! are ISO strings `YYYY-MM-DD`.
 
+use crate::error::ErrorCode;
 use serde::{Deserialize, Deserializer, Serialize};
 
 pub type Id = i64;
@@ -55,13 +56,25 @@ impl Role {
     }
 }
 
-/// Error body of every non-2xx response.
+/// Error body of every non-2xx response (except the page conflict):
+/// `{"error": "bad_request", "code": "…", "args": {…}, "message": "…"}`
+/// (a-error-codes, R-I18N-004).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ApiError {
-    /// Stable machine-readable code, e.g. `not_found`, `conflict`.
+    /// Generic class of the HTTP status, e.g. `not_found`, `conflict`.
     pub error: String,
-    /// Human-readable explanation.
+    /// The specific reason with its arguments (`code` + `args`); clients show
+    /// their own text for it.
+    #[serde(flatten)]
+    pub code: ErrorCode,
+    /// English, for API users and logs only: always `code.to_string()`.
     pub message: String,
+}
+
+impl ApiError {
+    pub fn new(error: &str, code: ErrorCode) -> Self {
+        ApiError { error: error.to_owned(), message: code.to_string(), code }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -555,11 +568,21 @@ pub struct CommitImport {
     pub piece_ids: Option<Vec<Id>>,
 }
 
-/// A piece the commit did not create, and why.
+/// A piece the commit did not create, and why:
+/// `{"id": 7, "code": "…", "args": {…}, "message": "…"}`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ImportItemError {
     pub id: Id,
+    #[serde(flatten)]
+    pub code: ErrorCode,
+    /// English, for API users only: `code.to_string()`.
     pub message: String,
+}
+
+impl ImportItemError {
+    pub fn new(id: Id, code: ErrorCode) -> Self {
+        ImportItemError { id, message: code.to_string(), code }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]

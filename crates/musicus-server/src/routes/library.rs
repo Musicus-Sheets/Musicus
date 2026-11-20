@@ -16,6 +16,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
 };
+use musicus_api::{ErrorCode, Field};
 use musicus_api::{FileVersion, Id, Part, PartInput, Score, ScoreInput, naming};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -290,23 +291,23 @@ pub(crate) struct CleanScore {
 pub(crate) fn clean_score(input: &ScoreInput) -> ApiResult<CleanScore> {
     let mut tags: Vec<String> = Vec::new();
     for tag in &input.tags {
-        let tag = required("tag", tag, 40)?;
+        let tag = required(Field::Tag, tag, 40)?;
         if !tags.iter().any(|t| t.eq_ignore_ascii_case(&tag)) {
             tags.push(tag);
         }
     }
     if tags.len() > 30 {
-        return Err(AppError::BadRequest("at most 30 tags".into()));
+        return Err(AppError::BadRequest(ErrorCode::TooManyTags { max: 30 }));
     }
     Ok(CleanScore {
-        title: required("title", &input.title, 200)?,
-        subtitle: optional("subtitle", input.subtitle.as_deref(), 200)?,
-        composer: optional("composer", input.composer.as_deref(), 200)?,
-        arranger: optional("arranger", input.arranger.as_deref(), 200)?,
-        genre: optional("genre", input.genre.as_deref(), 60)?,
+        title: required(Field::Title, &input.title, 200)?,
+        subtitle: optional(Field::Subtitle, input.subtitle.as_deref(), 200)?,
+        composer: optional(Field::Composer, input.composer.as_deref(), 200)?,
+        arranger: optional(Field::Arranger, input.arranger.as_deref(), 200)?,
+        genre: optional(Field::Genre, input.genre.as_deref(), 60)?,
         tags: serde_json::to_string(&tags).expect("tags serialise"),
-        notes: optional("notes", input.notes.as_deref(), 4000)?,
-        archive_number: optional("archive number", input.archive_number.as_deref(), 40)?,
+        notes: optional(Field::Notes, input.notes.as_deref(), 4000)?,
+        archive_number: optional(Field::ArchiveNumber, input.archive_number.as_deref(), 40)?,
     })
 }
 
@@ -402,34 +403,31 @@ pub(crate) struct CleanPart {
 /// may be kept even if it is an older free-text value (a-part-names).
 pub(crate) fn clean_part(input: &PartInput, stored_key: Option<&str>) -> ApiResult<CleanPart> {
     if input.instrument_ids.len() > 20 {
-        return Err(AppError::BadRequest("at most 20 instruments per part".into()));
+        return Err(AppError::BadRequest(ErrorCode::TooManyInstruments { max: 20 }));
     }
     let transposition = match input.transposition.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
         None => None,
         Some(k) if Some(k) == stored_key => Some(k.to_owned()),
         Some(k) => match naming::normalize_key(k) {
             Some(code) => Some(code.to_owned()),
-            None => {
-                let known: Vec<&str> = naming::KEYS.iter().map(|k| k.code).collect();
-                return Err(AppError::BadRequest(format!("unknown key \"{k}\"; use one of {}", known.join(", "))));
-            }
+            None => return Err(AppError::BadRequest(ErrorCode::UnknownKey { key: k.to_owned() })),
         },
     };
     let voices = naming::clean_voices(&input.voices);
     if voices.len() > naming::MAX_VOICES {
-        return Err(AppError::BadRequest(format!("at most {} voices per part", naming::MAX_VOICES)));
+        return Err(AppError::BadRequest(ErrorCode::TooManyVoices { max: naming::MAX_VOICES as u32 }));
     }
     if let Some(v) = voices.iter().find(|v| v.chars().count() > naming::MAX_VOICE_CHARS) {
-        return Err(AppError::BadRequest(format!(
-            "voice \"{v}\" is longer than {} characters",
-            naming::MAX_VOICE_CHARS
-        )));
+        return Err(AppError::BadRequest(ErrorCode::VoiceTooLong {
+            voice: v.clone(),
+            max: naming::MAX_VOICE_CHARS as u32,
+        }));
     }
     Ok(CleanPart {
-        label: optional("label", input.label.as_deref(), 120)?,
+        label: optional(Field::Label, input.label.as_deref(), 120)?,
         voices: serde_json::to_string(&voices).expect("voices serialise"),
         transposition,
-        notes: optional("notes", input.notes.as_deref(), 2000)?,
+        notes: optional(Field::Notes, input.notes.as_deref(), 2000)?,
         instruments: json_ids(&input.instrument_ids),
     })
 }
@@ -555,7 +553,10 @@ pub async fn upload_file(
     }
     let pending = app.blobs.receive(body, app.settings.max_upload_bytes).await.map_err(|e| match e {
         UploadError::TooLarge(limit) => AppError::PayloadTooLarge(limit),
-        UploadError::Body(e) => AppError::BadRequest(format!("upload interrupted: {e}")),
+        UploadError::Body(e) => {
+            tracing::debug!(%e, "upload interrupted");
+            AppError::BadRequest(ErrorCode::UploadInterrupted)
+        }
         UploadError::Io(e) => AppError::internal(e),
     })?;
     let result = store_upload(&app, part_id, &pending).await;
@@ -579,7 +580,7 @@ async fn store_upload(app: &App, part_id: Id, pending: &crate::blobs::PendingBlo
 pub(crate) async fn sniff_pending(pending: &crate::blobs::PendingBlob) -> ApiResult<&'static str> {
     let mut head = vec![0u8; 1024];
     let n = tokio::fs::File::open(&pending.tmp_path).await?.read(&mut head).await?;
-    processors::sniff_mime(&head[..n]).ok_or(AppError::UnsupportedMediaType("only PDF files are supported"))
+    processors::sniff_mime(&head[..n]).ok_or(AppError::UnsupportedMediaType(ErrorCode::NotPdf))
 }
 
 /// Stores a received upload as a blob with its `files` row (page count,

@@ -7,11 +7,12 @@ use axum::{
 };
 use http_body_util::BodyExt;
 use musicus_api::{
-    AnnotationSet, CommittedImport, CreatedUser, Group, Id, ImportBatch, ImportReview, Instrument, InstrumentAlias,
-    LoginResponse, PageConflict, Part, Programme, ProgrammeSummary, RegisteredImportFiles, Score, UndoneImport,
+    AnnotationSet, ApiError, CommittedImport, CreatedUser, ErrorCode, Field, Group, Id, ImportBatch, ImportReview,
+    Instrument, InstrumentAlias, LoginResponse, PageConflict, Part, Programme, ProgrammeSummary, RegisteredImportFiles,
+    Score, UndoneImport,
     import::{
         Language, Level, Note, Source,
-        pattern::{PRESETS, preset},
+        pattern::{PRESETS, PatternError, preset},
         review::{ItemState, ReviewPart, ReviewPiece},
     },
     ink::{self, InkObject, PageLayer, Stroke, Tool},
@@ -37,6 +38,13 @@ struct Reply {
 impl Reply {
     fn json<T: DeserializeOwned>(&self) -> T {
         serde_json::from_slice(&self.body).unwrap_or_else(|e| panic!("{e}: {}", String::from_utf8_lossy(&self.body)))
+    }
+
+    /// Status and error code of a failed request (a-error-codes).
+    fn error(&self) -> (StatusCode, ErrorCode) {
+        let e: ApiError = self.json();
+        assert_eq!(e.message, e.code.to_string(), "message is the English text of the code");
+        (self.status, e.code)
     }
 }
 
@@ -325,8 +333,8 @@ async fn login_sessions_and_csrf() {
     let body = || Body::from(json!({"name": "Horn"}).to_string());
     let ct = [("content-type", "application/json")];
     assert_eq!(
-        s.send(Method::POST, "/api/instruments", Auth::Cookie(&cookie, false), &ct, body()).await.status,
-        StatusCode::FORBIDDEN
+        s.send(Method::POST, "/api/instruments", Auth::Cookie(&cookie, false), &ct, body()).await.error(),
+        (StatusCode::FORBIDDEN, ErrorCode::CsrfMissing)
     );
     assert_eq!(
         s.send(Method::POST, "/api/instruments", Auth::Cookie(&cookie, true), &ct, body()).await.status,
@@ -340,10 +348,9 @@ async fn login_sessions_and_csrf() {
             StatusCode::UNAUTHORIZED
         );
     }
-    assert_eq!(
-        s.send(Method::POST, "/api/auth/login", Auth::None, &ct, wrong()).await.status,
-        StatusCode::TOO_MANY_REQUESTS
-    );
+    let (status, code) = s.send(Method::POST, "/api/auth/login", Auth::None, &ct, wrong()).await.error();
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(matches!(code, ErrorCode::TooManyAttempts { minutes } if minutes > 0), "{code:?}");
 
     // Logout ends exactly this session.
     let r = s.send(Method::POST, "/api/auth/logout", Auth::Cookie(&cookie, true), &[], Body::empty()).await;
@@ -409,7 +416,7 @@ async fn members_only_reach_granted_parts() {
 
     // Members cannot manage the library.
     let r = s.json(Method::POST, "/api/scores", &lib.anna, json!({"title": "x"})).await;
-    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    assert_eq!(r.error(), (StatusCode::FORBIDDEN, ErrorCode::LibrarianOnly));
     assert_eq!(s.get("/api/users", &lib.anna).await.status, StatusCode::FORBIDDEN);
 }
 
@@ -420,8 +427,8 @@ async fn uploads_are_versioned_and_validated() {
     let part = lib.trumpet_part.id;
 
     assert_eq!(
-        s.upload(&lib.admin, part, b"<?xml version='1.0'?>".to_vec()).await.status,
-        StatusCode::UNSUPPORTED_MEDIA_TYPE
+        s.upload(&lib.admin, part, b"<?xml version='1.0'?>".to_vec()).await.error(),
+        (StatusCode::UNSUPPORTED_MEDIA_TYPE, ErrorCode::NotPdf)
     );
     // Same content again: no new version.
     let same: Part = s.upload(&lib.admin, part, tiny_pdf(4, "trumpet")).await.json();
@@ -455,8 +462,8 @@ async fn annotations_are_private_versioned_and_conflict_checked() {
     let empty = s.get(&page(0), &lib.anna).await;
     assert_eq!((empty.status, empty.headers[header::ETAG].to_str().unwrap()), (StatusCode::NO_CONTENT, "\"0\""));
     assert_eq!(
-        s.send(Method::PUT, &page(0), Auth::Bearer(&lib.anna), &[], Body::from(layer(&[1]))).await.status,
-        StatusCode::PRECONDITION_REQUIRED
+        s.send(Method::PUT, &page(0), Auth::Bearer(&lib.anna), &[], Body::from(layer(&[1]))).await.error(),
+        (StatusCode::PRECONDITION_REQUIRED, ErrorCode::IfMatchRequired)
     );
     let saved = put(page(0), "\"0\"", layer(&[1])).await;
     assert_eq!(saved.status, StatusCode::OK);
@@ -470,7 +477,10 @@ async fn annotations_are_private_versioned_and_conflict_checked() {
     let got = s.get(&page(0), &lib.anna).await;
     assert_eq!(got.headers[header::ETAG], "\"2\"");
     assert_eq!(got.body, layer(&[1, 2]));
-    assert_eq!(put(page(1), "0", vec![1, 0xff, 0xff]).await.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        put(page(1), "0", vec![1, 0xff, 0xff]).await.error(),
+        (StatusCode::UNPROCESSABLE_ENTITY, ErrorCode::InvalidInk { reason: ink::InkError::Malformed })
+    );
     // The part has 4 pages.
     assert_eq!(put(page(4), "0", layer(&[1])).await.status, StatusCode::NOT_FOUND);
 
@@ -517,7 +527,7 @@ async fn annotations_are_private_versioned_and_conflict_checked() {
     assert_eq!(moved.file_version, 2);
     s.upload(&lib.admin, part, tiny_pdf(5, "longer")).await;
     let refused = s.json(Method::POST, &format!("/api/annotation-sets/{}/migrate", set.id), &lib.anna, json!({})).await;
-    assert_eq!(refused.status, StatusCode::CONFLICT);
+    assert_eq!(refused.error(), (StatusCode::CONFLICT, ErrorCode::PageCountChanged));
 
     // Losing access hides the annotations too.
     s.ok::<Group>(Method::PUT, &format!("/api/groups/{}/members", lib.trumpets), &lib.admin, json!({"ids": []})).await;
@@ -543,7 +553,7 @@ async fn programmes_and_search() {
     assert_eq!(p.items.len(), 3);
     s.ok::<Programme>(Method::POST, "/api/programmes", &lib.admin, json!({"title": "Empty"})).await;
     let bad = s.json(Method::POST, "/api/programmes", &lib.admin, json!({"title": "x", "date": "24.12.2026"})).await;
-    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    assert_eq!(bad.error(), (StatusCode::BAD_REQUEST, ErrorCode::DateFormat));
 
     // Anna sees only what she plays: the march twice (encore), no concerto.
     let list: Vec<ProgrammeSummary> = s.get("/api/programmes", &lib.anna).await.json();
@@ -594,12 +604,15 @@ async fn user_administration() {
     let dup = s
         .json(Method::POST, "/api/users", &admin, json!({"username": "carla", "display_name": "C", "role": "member"}))
         .await;
-    assert_eq!(dup.status, StatusCode::CONFLICT);
+    assert_eq!(dup.error(), (StatusCode::CONFLICT, ErrorCode::AlreadyExists));
 
     s.accept_invite(&created.invite.token, "carla-password").await;
     let carla = s.login("carla", "carla-password").await;
     assert_eq!(s.get("/api/groups", &carla).await.status, StatusCode::OK);
-    assert_eq!(s.json(Method::POST, "/api/groups", &carla, json!({"name": "x"})).await.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        s.json(Method::POST, "/api/groups", &carla, json!({"name": "x"})).await.error(),
+        (StatusCode::FORBIDDEN, ErrorCode::AdminOnly)
+    );
 
     // Disabling logs out everywhere.
     let r = s.json(Method::PATCH, &format!("/api/users/{}", created.user.id), &admin, json!({"disabled": true})).await;
@@ -608,7 +621,7 @@ async fn user_administration() {
     let me: Value = s.get("/api/auth/me", &admin).await.json();
     let self_disable =
         s.json(Method::PATCH, &format!("/api/users/{}", me["id"]), &admin, json!({"disabled": true})).await;
-    assert_eq!(self_disable.status, StatusCode::CONFLICT);
+    assert_eq!(self_disable.error(), (StatusCode::CONFLICT, ErrorCode::CannotLockOutSelf));
 
     // Password change keeps the current session and ends the others.
     let other = s.login("admin", "admin-password-1").await;
@@ -660,7 +673,7 @@ async fn instruments_are_listed_for_everyone_and_kept_while_in_use() {
     // An instrument used by a part cannot be deleted; an unused one can.
     let used = format!("/api/instruments/{trumpet}");
     let reply = s.send(Method::DELETE, &used, Auth::Bearer(&lib.admin), &[], Body::empty()).await;
-    assert_eq!(reply.status, StatusCode::CONFLICT);
+    assert_eq!(reply.error(), (StatusCode::CONFLICT, ErrorCode::InUseOrUnknown));
     let horn: Instrument = s.ok(Method::POST, "/api/instruments", &lib.admin, &body).await;
     let reply = s
         .send(Method::DELETE, &format!("/api/instruments/{}", horn.id), Auth::Bearer(&lib.admin), &[], Body::empty())
@@ -707,7 +720,11 @@ async fn part_names_keys_and_part_search() {
             json!({"instrument_ids": [], "transposition": "B"}),
         )
         .await;
-    assert_eq!(bad.status, StatusCode::BAD_REQUEST, "B is ambiguous (German B = B-flat)");
+    assert_eq!(
+        bad.error(),
+        (StatusCode::BAD_REQUEST, ErrorCode::UnknownKey { key: "B".into() }),
+        "B is ambiguous (German B = B-flat)"
+    );
     let unnamed: Part = s
         .ok(
             Method::POST,
@@ -825,11 +842,11 @@ async fn parts_with_several_voices() {
     // Limits: at most 10 voices of at most 20 characters.
     let many: Vec<String> = (1..=11).map(|i| i.to_string()).collect();
     let bad = s.json(Method::POST, &new_part, &lib.admin, json!({"instrument_ids": trumpet, "voices": many})).await;
-    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    assert_eq!(bad.error(), (StatusCode::BAD_REQUEST, ErrorCode::TooManyVoices { max: 10 }));
     let bad = s
         .json(Method::POST, &new_part, &lib.admin, json!({"instrument_ids": trumpet, "voices": ["x".repeat(21)]}))
         .await;
-    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    assert_eq!(bad.error(), (StatusCode::BAD_REQUEST, ErrorCode::VoiceTooLong { voice: "x".repeat(21), max: 20 }));
     // Found under each voice.
     let anna = lib.anna.as_str();
     assert_eq!(s.hits("trumpet%201", anna).await, 1);
@@ -965,7 +982,10 @@ async fn archive_numbers_are_free_text_searchable_and_not_unique() {
     assert_eq!(cleared.archive_number, None);
     let long =
         s.json(Method::POST, "/api/scores", &lib.admin, json!({"title": "x", "archive_number": "9".repeat(41)})).await;
-    assert_eq!(long.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        long.error(),
+        (StatusCode::BAD_REQUEST, ErrorCode::FieldTooLong { field: Field::ArchiveNumber, max: 40 })
+    );
     // Members see the number of the pieces they can read, and find them by it.
     s.ok::<Score>(
         Method::PUT,
@@ -1056,7 +1076,10 @@ async fn librarians_correct_system_layouts_for_everyone() {
 
     // Not analysed yet: nothing to correct.
     let c = PageCorrection { full_page: true, ..Default::default() };
-    assert_eq!(s.json(Method::PUT, &uri(0), &lib.admin, &c).await.status, StatusCode::CONFLICT);
+    assert_eq!(
+        s.json(Method::PUT, &uri(0), &lib.admin, &c).await.error(),
+        (StatusCode::CONFLICT, ErrorCode::SystemsNotDetected)
+    );
     while worker::run_once(&s.state).await.unwrap() {}
     let auto: FileLayout = s.get(&format!("/api/files/{sha}/layout"), &lib.anna).await.json();
 
@@ -1068,7 +1091,10 @@ async fn librarians_correct_system_layouts_for_everyone() {
     );
     assert_eq!(s.json(Method::PUT, &uri(2), &lib.admin, &c).await.status, StatusCode::NOT_FOUND);
     let bad = PageCorrection { full_page: false, bounds: vec![0.5, 0.2], kinds: vec![RegionKind::System] };
-    assert_eq!(s.json(Method::PUT, &uri(0), &lib.admin, &bad).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        s.json(Method::PUT, &uri(0), &lib.admin, &bad).await.error(),
+        (StatusCode::BAD_REQUEST, ErrorCode::CorrectionBoundsOrder)
+    );
 
     // A correction applies to every member's layout.
     let corrected: FileLayout = s.ok(Method::PUT, &uri(0), &lib.admin, merge(&auto)).await;
@@ -1155,7 +1181,10 @@ async fn import_stages_reviews_commits_and_undoes() {
     assert_eq!(s.json(Method::POST, "/api/import/batches", &lib.anna, &folder).await.status, StatusCode::FORBIDDEN);
     assert_eq!(s.get("/api/import/aliases", &lib.anna).await.status, StatusCode::FORBIDDEN);
     let bad = json!({"name": "x", "pattern": "{title}/{foo}.pdf", "language": "de"});
-    assert_eq!(s.json(Method::POST, "/api/import/batches", admin, bad).await.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        s.json(Method::POST, "/api/import/batches", admin, bad).await.error(),
+        (StatusCode::BAD_REQUEST, ErrorCode::InvalidPattern { reason: PatternError::UnknownPlaceholder("foo".into()) })
+    );
 
     let batch: ImportBatch = s.ok(Method::POST, "/api/import/batches", admin, &folder).await;
     let trumpet = tiny_pdf(2, "import-trumpet");
@@ -1193,7 +1222,7 @@ async fn import_stages_reviews_commits_and_undoes() {
             Body::from(tiny_pdf(1, "other")),
         )
         .await;
-    assert_eq!(wrong.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(wrong.error(), (StatusCode::UNPROCESSABLE_ENTITY, ErrorCode::FileChanged));
     // Resume: registering the same folder again asks for exactly the missing files.
     let again = register(&s, admin, batch.id, &files).await;
     assert_eq!(again.upload.len(), 6);
@@ -1233,7 +1262,12 @@ async fn import_stages_reviews_commits_and_undoes() {
     let refused: CommittedImport = s
         .ok(Method::POST, &format!("/api/import/batches/{}/commit", batch.id), admin, json!({"piece_ids": [alte.id]}))
         .await;
-    assert!(refused.committed.is_empty() && refused.errors[0].message.contains("unknown instrument"));
+    assert!(refused.committed.is_empty());
+    assert!(
+        matches!(&refused.errors[0].code, ErrorCode::ImportBlocked { note: Some(Note::UnknownInstrument(_)) }),
+        "{:?}",
+        refused.errors[0]
+    );
 
     // The librarian creates Partitur and Direktion (two instruments) and maps "Klar" once.
     let score_instr: Instrument = s.ok(Method::POST, "/api/instruments", admin, json!({"name": "Partitur"})).await;
@@ -1293,15 +1327,16 @@ async fn import_stages_reviews_commits_and_undoes() {
     // Committed items cannot be edited any more.
     let locked =
         s.json(Method::PATCH, "/api/import/items", admin, json!({"ids": [flor.id], "piece": {"title": "x"}})).await;
-    assert_eq!(locked.status, StatusCode::CONFLICT);
+    assert_eq!(locked.error(), (StatusCode::CONFLICT, ErrorCode::ImportCommitted));
 
     // Undo is refused while a musician has annotated an imported part.
     let imported = mine[0].parts[0].id;
     let set: AnnotationSet =
         s.ok(Method::POST, &format!("/api/parts/{imported}/annotation-sets"), &lib.anna, json!({"name": "Mine"})).await;
     let undo = s.json(Method::POST, &format!("/api/import/batches/{}/undo", batch.id), admin, json!({})).await;
-    assert_eq!(undo.status, StatusCode::CONFLICT);
-    assert!(String::from_utf8_lossy(&undo.body).contains("Alte Kameraden"));
+    let (status, code) = undo.error();
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(matches!(&code, ErrorCode::UndoAnnotated { pieces } if pieces.iter().any(|p| p == "Alte Kameraden")));
     let r = s
         .send(Method::DELETE, &format!("/api/annotation-sets/{}", set.id), Auth::Bearer(&lib.anna), &[], Body::empty())
         .await;
@@ -1398,7 +1433,7 @@ async fn import_of_flat_numbered_files_groups_by_number_and_keeps_changes() {
     let many: Vec<String> = (1..=11).map(|i| i.to_string()).collect();
     let bad =
         s.json(Method::PATCH, "/api/import/items", admin, json!({"ids": [kb.id], "part": {"voices": many}})).await;
-    assert_eq!(bad.status, StatusCode::BAD_REQUEST, "at most 10 voices");
+    assert_eq!(bad.error(), (StatusCode::BAD_REQUEST, ErrorCode::TooManyVoices { max: 10 }), "at most 10 voices");
     let edited: Vec<ReviewPiece> = s
         .ok(Method::PATCH, "/api/import/items", admin, json!({"ids": [kb.id], "part": {"voices": ["1 & 2", "1"]}}))
         .await;
@@ -1412,9 +1447,13 @@ async fn import_of_flat_numbered_files_groups_by_number_and_keeps_changes() {
     let trumpet = lib.trumpet_part.instrument_ids[0];
     let set = |instruments: serde_json::Value| json!({"ids": [k2.id], "part": {"instruments": instruments}});
     let bad = s.json(Method::PATCH, "/api/import/items", admin, set(json!([trumpet, 9999]))).await;
-    assert_eq!(bad.status, StatusCode::BAD_REQUEST, "unknown instrument refused");
+    assert_eq!(bad.error(), (StatusCode::BAD_REQUEST, ErrorCode::UnknownInstruments), "unknown instrument refused");
     let bad = s.json(Method::PATCH, "/api/import/items", admin, set(json!((0..21).collect::<Vec<_>>()))).await;
-    assert_eq!(bad.status, StatusCode::BAD_REQUEST, "at most 20 instruments");
+    assert_eq!(
+        bad.error(),
+        (StatusCode::BAD_REQUEST, ErrorCode::TooManyInstruments { max: 20 }),
+        "at most 20 instruments"
+    );
     let edited: Vec<ReviewPiece> = s
         .ok(
             Method::PATCH,

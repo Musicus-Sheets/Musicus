@@ -265,7 +265,9 @@ pub fn preview(
 ) -> Preview {
     let pattern = match Pattern::parse(pattern) {
         Ok(p) => p,
-        Err(e) => return Preview { pieces: vec![], unmatched: vec![], error: Some(e.to_string()) },
+        Err(e) => {
+            return Preview { pieces: vec![], unmatched: vec![], error: Some(crate::errors::pattern_error_text(&e)) };
+        }
     };
     let (proposed, unmatched) = propose(&pattern, language, paths);
     let lib = Library { instruments, aliases, scores: &[], groups: &[] };
@@ -291,7 +293,7 @@ pub fn preview(
                         page_count: None,
                         has_thumbnail: false,
                         staves: None,
-                        message: None,
+                        problem: None,
                     },
                     state: ItemState::Pending,
                     part_id: None,

@@ -13,6 +13,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
+use musicus_api::Field;
 use musicus_api::{Group, GroupInput, Id, IdList, Instrument, InstrumentInput};
 
 // --- Instruments -----------------------------------------------------------
@@ -31,8 +32,8 @@ pub async fn create_instrument(
     Json(req): Json<InstrumentInput>,
 ) -> ApiResult<Json<Instrument>> {
     user.require_librarian()?;
-    let name = required("name", &req.name, 80)?;
-    let family = optional("family", req.family.as_deref(), 80)?;
+    let name = required(Field::Name, &req.name, 80)?;
+    let family = optional(Field::Family, req.family.as_deref(), 80)?;
     let id = sqlx::query_scalar("INSERT INTO instruments (name, family) VALUES (?1, ?2) RETURNING id")
         .bind(&name)
         .bind(&family)
@@ -48,8 +49,8 @@ pub async fn update_instrument(
     Json(req): Json<InstrumentInput>,
 ) -> ApiResult<Json<Instrument>> {
     user.require_librarian()?;
-    let name = required("name", &req.name, 80)?;
-    let family = optional("family", req.family.as_deref(), 80)?;
+    let name = required(Field::Name, &req.name, 80)?;
+    let family = optional(Field::Family, req.family.as_deref(), 80)?;
     let mut tx = app.db.write.begin().await?;
     let done = sqlx::query("UPDATE instruments SET name = ?2, family = ?3 WHERE id = ?1")
         .bind(id)
@@ -129,7 +130,7 @@ pub async fn create_group(
     Json(req): Json<GroupInput>,
 ) -> ApiResult<Json<Group>> {
     user.require_admin()?;
-    let name = required("name", &req.name, 80)?;
+    let name = required(Field::Name, &req.name, 80)?;
     let id: Id = sqlx::query_scalar("INSERT INTO groups (name) VALUES (?1) RETURNING id")
         .bind(name)
         .fetch_one(&app.db.write)
@@ -144,7 +145,7 @@ pub async fn rename_group(
     Json(req): Json<GroupInput>,
 ) -> ApiResult<Json<Group>> {
     user.require_admin()?;
-    let name = required("name", &req.name, 80)?;
+    let name = required(Field::Name, &req.name, 80)?;
     let done =
         sqlx::query("UPDATE groups SET name = ?2 WHERE id = ?1").bind(id).bind(name).execute(&app.db.write).await?;
     if done.rows_affected() == 0 {

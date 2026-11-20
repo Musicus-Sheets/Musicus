@@ -4,14 +4,18 @@
 //! every request also carries the CSRF header the server requires for
 //! cookie-authenticated writes.
 
+use crate::errors;
 use gloo_net::http::{Method, Request, RequestBuilder, Response};
-use musicus_api::{ApiError, CSRF_HEADER};
+use musicus_api::{ApiError, CSRF_HEADER, ErrorCode};
 use serde::{Serialize, de::DeserializeOwned};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApiErr {
     /// HTTP status, 0 for network errors.
     pub status: u16,
+    /// The server's code; `None` for network errors and unreadable bodies.
+    pub code: Option<ErrorCode>,
+    /// Text for the user, from [`errors`] (the server sends no prose).
     pub message: String,
 }
 
@@ -24,7 +28,7 @@ impl std::fmt::Display for ApiErr {
 pub type ApiResult<T> = Result<T, ApiErr>;
 
 fn network(e: impl std::fmt::Display) -> ApiErr {
-    ApiErr { status: 0, message: format!("Network error: {e}") }
+    ApiErr { status: 0, code: None, message: errors::network_text(&e.to_string()) }
 }
 
 fn builder(method: Method, path: &str) -> RequestBuilder {
@@ -36,19 +40,21 @@ async fn check(response: Response) -> ApiResult<Response> {
         return Ok(response);
     }
     let status = response.status();
-    let message = match response.json::<ApiError>().await {
-        Ok(e) => capitalise(&e.message),
-        Err(_) => format!("Request failed (HTTP {status})"),
+    let body = response.text().await.unwrap_or_default();
+    let (code, message) = match serde_json::from_str::<ApiError>(&body) {
+        Ok(e) => (Some(e.code.clone()), errors::api_error_text(&e)),
+        // A code this build does not know, with arguments: the English message.
+        Err(_) => match serde_json::from_str::<serde_json::Value>(&body) {
+            Ok(v) if v["message"].is_string() => {
+                (None, errors::unknown_error_text(v["message"].as_str().unwrap_or("")))
+            }
+            _ => (None, errors::http_failed_text(status)),
+        },
     };
     if status == 401 {
         session_lost();
     }
-    Err(ApiErr { status, message })
-}
-
-fn capitalise(s: &str) -> String {
-    let mut c = s.chars();
-    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+    Err(ApiErr { status, code, message })
 }
 
 /// The session expired or was revoked: back to the login page (a full

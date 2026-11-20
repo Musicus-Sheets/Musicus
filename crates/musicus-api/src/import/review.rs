@@ -451,8 +451,9 @@ pub struct StagedFile {
     pub has_thumbnail: bool,
     /// Staves per system of the file (median), once the system detection ran.
     pub staves: Option<u32>,
+    /// Why the file was skipped (duplicate) or rejected (failed).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub message: Option<String>,
+    pub problem: Option<crate::error::ErrorCode>,
 }
 
 /// Typical number of staves per system: the most frequent count among the
@@ -830,7 +831,7 @@ fn review_part(p: PartInput, extra_readers: &[&Group], lib: &Library) -> ReviewP
             level = Level::Red;
         }
         FileState::Failed => {
-            notes.push(Note::UploadFailed(p.file.message.clone().unwrap_or_default()));
+            notes.push(Note::UploadFailed(p.file.problem.clone().map(Box::new)));
             level = Level::Red;
         }
         _ => {}
@@ -903,7 +904,7 @@ mod tests {
             page_count: Some(1),
             has_thumbnail: true,
             staves: None,
-            message: None,
+            problem: None,
         }
     }
 

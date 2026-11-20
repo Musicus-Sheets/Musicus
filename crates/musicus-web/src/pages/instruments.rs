@@ -8,7 +8,7 @@ use crate::{
 };
 use dioxus::prelude::*;
 use gloo_net::http::Method;
-use musicus_api::{Instrument, InstrumentInput};
+use musicus_api::{ErrorCode, Instrument, InstrumentInput};
 use std::collections::BTreeMap;
 
 /// Instruments by family; families in alphabetical order, those without a
@@ -137,7 +137,7 @@ fn InstrumentRow(
             }
             match api::call(Method::DELETE, &format!("/api/instruments/{id}")).await {
                 Ok(()) => onchange.call(()),
-                Err(e) if e.status == 409 => onerror.call(format!(
+                Err(e) if e.code == Some(ErrorCode::InUseOrUnknown) => onerror.call(format!(
                     "“{label}” cannot be deleted because parts still use it. Tag those parts with another instrument first."
                 )),
                 Err(e) => onerror.call(e.message),

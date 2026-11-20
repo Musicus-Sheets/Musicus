@@ -15,6 +15,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
+use musicus_api::{ErrorCode, Field};
 use musicus_api::{Id, IdList, Programme, ProgrammeInput, ProgrammeItem, ProgrammeSummary};
 
 /// Accepts `YYYY-MM-DD` with a plausible month and day.
@@ -28,11 +29,11 @@ fn valid_date(date: &str) -> bool {
 }
 
 fn clean(input: &ProgrammeInput) -> ApiResult<(String, Option<String>, Option<String>)> {
-    let date = optional("date", input.date.as_deref(), 10)?;
+    let date = optional(Field::Date, input.date.as_deref(), 10)?;
     if date.as_deref().is_some_and(|d| !valid_date(d)) {
-        return Err(AppError::BadRequest("the date must look like 2026-12-24".into()));
+        return Err(AppError::BadRequest(ErrorCode::DateFormat));
     }
-    Ok((required("title", &input.title, 200)?, date, optional("notes", input.notes.as_deref(), 4000)?))
+    Ok((required(Field::Title, &input.title, 200)?, date, optional(Field::Notes, input.notes.as_deref(), 4000)?))
 }
 
 pub async fn list(State(app): State<AppState>, user: AuthUser) -> ApiResult<Json<Vec<ProgrammeSummary>>> {
@@ -156,7 +157,7 @@ pub async fn set_items(
 ) -> ApiResult<Json<Programme>> {
     user.require_librarian()?;
     if req.ids.len() > 200 {
-        return Err(AppError::BadRequest("at most 200 pieces per programme".into()));
+        return Err(AppError::BadRequest(ErrorCode::TooManyPieces { max: 200 }));
     }
     let mut tx = app.db.write.begin().await?;
     let exists: Option<i64> =

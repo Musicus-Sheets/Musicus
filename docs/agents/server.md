@@ -44,7 +44,7 @@ Other subcommands: `create-admin --username U [--display-name D]` (prints invite
 4. If `now - last_seen_at > 3600` ⇒ UPDATE `last_seen_at`, `expires_at = now + ttl` on write pool.
 5. Returns `AuthUser {id, role, session_id}`; helpers `is_librarian()`, `require_librarian()`/`require_admin()` ⇒ 403.
 
-`LoginLimiter`: in-memory `HashMap<key, Vec<ts>>`, keys `user:<lowercased name>` and `ip:<addr>`; ≥10 failures in 15 min ⇒ 429 (message minutes); success clears the user key only; map pruned above 10 000 keys. Resets on restart (R-SEC-003).
+`LoginLimiter`: in-memory `HashMap<key, Vec<ts>>`, keys `user:<lowercased name>` and `ip:<addr>`; ≥10 failures in 15 min ⇒ 429 `too_many_attempts {minutes}`; success clears the user key only; map pruned above 10 000 keys. Resets on restart (R-SEC-003).
 
 ## Endpoint table (all under `/api`)
 
@@ -99,7 +99,7 @@ Auth column: `—` none, `U` any logged-in user, `L` librarian/admin, `A` admin.
 | PUT | `/import/files/{id}/content` | L | `import::upload_content` | raw body like `upload_file` (limit 413); sha ≠ announced ⇒ 422 + state failed; non-PDF ⇒ 415 + failed; already uploaded ⇒ no-op; content meanwhile in the library ⇒ duplicate; ⇒ `StagedFile` | R-LIB-016, R-FILE-001 |
 | GET | `/import/files/{id}` / `/import/files/{id}/thumbnail` | L | `import::get_staged_file` / `get_staged_thumbnail` | staged PDF / PNG through the batch (not via `/files/{sha}`), ETag etc. as `serve_blob`; 404 if not uploaded / no thumbnail | R-LIB-016, R-LIB-019 |
 | PATCH | `/import/items` | L | `import::update_items` | `UpdateImportItems` (1..5000 ids of one batch; committed ⇒ 409; target score must exist, instruments: ids of `PartOverrides.instruments` exist (`json_each`), ≤20 entries, kept words ≤120 chars (a-import-instruments), key via `normalize_key` ⇒ stored as code, else 400; voices cleaned by `naming::clean_voices`, ≤10 of ≤20 chars, else 400; label ≤120); merge or `reset`; ⇒ changed pieces' `ReviewPiece`s | R-LIB-019 |
-| POST | `/import/batches/{id}/commit` | L | `import::commit` | `CommitImport`: listed pieces (each `can_commit`, else error entry with the blocking note) or all `is_green`; one write tx per piece (score or confirmed existing piece, parts, version 1, reindex, items committed) ⇒ `CommittedImport` | R-LIB-021 |
+| POST | `/import/batches/{id}/commit` | L | `import::commit` | `CommitImport`: listed pieces (each `can_commit`, else error entry `import_blocked {note}` / `import_committed`) or all `is_green`; one write tx per piece (score or confirmed existing piece, parts, version 1, reindex, items committed) ⇒ `CommittedImport` | R-LIB-021 |
 | POST | `/import/batches/{id}/undo` | L | `import::undo` | 409 (nothing removed) if an imported part has annotation sets, a created piece has other parts, or is in a programme; else one tx: delete imported parts + created pieces, items back to pending ⇒ `UndoneImport` | R-LIB-021 |
 | GET / PUT / DELETE | `/import/aliases` (DELETE `?alias=`) | L | `import::list_aliases` / `put_alias` / `delete_alias` | alias stored as `alias_key` (1..80 chars); unknown instrument ⇒ 400; upsert; delete unknown ⇒ 404 | R-LIB-020 |
 | GET | `/programmes` | U, ACL | `programmes::list` | `item_count` = visible items; members: only programmes with ≥1 visible item | R-PROG-002 |
@@ -120,9 +120,10 @@ Auth column: `—` none, `U` any logged-in user, `L` librarian/admin, `A` admin.
 
 ## Errors (`error.rs`)
 
-`AppError` variants → status/code: NotFound 404 `not_found`; Unauthorized 401; Forbidden 403; BadRequest 400; Conflict/ConflictWith 409 (ConflictWith sends a custom JSON body, used for `PageConflict`); Unprocessable 422; PayloadTooLarge 413; UnsupportedMediaType 415; PreconditionRequired 428; TooManyRequests 429; Internal 500 (logged, generic message, R-SEC-008).
-`From<sqlx::Error>`: RowNotFound → 404; unique violation → 409 "already exists"; FK violation → 409 "still in use…" (also `ON DELETE RESTRICT`, which SQLite reports as extended code 1811 `SQLITE_CONSTRAINT_TRIGGER` and sqlx does not classify: `is_restrict_violation`); else 500.
-`From<io::Error>` → 500. Validators: `required(field, value, max_chars)` (trim, non-empty), `optional(...)` (empty → None).
+Body `ApiError {error, code, args, message}` (format and code list: `api-and-ink.md`; a-error-codes, R-I18N-004). The server builds no text for users: `AppError` variants take an `ErrorCode`, `message` is always the code's English `Display`.
+`AppError` variants → status/class: NotFound 404 `not_found` (code `not_found`); Unauthorized 401 (`unauthorized`); Forbidden(code) 403; BadRequest(code) 400; Conflict(code)/ConflictWith 409 (ConflictWith sends a custom JSON body, used for `PageConflict`); Unprocessable(code) 422; PayloadTooLarge(max) 413 (`payload_too_large {max_bytes}`); UnsupportedMediaType(code) 415; PreconditionRequired(code) 428; TooManyRequests(minutes) 429 (`too_many_attempts {minutes}`); Internal(detail) 500 (`internal`; detail only logged, R-SEC-008). `AppError::code()` gives the code (also used for `ImportItemError` and `import_files.problem`).
+`From<sqlx::Error>`: RowNotFound → 404; unique violation → 409 `already_exists`; FK violation → 409 `in_use_or_unknown` (also `ON DELETE RESTRICT`, which SQLite reports as extended code 1811 `SQLITE_CONSTRAINT_TRIGGER` and sqlx does not classify: `is_restrict_violation`); else 500.
+`From<io::Error>` → 500. Validators: `required(Field, value, max_chars)` (trim, non-empty ⇒ `field_empty`), `optional(...)` (empty → None), both `field_too_long {field, max}` (`too_long`). Upload body errors: `upload_interrupted` (detail logged at debug).
 
 ## Middleware (`routes::app`)
 

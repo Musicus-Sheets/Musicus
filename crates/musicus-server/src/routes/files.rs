@@ -20,6 +20,7 @@ use axum::{
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
+use musicus_api::ErrorCode;
 use musicus_api::layout::{FileLayout, LayoutState, PageCorrection, PageLayout};
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
@@ -116,7 +117,7 @@ async fn correctable(app: &App, user: &AuthUser, sha256: &str, page: i64) -> Api
     .bind(sha256)
     .fetch_optional(&app.db.read)
     .await?
-    .ok_or_else(|| AppError::Conflict("the systems of this file have not been detected yet".into()))?;
+    .ok_or(AppError::Conflict(ErrorCode::SystemsNotDetected))?;
     let count = serde_json::from_str::<Vec<serde_json::Value>>(&pages).map_err(AppError::internal)?.len() as i64;
     if !(0..count).contains(&page) {
         return Err(AppError::NotFound);
@@ -133,7 +134,7 @@ pub async fn put_correction(
     axum::Json(c): axum::Json<PageCorrection>,
 ) -> ApiResult<axum::Json<FileLayout>> {
     let file_id = correctable(&app, &user, &sha256, page).await?;
-    c.validate().map_err(|e| AppError::BadRequest(e.into()))?;
+    c.validate().map_err(AppError::BadRequest)?;
     sqlx::query(
         "INSERT INTO layout_corrections (file_id, page, data, updated_by, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)
          ON CONFLICT (file_id, page) DO UPDATE SET data = ?3, updated_by = ?4, updated_at = ?5",

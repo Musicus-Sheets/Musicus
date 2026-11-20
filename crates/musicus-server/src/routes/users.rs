@@ -12,6 +12,7 @@ use axum::{
     extract::{Path, State},
 };
 use musicus_api::{CreateUser, CreatedUser, Id, Invite, Role, UpdateUser, UserSummary};
+use musicus_api::{ErrorCode, Field};
 
 /// Creates a fresh invite for a user, replacing older ones.
 pub async fn issue_invite(app: &App, user_id: Id) -> ApiResult<Invite> {
@@ -31,11 +32,11 @@ pub async fn issue_invite(app: &App, user_id: Id) -> ApiResult<Invite> {
 
 /// Inserts a user without password. Used by the API and the CLI bootstrap.
 pub async fn insert_user(app: &App, username: &str, display_name: &str, role: Role) -> ApiResult<Id> {
-    let username = required("username", username, 64)?.to_lowercase();
+    let username = required(Field::Username, username, 64)?.to_lowercase();
     if !username.chars().all(|c| c.is_alphanumeric() || "._-".contains(c)) {
-        return Err(AppError::BadRequest("usernames may contain letters, digits, '.', '_' and '-'".into()));
+        return Err(AppError::BadRequest(ErrorCode::UsernameInvalid));
     }
-    let display_name = required("display name", display_name, 100)?;
+    let display_name = required(Field::DisplayName, display_name, 100)?;
     let id = sqlx::query_scalar(
         "INSERT INTO users (username, display_name, role, created_at) VALUES (?1, ?2, ?3, ?4) RETURNING id",
     )
@@ -96,9 +97,9 @@ pub async fn update(
 ) -> ApiResult<Json<UserSummary>> {
     user.require_admin()?;
     if id == user.id && (req.disabled == Some(true) || req.role.is_some_and(|r| r != Role::Admin)) {
-        return Err(AppError::Conflict("you cannot disable yourself or remove your own admin role".into()));
+        return Err(AppError::Conflict(ErrorCode::CannotLockOutSelf));
     }
-    let display_name = req.display_name.as_deref().map(|d| required("display name", d, 100)).transpose()?;
+    let display_name = req.display_name.as_deref().map(|d| required(Field::DisplayName, d, 100)).transpose()?;
     let mut tx = app.db.write.begin().await?;
     let done = sqlx::query(
         "UPDATE users SET display_name = COALESCE(?2, display_name), role = COALESCE(?3, role),
@@ -131,7 +132,7 @@ pub async fn reinvite(State(app): State<AppState>, user: AuthUser, Path(id): Pat
         .await?
         .ok_or(AppError::NotFound)?;
     if disabled {
-        return Err(AppError::Conflict("enable the user before inviting them".into()));
+        return Err(AppError::Conflict(ErrorCode::UserDisabled));
     }
     Ok(Json(issue_invite(&app, id).await?))
 }
