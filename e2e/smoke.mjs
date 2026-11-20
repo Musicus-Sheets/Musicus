@@ -883,14 +883,22 @@ for (const word of ['Partitur', 'Direktion']) {
 await unknownBox.getByRole('button', { name: 'Create instrument “Clarinet”' }).click();
 await unknownBox.waitFor({ state: 'detached' });
 check(true, 'Partitur, Direktion and the abbreviation "Klar" are resolved once in "Instruments to confirm"');
-// Voices are a list: "1+2" in the file name gives two voices; the librarian edits the list as text.
-check(await a.getByLabel(/^Voices of .*Trompete 1\+2 in B\.pdf$/).inputValue() === '1 & 2',
-  '"Trompete 1+2" is read as the voices 1 and 2');
-const klarVoices = a.getByLabel(/^Voices of .*Klar 2\.pdf$/);
-await klarVoices.fill('2, 3');
-await klarVoices.press('Tab');
-await a.locator('.import-parts strong', { hasText: 'Clarinet 2 & 3' }).waitFor();
-check(await klarVoices.inputValue() === '2 & 3', 'the voices of a part are edited in the review ("2, 3" ⇒ "Clarinet 2 & 3")');
+// Voices are chips: "1+2" in the file name gives two voices; the librarian adds and removes them.
+const reviewVoices = (file) => a.getByRole('group', { name: new RegExp(`^Voices of .*${file}$`) }).locator('.tag-text').allInnerTexts();
+check(JSON.stringify(await reviewVoices('Trompete 1\\+2 in B\\.pdf')) === '["1","2"]', '"Trompete 1+2" is read as the voices 1 and 2');
+const klarRow = a.locator('.import-parts tr', { hasText: 'Klar 2.pdf' });
+await klarRow.getByRole('combobox', { name: /^Voices of .*Klar 2\.pdf$/ }).fill('3, 4');
+await klarRow.getByRole('combobox', { name: /^Voices of .*Klar 2\.pdf$/ }).press('Enter');
+await a.locator('.import-parts strong', { hasText: 'Clarinet 2 & 3 & 4' }).waitFor();
+await klarRow.getByRole('button', { name: 'Remove voice 4' }).click();
+await a.locator('.import-parts strong', { hasText: /^Clarinet 2 & 3$/ }).waitFor();
+check(JSON.stringify(await reviewVoices('Klar 2\\.pdf')) === '["2","3"]', 'voices are added and removed as chips in the review ("Clarinet 2 & 3")');
+// Several instruments per part: the picker of the part editor; detected ones stay.
+await pick(a, klarRow, '+ Add instrument', ['Trumpet', 'Flute']);
+await a.locator('.import-parts strong', { hasText: 'Clarinet / Flute / Trumpet 2 & 3' }).waitFor();
+await klarRow.getByRole('button', { name: 'Remove instrument Trumpet' }).click();
+await a.locator('.import-parts strong', { hasText: 'Clarinet / Flute 2 & 3' }).waitFor();
+check(await klarRow.locator('.ichip.lvl-green').count() === 2, 'the librarian adds and removes instruments of a part in the review ("Clarinet / Flute 2 & 3")');
 await shot(a, 'import-review');
 await a.getByRole('button', { name: 'Import all green (1)' }).click();
 await a.getByText('1 piece imported.').waitFor();
@@ -899,6 +907,10 @@ await m.getByPlaceholder('Search title, composer, tag, number…').fill('0412');
 await m.getByText('Alte Kameraden').waitFor();
 check(JSON.stringify(await m.locator('.score', { hasText: 'Alte Kameraden' }).locator('.part-label').allInnerTexts()) === '["Trumpet in B♭ 1 & 2"]',
   'after the commit anna sees the imported trumpet part (German "in B" = B♭), and only that');
+const imported = await a.evaluate(async () => (await (await fetch('/api/scores?q=0412')).json())[0].parts
+  .find((p) => p.display_name === 'Clarinet / Flute 2 & 3'));
+check(imported && imported.instrument_ids.length === 2 && JSON.stringify(imported.voices) === '["2","3"]',
+  'the committed part has both instruments and both voices');
 await a.getByRole('button', { name: 'Undo import' }).click();
 await a.getByText('Undone: 1 pieces and 4 parts removed.').waitFor();
 check(true, 'the import can be undone');

@@ -25,7 +25,7 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | R-SEC-009, R-SEC-010 | watermark, download audit log | watermark must not create blobs (conflict with R-FILE-004) |
 | R-OPS-009 | continuous replication (Litestream) | |
 
-| F-LIB-004 phase 2 | mass import extensions | pattern per subfolder (archives mixing structures; today: several batches), ZIP upload, server-side paging of the review for very large batches, CSV inventory and OCR sources (R-LIB-022), editing several instruments per part in the review (today one instrument via the select; more after the import in the part editor) |
+| F-LIB-004 phase 2 | mass import extensions | pattern per subfolder (archives mixing structures; today: several batches), ZIP upload, server-side paging of the review for very large batches, CSV inventory and OCR sources (R-LIB-022) |
 | R-LIB-022 | OCR / inventory list as import sources | add candidates with `Source::Ocr` / `Source::Inventory` to `PieceGuess` fields (a-import-shared) |
 
 Also not implemented (no requirement yet): user deletion, rate limiting beyond login, metrics.

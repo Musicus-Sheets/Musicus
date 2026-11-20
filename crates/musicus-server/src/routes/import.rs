@@ -38,8 +38,9 @@ use musicus_api::{
         parts::alias_key,
         pattern::Pattern,
         review::{
-            Alias, FileState, ItemState, Library, PartGuess, PartInput as ReviewPartInput, PartOverrides, PieceGuess,
-            PieceOverrides, ReviewPiece, ScoreRef, StagedFile, Target, propose, review_piece,
+            Alias, FileState, InstrumentPick, ItemState, Library, MAX_PART_INSTRUMENTS, PartGuess,
+            PartInput as ReviewPartInput, PartOverrides, PieceGuess, PieceOverrides, ReviewPiece, ScoreRef, StagedFile,
+            Target, propose, review_piece,
         },
     },
     naming,
@@ -778,14 +779,29 @@ pub async fn update_items(
     }
     let mut part_changes = input.part.clone();
     if let Some(p) = &mut part_changes {
-        if let Some(ids) = &p.instrument_ids {
+        if let Some(picks) = &p.instruments {
+            // Instruments of the library must exist; kept words are matched
+            // against the file name when the review is built (a-import-instruments).
+            let ids: Vec<Id> = picks
+                .iter()
+                .filter_map(|x| match x {
+                    InstrumentPick::Id(id) => Some(*id),
+                    InstrumentPick::Word(_) => None,
+                })
+                .collect();
             let known: i64 =
                 sqlx::query_scalar("SELECT COUNT(*) FROM instruments WHERE id IN (SELECT value FROM json_each(?1))")
-                    .bind(json_ids(ids))
+                    .bind(json_ids(&ids))
                     .fetch_one(&app.db.read)
                     .await?;
-            if known as usize != ids.iter().collect::<HashSet<_>>().len() || ids.len() > 20 {
-                return Err(AppError::BadRequest("unknown instruments (at most 20 per part)".into()));
+            let long_word = picks.iter().any(|x| matches!(x, InstrumentPick::Word(w) if w.chars().count() > 120));
+            if known as usize != ids.iter().collect::<HashSet<_>>().len()
+                || picks.len() > MAX_PART_INSTRUMENTS
+                || long_word
+            {
+                return Err(AppError::BadRequest(format!(
+                    "unknown instruments (at most {MAX_PART_INSTRUMENTS} per part)"
+                )));
             }
         }
         if let Some(k) = p.key.as_ref().map(|k| k.trim().to_owned()).filter(|k| !k.is_empty()) {

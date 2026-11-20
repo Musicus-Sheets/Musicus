@@ -1338,7 +1338,7 @@ async fn import_of_flat_numbered_files_groups_by_number_and_keeps_changes() {
     let s = Server::start().await;
     let lib = library(&s).await;
     let admin = &lib.admin;
-    s.ok::<Instrument>(Method::POST, "/api/instruments", admin, json!({"name": "Klarinette"})).await;
+    let klarinette: Instrument = s.ok(Method::POST, "/api/instruments", admin, json!({"name": "Klarinette"})).await;
     let batch: ImportBatch = s
         .ok(
             Method::POST,
@@ -1400,6 +1400,31 @@ async fn import_of_flat_numbered_files_groups_by_number_and_keeps_changes() {
         (vec!["1".to_string(), "2".to_string()], Some(Source::Librarian))
     );
 
+    // Several instruments and voices for one part (a-import-instruments).
+    let trumpet = lib.trumpet_part.instrument_ids[0];
+    let set = |instruments: serde_json::Value| json!({"ids": [k2.id], "part": {"instruments": instruments}});
+    let bad = s.json(Method::PATCH, "/api/import/items", admin, set(json!([trumpet, 9999]))).await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST, "unknown instrument refused");
+    let bad = s.json(Method::PATCH, "/api/import/items", admin, set(json!((0..21).collect::<Vec<_>>()))).await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST, "at most 20 instruments");
+    let edited: Vec<ReviewPiece> = s
+        .ok(
+            Method::PATCH,
+            "/api/import/items",
+            admin,
+            json!({"ids": [k2.id], "part": {"instruments": [klarinette.id, trumpet], "voices": ["2", "3"]}}),
+        )
+        .await;
+    let k2_now = part(&edited[0], "Klarinette2");
+    assert_eq!(
+        k2_now.instruments.iter().map(|i| (i.instrument_id, i.source, i.level)).collect::<Vec<_>>(),
+        [
+            (Some(klarinette.id), Some(Source::Librarian), Level::Green),
+            (Some(trumpet), Some(Source::Librarian), Level::Green)
+        ]
+    );
+    assert_eq!((k2_now.display_name.as_str(), k2_now.level), ("Klarinette / Trumpet 2 & 3", Level::Green));
+
     // German: the same names are read again; changes to parts stay (by path).
     let changed: ImportBatch =
         s.ok(Method::PUT, &format!("/api/import/batches/{}", batch.id), admin, json!({"language": "de"})).await;
@@ -1415,8 +1440,15 @@ async fn import_of_flat_numbered_files_groups_by_number_and_keeps_changes() {
     let found: Vec<Score> = s.get("/api/scores?q=alte", admin).await.json();
     assert_eq!(found[0].archive_number.as_deref(), Some("0304"), "the first path (in order) gives the number");
     let names: Vec<&str> = found[0].parts.iter().map(|p| p.display_name.as_str()).collect();
-    assert_eq!(names, ["Klarinette 2", "Klarinette in B♭ 1 & 2"]);
+    assert_eq!(names, ["Klarinette / Trumpet 2 & 3", "Klarinette in B♭ 1 & 2"]);
     assert_eq!(found[0].parts[1].voices, ["1", "2"], "the commit fills the voice list");
+    let mut both = vec![klarinette.id, trumpet];
+    both.sort_unstable();
+    assert_eq!(
+        (found[0].parts[0].instrument_ids.clone(), found[0].parts[0].voices.clone()),
+        (both, vec!["2".to_string(), "3".to_string()]),
+        "the commit creates the part with both instruments and both voices"
+    );
 
     // Cross-check with the system detection: a "Partitur" whose systems have one staff.
     s.ok::<Instrument>(Method::POST, "/api/instruments", admin, json!({"name": "Partitur"})).await;

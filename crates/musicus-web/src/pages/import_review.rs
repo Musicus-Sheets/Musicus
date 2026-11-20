@@ -8,9 +8,12 @@
 use crate::{
     Route, api,
     bridge::{self, FolderFile},
-    pages::import::{
-        FolderPicker, Progress, ProgressView, Selection, level_class, level_counts, part_label, send_folder,
+    pages::{
+        forms::instrument_choices,
+        import::{FolderPicker, Progress, ProgressView, Selection, level_class, level_counts, part_label, send_folder},
     },
+    picker::{Choice, Picker},
+    tag_input::TagInput,
     ui::{ErrorBox, Loading, NoAccess, can_manage, confirm, format_size},
 };
 use dioxus::prelude::*;
@@ -21,7 +24,7 @@ use musicus_api::{
     import::{
         Language, Level, Note, Source,
         pattern::PRESETS,
-        review::{Field, ItemState, PartOverrides, PieceOverrides, ReviewPart, ReviewPiece, Target},
+        review::{Field, InstrumentPick, ItemState, PartOverrides, PieceOverrides, ReviewPart, ReviewPiece, Target},
     },
     naming,
 };
@@ -93,20 +96,25 @@ fn merge_pieces(mut review: Signal<Option<Review>>, changed: Vec<ReviewPiece>) {
     }
 }
 
+/// Stores changes; `false` if the server refused them (the message is shown).
 async fn patch(
     review: Signal<Option<Review>>,
     mut error: Signal<Option<String>>,
     ids: Vec<Id>,
     piece: Option<PieceOverrides>,
     part: Option<PartOverrides>,
-) {
+) -> bool {
     let body = UpdateImportItems { ids, piece, part, reset: false };
     match api::send::<_, Vec<ReviewPiece>>(Method::PATCH, "/api/import/items", &body).await {
         Ok(changed) => {
             error.set(None);
             merge_pieces(review, changed);
+            true
         }
-        Err(e) => error.set(Some(e.message)),
+        Err(e) => {
+            error.set(Some(e.message));
+            false
+        }
     }
 }
 
@@ -558,12 +566,14 @@ fn PieceRow(
         move |v: String| {
             let mut o = PieceOverrides::default();
             f(&mut o, v);
-            spawn(async move { patch(review, error, vec![id], Some(o), None).await });
+            spawn(async move {
+                patch(review, error, vec![id], Some(o), None).await;
+            });
         }
     };
     let target = move |t: Target| {
         spawn(async move {
-            patch(review, error, vec![id], Some(PieceOverrides { target: Some(t), ..Default::default() }), None).await
+            patch(review, error, vec![id], Some(PieceOverrides { target: Some(t), ..Default::default() }), None).await;
         });
     };
     let ticked = selected.read().contains(&id);
@@ -617,7 +627,7 @@ fn PieceRow(
                 p { class: "note small", {n.message()} }
             }
             table { class: "import-parts",
-                thead { tr { th { "Page 1" } th { "File" } th { "Instrument" } th { "Key" } th { "Voices" } th { "Name" } th { "Readable by" } th { "Import" } } }
+                thead { tr { th { "Page 1" } th { "File" } th { "Instruments" } th { "Key" } th { "Voices" } th { "Name" } th { "Readable by" } th { "Import" } } }
                 tbody {
                     for part in piece.parts.iter() {
                         PartRow { key: "{part.id}", part: part.clone(), instruments: instruments.clone(), review, error }
@@ -638,7 +648,9 @@ fn PartRow(
     let id = part.id;
     let done = part.state == ItemState::Committed;
     let change = move |o: PartOverrides| {
-        spawn(async move { patch(review, error, vec![id], None, Some(o)).await });
+        spawn(async move {
+            patch(review, error, vec![id], None, Some(o)).await;
+        });
     };
     let level = if part.skip {
         "lvl-skip"
@@ -650,10 +662,13 @@ fn PartRow(
     let thumb = format!("/api/import/files/{}/thumbnail", part.file.id);
     let key = part.key.value.clone().unwrap_or_default();
     let legacy_key = !key.is_empty() && naming::key(&key).is_none();
-    let instrument_now: Option<Id> = match part.instruments.as_slice() {
-        [one] => one.instrument_id,
-        _ => None,
-    };
+    // The instruments as the override they become when one is added or
+    // removed: detected ones keep their word (a-import-instruments).
+    let picks = part.instrument_picks();
+    let chosen: Vec<Id> = part.instruments.iter().filter_map(|i| i.instrument_id).collect();
+    let addable: Vec<Choice> =
+        instrument_choices(&instruments).into_iter().filter(|c| !chosen.contains(&c.id)).collect();
+    let path = part.file.path.clone();
     let staves = part
         .file
         .staves
@@ -662,7 +677,7 @@ fn PartRow(
     let pages = part.file.page_count.map(|n| format!("{n} p.")).unwrap_or_default();
     rsx! {
         tr { class: "{level}",
-            td {
+            td { class: "thumb",
                 if part.file.has_thumbnail {
                     a { href: "/api/import/files/{part.file.id}", target: "_blank", title: "Open the PDF",
                         img { class: "thumb-small", src: "{thumb}", alt: "", loading: "lazy" } }
@@ -670,31 +685,51 @@ fn PartRow(
                     div { class: "thumb-small empty", "PDF" }
                 }
             }
-            td { class: "file",
+            td { class: "file", "data-label": "File",
                 span { class: "mono small", "{part.file.path}" }
                 br {}
                 span { class: "muted small", "{pages} {format_size(part.file.size_bytes)}{staves}" }
             }
-            td {
-                for (i, ins) in part.instruments.iter().enumerate() {
-                    span { key: "{i}", class: "ichip {level_class(ins.level)}",
-                        title: "{source_text(ins.source)} {ins.note.as_ref().map(|n| n.message()).unwrap_or_default()}",
-                        {ins.name.clone().unwrap_or_else(|| format!("? {}", ins.text))}
+            // Any number of instruments: chips with ×, plus the picker of the
+            // part editor (a-assign-picker); an unknown word stays red until
+            // it is mapped under "Instruments to confirm".
+            td { class: "instruments", "data-label": "Instruments",
+                div { class: "ichips", role: "group", "aria-label": "Instruments of {path}",
+                    for (i, ins) in part.instruments.iter().enumerate() {
+                        {
+                            let name = ins.name.clone().unwrap_or_else(|| format!("? {}", ins.text));
+                            let gone = ins.pick();
+                            let rest: Vec<InstrumentPick> = picks.iter().filter(|p| Some(*p) != gone.as_ref()).cloned().collect();
+                            rsx! {
+                                span { key: "{i}", class: "ichip {level_class(ins.level)}",
+                                    title: "{source_text(ins.source)} {ins.note.as_ref().map(|n| n.message()).unwrap_or_default()}",
+                                    span { "{name}" }
+                                    if !done {
+                                        button { r#type: "button", class: "ichip-remove",
+                                            title: "Remove {name}", "aria-label": "Remove instrument {name}",
+                                            onclick: move |_| change(PartOverrides { instruments: Some(rest.clone()), ..Default::default() }),
+                                            "×"
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 if !done {
-                    select { class: "small", "aria-label": "Instrument of {part.file.path}",
-                        onchange: move |e: FormEvent| {
-                            if let Ok(i) = e.value().parse::<Id>() {
-                                change(PartOverrides { instrument_ids: Some(vec![i]), ..Default::default() });
+                    Picker { options: addable, label: "+ Add instrument", placeholder: "Search instrument or family…",
+                        none_left: "Every instrument is chosen already.",
+                        onapply: {
+                            let picks = picks.clone();
+                            move |ids: Vec<i64>| {
+                                let mut next = picks.clone();
+                                next.extend(ids.into_iter().map(InstrumentPick::Id));
+                                change(PartOverrides { instruments: Some(next), ..Default::default() });
                             }
-                        },
-                        option { value: "", selected: true, if instrument_now.is_some() { "Change…" } else { "Choose…" } }
-                        for i in instruments.iter() { option { key: "{i.id}", value: "{i.id}", "{i.name}" } }
-                    }
+                        } }
                 }
             }
-            td { class: level_class(part.key.level), title: "{hint(&part.key)}",
+            td { class: "key {level_class(part.key.level)}", "data-label": "Key", title: "{hint(&part.key)}",
                 select { disabled: done, "aria-label": "Key of {part.file.path}",
                     onchange: move |e: FormEvent| change(PartOverrides { key: Some(e.value()), ..Default::default() }),
                     option { value: "", selected: key.is_empty(), "—" }
@@ -704,29 +739,29 @@ fn PartRow(
                     if legacy_key { option { value: "{key}", selected: true, "{key}" } }
                 }
             }
-            // The voice list as text, "1 & 2"; "&" or "," separate voices (a-import-voices).
-            td { class: level_class(part.voices.level), title: "{source_hint(part.voices.source, part.voices.note.as_ref())}",
-                input { class: "voice", disabled: done, value: part.voices.values.join(naming::VOICE_SEPARATOR),
-                    placeholder: "—", "aria-label": "Voices of {part.file.path}",
-                    onchange: move |e: FormEvent| {
-                        let voices = e.value().split(',').map(str::to_owned).collect();
-                        change(PartOverrides { voices: Some(voices), ..Default::default() })
-                    } }
+            // The voices as chips, the input of the part editor (a-import-voices).
+            td { class: "voices {level_class(part.voices.level)}", "data-label": "Voices",
+                title: "{source_hint(part.voices.source, part.voices.note.as_ref())}",
+                if done {
+                    "{part.voices.values.join(naming::VOICE_SEPARATOR)}"
+                } else {
+                    VoicesCell { id, path: path.clone(), values: part.voices.values.clone(), review, error }
+                }
             }
-            td {
+            td { class: "name", "data-label": "Name",
                 strong { {part_label(&part)} }
                 for n in part.notes.iter().filter(|n| !matches!(n, Note::NoReaders)) {
                     div { class: "note small", {n.message()} }
                 }
             }
-            td { class: "small",
+            td { class: "small readers", "data-label": "Readable by",
                 if part.readers.is_empty() {
                     span { class: "warn-text", "nobody yet" }
                 } else {
                     "{part.readers.join(\", \")}"
                 }
             }
-            td {
+            td { class: "take", "data-label": "Import",
                 if done {
                     span { class: "ok", "✓" }
                 } else {
@@ -735,5 +770,46 @@ fn PartRow(
                 }
             }
         }
+    }
+}
+
+/// The voices of a part as chips (`TagInput` with "&" as separator, like
+/// the part editor, a-import-voices). Every change is stored at once; the
+/// server's cleaned list replaces the chips when it differs, and a refused
+/// change (more than `naming::MAX_VOICES`) puts the stored list back.
+#[component]
+fn VoicesCell(
+    id: Id,
+    path: String,
+    values: Vec<String>,
+    review: Signal<Option<Review>>,
+    error: Signal<Option<String>>,
+) -> Element {
+    let mut voices = use_signal(|| values.clone());
+    let mut stored = use_signal(|| values.clone());
+    // New values from the server (own change, other tab, reload): take them.
+    use_effect(use_reactive!(|values| {
+        if *stored.peek() != values {
+            stored.set(values.clone());
+            voices.set(values);
+        }
+    }));
+    use_effect(move || {
+        let now = voices();
+        if now == *stored.peek() {
+            return;
+        }
+        spawn(async move {
+            let o = PartOverrides { voices: Some(now), ..Default::default() };
+            if !patch(review, error, vec![id], None, Some(o)).await {
+                voices.set(stored());
+            }
+        });
+    });
+    let label_id = use_hook(|| format!("voices-of-{}", crate::picker::unique_id()));
+    rsx! {
+        span { id: "{label_id}", class: "visually-hidden", "Voices of {path}" }
+        TagInput { tags: voices, labelledby: label_id.clone(), placeholder: "—", noun: "voice",
+            separators: ",&", maxlength: naming::MAX_VOICE_CHARS as u32 }
     }
 }

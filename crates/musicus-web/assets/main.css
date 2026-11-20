@@ -399,9 +399,20 @@ label.check input { width: 1.2rem; height: 1.2rem; min-height: auto; }
 .import-progress { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin: 0.6rem 0; }
 .import-progress progress { flex: 0 1 240px; }
 .import-summary { margin: 0.6rem 0; }
-.ichip { display: inline-block; margin: 0.1rem 0.25rem 0.1rem 0; padding: 0.05rem 0.5rem; border-radius: 99px;
-  font-size: 0.85rem; border: 1px solid var(--lvl, var(--border)); background: color-mix(in srgb, var(--lvl, var(--border)) 10%, var(--surface)); }
+.ichip { display: inline-flex; align-items: center; max-width: 100%; margin: 0.1rem 0.25rem 0.1rem 0; padding: 0.05rem 0.5rem;
+  border-radius: 99px; font-size: 0.85rem; overflow-wrap: anywhere;
+  border: 1px solid var(--lvl, var(--border)); background: color-mix(in srgb, var(--lvl, var(--border)) 10%, var(--surface)); }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.table-scroll { overflow-x: auto; }
 table.import-preview, table.import-parts { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+/* Preview of the pattern: number, title, composer and genre keep their width,
+   the parts take the rest and wrap. */
+table.import-preview { table-layout: fixed; min-width: 600px; }
+.import-preview col.no { width: 4rem; }
+.import-preview col.title { width: 24%; }
+.import-preview col.composer { width: 15%; }
+.import-preview col.genre { width: 10%; }
+.import-preview td { overflow-wrap: break-word; white-space: normal; }
 .import-preview th, .import-preview td, .import-parts th, .import-parts td { text-align: left; vertical-align: top;
   padding: 0.35rem 0.4rem; border-bottom: 1px solid var(--border); }
 .import-preview td.lvl-yellow, .import-preview td.lvl-red, .import-parts td.lvl-yellow, .import-parts td.lvl-red {
@@ -411,7 +422,7 @@ table.import-preview, table.import-parts { width: 100%; border-collapse: collaps
 .review-tools { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin: 0.8rem 0; }
 .review-tools select { width: auto; }
 .import-piece { background: var(--surface); border: 1px solid var(--border); border-left: 6px solid var(--lvl, var(--border));
-  border-radius: var(--radius); padding: 0.8rem; margin: 0 0 0.8rem; overflow-x: auto; }
+  border-radius: var(--radius); padding: 0.8rem; margin: 0 0 0.8rem; }
 .import-piece .piece-head { display: flex; gap: 0.8rem; align-items: flex-start; }
 .import-piece .piece-head > input[type=checkbox] { margin-top: 1.9rem; width: 1.3rem; height: 1.3rem; }
 .import-piece .piece-fields { flex: 1 1 auto; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
@@ -422,9 +433,38 @@ table.import-preview, table.import-parts { width: 100%; border-collapse: collaps
 .import-piece .note, .unknown-instruments .note { color: var(--lvl, var(--warn)); margin: 0.2rem 0; }
 .import-piece .match { display: flex; flex-wrap: wrap; gap: 0.8rem; align-items: center; margin: 0.5rem 0; padding: 0.4rem 0.6rem;
   border-radius: 6px; background: color-mix(in srgb, var(--lvl, var(--accent)) 10%, transparent); }
-.import-parts select, .import-parts input.voice { width: auto; min-width: 4rem; min-height: 36px; }
-.import-parts input.voice { width: 6rem; }
-.import-parts td.file { max-width: 18rem; overflow-wrap: anywhere; }
+.import-parts select { width: 100%; min-width: 4rem; min-height: 36px; }
+.import-parts td.file { min-width: 10rem; max-width: 16rem; overflow-wrap: anywhere; }
+.import-parts td.instruments { min-width: 12rem; }
+.import-parts td.key { min-width: 6.5rem; }
+.import-parts td.voices { min-width: 9rem; }
+.import-parts td.name { min-width: 8rem; }
+.import-parts td.readers { min-width: 6rem; }
+.ichips { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.ichips .ichip { margin: 0; }
+.import-parts .ichips { margin-bottom: 0.3rem; }
+.import-parts .ichip { min-height: 32px; padding-right: 0.15rem; }
+.import-parts .ichip:not(:has(.ichip-remove)) { padding-right: 0.5rem; }
+button.ichip-remove { position: relative; justify-content: center; min-height: 0; width: 1.6rem; height: 1.6rem; margin-left: 0.15rem;
+  padding: 0; border: none; background: transparent; color: var(--muted); border-radius: 50%; font-size: 1.05rem; line-height: 1; }
+button.ichip-remove::after { content: ""; position: absolute; inset: -6px -6px; }
+button.ichip-remove:hover, button.ichip-remove:focus-visible { color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.import-parts .picker-toggle { min-height: 32px; padding: 0.15rem 0.6rem; font-size: 0.85rem; }
+.import-parts .tag-input { min-height: 40px; padding: 0.2rem 0.4rem; }
+.import-parts .tag-entry-wrap.end { flex-basis: 2.5rem; }
+/* Narrower screens: every part is a small card (labels from data-label). */
+@media (max-width: 1024px) {
+  .import-parts, .import-parts tbody { display: block; }
+  .import-parts thead { display: none; }
+  .import-parts tr { display: grid; grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1fr); column-gap: 0.7rem;
+    padding: 0.5rem 0.2rem 0.5rem 0.7rem; border-bottom: 1px solid var(--border); }
+  .import-parts td { border-bottom: none; padding: 0.2rem 0.3rem; min-width: 0; max-width: none; }
+  .import-parts td.thumb { grid-row: 1 / span 5; padding-left: 0; }
+  .import-parts td.file, .import-parts td.instruments, .import-parts td.name { grid-column: 2 / -1; min-width: 0; }
+  .import-parts td.key, .import-parts td.voices, .import-parts td.readers { min-width: 0; }
+  .import-parts td[data-label]::before { content: attr(data-label); display: block; font-size: 0.75rem; color: var(--muted); }
+}
 .thumb-small { width: 56px; height: 79px; object-fit: cover; border: 1px solid var(--border); border-radius: 4px; background: #fff;
   display: flex; align-items: center; justify-content: center; font-size: 0.75rem; color: var(--muted); }
 .unknown-instruments .row { border-left: 4px solid var(--lvl); padding-left: 0.6rem; flex-wrap: wrap; }
