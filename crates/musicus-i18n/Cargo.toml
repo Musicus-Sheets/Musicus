@@ -1,0 +1,23 @@
+[package]
+name = "musicus-i18n"
+description = "Musicus message catalogue (Fluent): typed message functions generated from the English catalogue, English fallback per message, pseudo-locale, and the search tables of key spellings and connecting words."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+# Formatting of messages (the web client). Without it the crate only offers
+# the build-time tables (`KEY_SPELLINGS`, `NAME_CONNECTORS`) the server needs.
+default = ["bundles"]
+bundles = ["dep:fluent-bundle", "dep:unic-langid"]
+
+[dependencies]
+fluent-bundle = { version = "0.16", optional = true }
+unic-langid = { version = "0.9", optional = true }
+
+[build-dependencies]
+fluent-syntax = "0.12"
+
+[dev-dependencies]
+fluent-syntax = "0.12"

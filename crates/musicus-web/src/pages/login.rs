@@ -86,7 +86,7 @@ pub fn Invite(token: String) -> Element {
     rsx! {
         main { class: "auth",
             match &*info.read() {
-                None => rsx! { p { "Loading…" } },
+                None => rsx! { p { {musicus_i18n::t::common_loading()} } },
                 Some(Err(_)) => rsx! {
                     div { class: "card",
                         h1 { "Link expired" }

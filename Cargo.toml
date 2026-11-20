@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/musicus-api", "crates/musicus-server", "crates/musicus-web"]
+members = ["crates/musicus-api", "crates/musicus-i18n", "crates/musicus-server", "crates/musicus-web"]
 # The web client only builds for wasm32 (via `dx`), so plain `cargo build`
 # and `cargo test` cover the shared types and the server.
-default-members = ["crates/musicus-api", "crates/musicus-server"]
+default-members = ["crates/musicus-api", "crates/musicus-i18n", "crates/musicus-server"]
 exclude = ["prototypes"]
 
 [workspace.package]
@@ -14,6 +14,7 @@ rust-version = "1.88"
 
 [workspace.dependencies]
 musicus-api = { path = "crates/musicus-api" }
+musicus-i18n = { path = "crates/musicus-i18n", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 postcard = { version = "1.1", features = ["alloc"] }

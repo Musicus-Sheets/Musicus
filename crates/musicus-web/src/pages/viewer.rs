@@ -99,7 +99,7 @@ async fn load(id: i64, pid: Option<i64>) -> api::ApiResult<Loaded> {
 fn ViewerPage(id: i64, pid: Option<i64>) -> Element {
     let data = use_resource(move || load(id, pid));
     match &*data.read() {
-        None => rsx! { div { class: "reader", div { class: "loading-page", "Loading…" } } },
+        None => rsx! { div { class: "reader", div { class: "loading-page", {musicus_i18n::t::common_loading()} } } },
         Some(Err(e)) => rsx! {
             main { class: "narrow",
                 ErrorBox { message: e.message.clone() }

@@ -4,7 +4,7 @@
 
 ```sh
 cargo build                       # api + server (web excluded from default-members)
-cargo test                        # 62 api unit, 19 server unit, 15 API integration tests, 1 source check (no_prose)
+cargo test                        # api unit, i18n unit + catalogue checks, server unit, API integration tests, no_prose
 cargo test -p musicus-web         # client unit tests on the host (errors.rs texts); not in default-members
 cargo run --release -p musicus-server --example layout_report -- a.pdf …   # system detection per page (regressions)
 cargo clippy --all-targets        # must be warning-free
@@ -77,6 +77,11 @@ Site: GitHub Pages of the main repository (`https://<owner>.github.io/Musicus/`)
    runs start from (the default branch is allowed by default). Otherwise deploys from release tags are rejected.
 5. New Typst version: change `TYPST_VERSION`/`TYPST_SHA256` in the workflow (sha256 from the release asset) and
    the version in `docs/user-guide/README.md`; run the script locally over all tags first.
+
+### Add or change a UI text (d-i18n-fluent, a-i18n-keys)
+1. Add the English message to `crates/musicus-i18n/locales/en/<area>.ftl` (id `<area>-<page>-<what>`, comment for translators; counts as `{ $count -> [one] … *[other] … }`); terms from `docs/agents/glossary.md`.
+2. Use it as `musicus_i18n::t::<id with _>(args)`; a missing message or wrong argument does not compile.
+3. `cargo test -p musicus-i18n` fails for unused messages and for other languages with other arguments or obsolete ids. Changed meaning = new id.
 
 ### Change the schema
 New `crates/musicus-server/migrations/000N_<desc>.sql` (never edit applied ones); update `data-model.md`; update queries; tests.

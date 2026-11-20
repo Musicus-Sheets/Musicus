@@ -217,7 +217,7 @@ pub fn describe_file(f: &FileVersion) -> String {
 }
 
 pub fn pages(n: i64) -> String {
-    if n == 1 { "1 page".into() } else { format!("{n} pages") }
+    musicus_i18n::t::common_pages(n)
 }
 
 /// Editor of an existing part: label, voices and key (saved with "Save

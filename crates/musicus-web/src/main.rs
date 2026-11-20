@@ -7,6 +7,7 @@ mod bridge;
 mod errors;
 mod ink;
 mod layouts;
+mod locale;
 mod pages;
 mod picker;
 mod suggest;
@@ -96,6 +97,7 @@ pub fn session() -> Session {
 }
 
 fn main() {
+    locale::init();
     dioxus::launch(App);
 }
 

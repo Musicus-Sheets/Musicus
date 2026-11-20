@@ -2,6 +2,15 @@
 
 Dioxus 0.7.10, features `web` + `router`; compiled to wasm32 by `dx`; assets `assets/main.css` (via `asset!`), `public/vendor/pdfjs/*` (fetched, gitignored), `js/bridge.js` (wasm-bindgen snippet). Talks only to `/api` (same origin). Persists nothing (INV-10).
 
+## Language and texts (`locale.rs`, `musicus-i18n`; d-i18n-fluent, a-intl-js)
+
+`main` calls `locale::init()` before launching: language = first entry of `navigator.languages` whose primary subtag is
+shipped (`musicus_i18n::LANGUAGES`, today `en`), `en-XA` = pseudo-locale, else English; `<html lang>` = the matched
+preference ("en-GB"); nothing stored. Texts: `musicus_i18n::t::<message_id>(args)` (generated, English fallback per
+message). Dates/times: `locale::format_time`/`format_date` = `toLocaleString`/`toLocaleDateString` with
+`locale::intl_locale()` (was `"default"`); numbers `format_number` (`Intl.NumberFormat`); `format_size` "1.5 MB" /
+"12 KB" (number from `Intl`, unit from the catalogue). `ui` re-exports the three formatters.
+
 ## Routes (`main.rs::Route`)
 
 | Path | Component | Layout | Notes |

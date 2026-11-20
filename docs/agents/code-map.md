@@ -7,11 +7,11 @@ Columns: path | purpose | key symbols | requirements implemented | decisions.
 
 | Path | Purpose | Key symbols | Requirements | Decisions |
 | --- | --- | --- | --- | --- |
-| `Cargo.toml` | Workspace: members api/server/web; `default-members` excludes web (wasm-only); profiles `release`, `wasm-release`; `profile.dev.package.sha2` opt-level 3 (import hashing in debug wasm) | — | R-TECH-001, R-TECH-002 | a-workspace-members |
+| `Cargo.toml` | Workspace: members api/i18n/server/web (`musicus-i18n` as workspace dependency without default features: the server needs only its tables); `default-members` excludes web (wasm-only); profiles `release`, `wasm-release`; `profile.dev.package.sha2` opt-level 3 (import hashing in debug wasm) | — | R-TECH-001, R-TECH-002 | a-workspace-members |
 | `rustfmt.toml` | `max_width = 120`, `use_small_heuristics = "Max"` | — | — | — |
 | `crates/musicus-api/Cargo.toml` | Deps: serde, postcard only | — | R-TECH-003 | d-shared-types |
 | `crates/musicus-server/Cargo.toml` | Deps: axum 0.8, axum-server (rustls, ring), sqlx 0.9 sqlite, tower-http, argon2, hayro, zstd, clap, tracing | — | R-TECH-001 | d-sqlite |
-| `crates/musicus-web/Cargo.toml` | Deps: dioxus 0.7.10 (web, router), gloo-net, gloo-timers, wasm-bindgen, web-sys, sha2 (import hashing) | — | R-TECH-002 | — |
+| `crates/musicus-web/Cargo.toml` | Deps: dioxus 0.7.10 (web, router), musicus-i18n (feature `bundles`), gloo-net, gloo-timers, wasm-bindgen, web-sys, sha2 (import hashing) | — | R-TECH-002 | — |
 | `crates/musicus-web/Dioxus.toml` | `dx` app name/title | — | — | — |
 | `scripts/check-submodules.sh` | Merge gate: every submodule pointer must be on the first-parent history of the submodule's `branch` (main) — i.e. a merge commit on docs `main`, not a feature-branch commit. Clones each docs repo (blobless; HTTPS in CI) | — | — | a-submodule-pins |
 | `scripts/update-submodules.sh` | Moves all submodule pointers to the newest commit of their `main` and stages them | — | — | a-submodule-pins |
@@ -33,6 +33,17 @@ Columns: path | purpose | key symbols | requirements implemented | decisions.
 | `crates/musicus-api/src/pixels.rs` | Whole device pixels for the reader's canvases: `device_size(css_w, css_h, ratio)` → `DeviceSize {width, height, ratio}` (rounded, ≥ 1, capped at `MAX_CANVAS_PIXELS` by lowering the ratio), `css_width/css_height` = pixels / ratio; unit tests (exact CSS × ratio, cap, degenerate input); same rule as `bridge.js::deviceSize` | `device_size`, `DeviceSize`, `MAX_CANVAS_PIXELS` | R-READ-001, R-READ-011 | a-device-pixels |
 | `crates/musicus-api/src/naming.rs` | Part names (`part_name`, `derived_name`), key list `KEYS` (code/name/option), `key`, `key_name`, `parse_key`/`normalize_key`, `natural_cmp`, archive numbers (`archive_key` matching key, `archive_search_text` indexed forms); unit tests | `part_name`, `KEYS`, `normalize_key`, `natural_cmp`, `archive_key`, `archive_search_text` | R-LIB-010, R-LIB-011, R-LIB-015 | a-part-names, a-archive-number |
 | `crates/musicus-api/src/ink.rs` | Annotation model, `encode`/`decode` (version byte + postcard, limits), `merge` | `PageLayer`, `InkObject`, `Stroke::from_points/points`, `StampKind`, `COORD_MAX`, `MAX_*`, `merge` | R-ANN-002, R-ANN-005, R-ANN-006, R-ANN-007, R-ANN-012 | d-ink-format, d-optimistic |
+
+## musicus-i18n (`crates/musicus-i18n`, d-i18n-fluent)
+
+| Path | Purpose | Key symbols | Requirements | Decisions |
+| --- | --- | --- | --- | --- |
+| `crates/musicus-i18n/Cargo.toml` | Feature `bundles` (default: fluent-bundle 0.16, unic-langid) for formatting; without it only the generated tables. Build/dev dep fluent-syntax 0.12 | — | R-I18N-003 | d-i18n-fluent |
+| `crates/musicus-i18n/build.rs` | Generates `$OUT_DIR/messages.rs` from `locales/*/*.ftl`: `LANGUAGES`, `SOURCES` (include_str! per language), `MESSAGE_IDS`, `KEY_SPELLINGS` (literal text of `key-name-<code>` in every language), `NAME_CONNECTORS` (words of `part-name-with-key` in every language), module `t` (one fn per English message, arguments = its variables in order of use, `impl Into<Arg>`; `key_name(code)`); fails on syntax errors, attributes, messages without value, duplicates | `t`, `KEY_SPELLINGS`, `NAME_CONNECTORS` | R-I18N-003, R-I18N-010 | d-i18n-fluent, a-i18n-keys |
+| `crates/musicus-i18n/src/scan.rs` | `.ftl` reader shared by `build.rs` and the tests (`#[path]`): `languages`, `messages` ⇒ `Msg {id, vars, text, literal}`, `fn_name` | `Msg`, `messages` | R-I18N-003 | d-i18n-fluent |
+| `crates/musicus-i18n/src/lib.rs` | `negotiate(prefs)` (first shipped primary subtag, `PSEUDO` = "en-XA", else "en"), `set_language`, `current_language`, `message(id, args)` (chosen bundle, else English per message; `set_use_isolating(false)`), `Arg` (text/number), pseudo-locale (accents + doubled vowels on literal text, `⟦…⟧` around each message), `key_spellings`, `is_name_connector`; unit tests (negotiation, plurals, fallback, pseudo) | `negotiate`, `set_language`, `message`, `Arg`, `PSEUDO` | R-I18N-001, R-I18N-002, R-I18N-003 | d-i18n-fluent, a-intl-js |
+| `crates/musicus-i18n/locales/en/common.ftl` | English messages shared by all pages (loading, sizes, page counts) | `common-*` | R-I18N-003 | a-i18n-keys |
+| `crates/musicus-i18n/tests/catalogue.rs` | Other languages: no message missing in English, same arguments; every English message used by `crates/musicus-web/src` (`t::<fn>(`; `key-name-*` via `t::key_name(`) | — | R-I18N-003, R-I18N-010 | d-i18n-fluent |
 
 ## musicus-server (`crates/musicus-server`)
 
@@ -78,8 +89,9 @@ Columns: path | purpose | key symbols | requirements implemented | decisions.
 
 | Path | Purpose | Key symbols | Requirements | Decisions |
 | --- | --- | --- | --- | --- |
-| `crates/musicus-web/src/main.rs` | Launch, `Route` enum (incl. `/import`, `/import/:id`), `Session` context (`user`, `checked`), `/api/auth/me` on start | `Route`, `Session`, `session()` | R-TECH-002 | — |
-| `crates/musicus-web/src/ui.rs` | `Shell` (nav: Library, Programmes, Instruments; Groups and Import for librarian/admin; Users for admin; login guard), role helpers `current_role`/`can_manage`/`is_admin`, `ErrorBox`, `Status`, `NoAccess`, formatting, `confirm`/`prompt`, `none_if_empty` | `Shell`, `can_manage`, `is_admin` | R-ACC-009, R-ACC-013, R-ACC-014 | d-inline-management, a-import-page |
+| `crates/musicus-web/src/main.rs` | Launch (`locale::init` first), `Route` enum (incl. `/import`, `/import/:id`), `Session` context (`user`, `checked`), `/api/auth/me` on start | `Route`, `Session`, `session()` | R-TECH-002 | — |
+| `crates/musicus-web/src/locale.rs` | UI language (a-intl-js): `init` (from `navigator.languages` via `musicus_i18n::negotiate`, sets `<html lang>`), `intl_locale`, `format_time`/`format_date` (`toLocale…String(<locale>)`), `format_number` (`Intl.NumberFormat`), `format_size` (catalogue units) | `init`, `format_size`, `format_number` | R-I18N-001, R-I18N-002, R-I18N-005, R-SEC-001 | a-intl-js |
+| `crates/musicus-web/src/ui.rs` | `Shell` (nav: Library, Programmes, Instruments; Groups and Import for librarian/admin; Users for admin; login guard), role helpers `current_role`/`can_manage`/`is_admin`, `ErrorBox`, `Status`, `NoAccess`, re-exported formatting of `locale`, `confirm`/`prompt`, `none_if_empty` | `Shell`, `can_manage`, `is_admin` | R-ACC-009, R-ACC-013, R-ACC-014 | d-inline-management, a-import-page |
 | `crates/musicus-web/src/errors.rs` | The one place that renders error codes, import notes, pattern and ink errors as text (English for now; exhaustive matches, a new code does not compile without a text): `api_error_text` (`Unknown` ⇒ server `message`), `code_text`, `field_name`, `note_text`, `pattern_error_text`, `ink_error_text`, `network_text`, `http_failed_text`; host tests (`cargo test -p musicus-web`) | `api_error_text`, `code_text`, `note_text` | R-I18N-004 | a-error-codes |
 | `crates/musicus-web/src/api.rs` | HTTP helpers (always CSRF header), errors → `ApiErr {status, code, message}` with the text from `errors.rs` (unparseable body with a `message` ⇒ that message), 401 → full reload to `/login`, `get_page` (204 = Missing), `put_page` (If-Match, 409 = Conflict), `upload` | `get`, `post`, `put_page`, `get_page`, `SaveOutcome`, `PageBytes` | R-SEC-004, R-ANN-013 | d-csrf, a-unauthorized-reload |
 | `crates/musicus-web/src/layouts.rs` | In-memory cache of `FileLayout`s (done/failed only), `load`, `forget`, `retain_only` | `load`, `forget`, `retain_only` | R-READ-019, R-SEC-001 | d-no-client-storage |
