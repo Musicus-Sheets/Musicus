@@ -1,0 +1,72 @@
+name: Rust
+# Format, lint and tests of the Rust workspace, as separate jobs that run in
+# parallel. Runs on pull requests, the merge queue and pushes to main. Make the
+# jobs merge gates by marking them as required status checks
+# (fmt, clippy, clippy-wasm, test, test-web).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+  push:
+    branches: [main]
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  # Same toolchain as the Docker build (Dockerfile: RUST_IMAGE).
+  RUST_TOOLCHAIN: "1.97"
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --locked --all-targets
+
+  clippy-wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --locked -p musicus-web --target wasm32-unknown-unknown
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked
+
+  test-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked -p musicus-web

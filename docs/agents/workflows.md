@@ -10,6 +10,8 @@ cargo run --release -p musicus-server --example layout_report -- a.pdf …   # s
 cargo clippy --all-targets        # must be warning-free
 cargo fmt --check                 # rustfmt.toml: max_width 120
 cargo clippy -p musicus-web --target wasm32-unknown-unknown
+# CI (workflow `Rust`, .github/workflows/rust.yml) runs fmt, clippy, clippy-wasm, test and test-web as
+# parallel jobs with RUSTFLAGS=-D warnings; when the Docker build's Rust version changes, change RUST_TOOLCHAIN too.
 ./scripts/fetch-pdfjs.sh          # once (again after changes of the script); populates crates/musicus-web/public/vendor/pdfjs (gitignored)
 dx build --platform web --package musicus-web            # debug → target/dx/musicus-web/debug/web/public
 dx bundle --platform web --package musicus-web --release # release (needs wasm-opt)
