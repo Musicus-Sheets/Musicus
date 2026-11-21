@@ -24,7 +24,7 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | R-FILE-010 | bilevel compression of scans | |
 | R-SEC-009, R-SEC-010 | watermark, download audit log | watermark must not create blobs (conflict with R-FILE-004) |
 | R-OPS-009 | continuous replication (Litestream) | |
-| F-OPS-005, R-OPS-010…025 | updates and downgrades (d-update-model, a-preview-migrations, a-patch-no-db-changes) | plan and roadmap in `docs/technical/chapters/14-updates.typ`; phase 0 (own update runner with marker tables, additive/rebuild/removal parts, previews merged per release, snapshot + automatic restore, `backup` without updating, `restore`, refusal message, enum fallbacks) must ship in 1.0.0; see § Updates below |
+| F-OPS-005, R-OPS-010…025, R-OPS-038…041 | updates and downgrades (d-update-model, a-preview-migrations, a-patch-no-db-changes, a-db-check) | plan and roadmap in `docs/technical/chapters/14-updates.typ`; phase 0 (own update runner with marker tables, additive/rebuild/removal parts, previews merged per release, snapshot + automatic restore, `backup` without updating, `restore`, refusal message, enum fallbacks) must ship in 1.0.0; see § Updates below |
 | F-OPS-006, R-OPS-026…032 | platforms (a-platforms) | multi-arch images + version tags (phase 0); Windows blocker and other findings in § Updates below; R-OPS-029…032 are `proposed` |
 | F-OPS-007, R-OPS-033…036 | version visible (a-version-public) | `/api/version`, About view, title pages from the release version, requirements tag per release |
 | R-OPS-037 | backups/exports unencrypted, with guidance (a-unencrypted-export) | user guide backup section must say that backups need the same care as the data directory |
@@ -93,6 +93,10 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 - `backup` applies pending migrations before copying (`main.rs` → `open_state` → `Db::open`), contrary to R-OPS-021.
 - No automatic snapshot, no `restore` command (manual copy in the user guide), no `/api/version`, no About view.
 - `compose.yaml` builds locally (`build: .`, `musicus:latest`); no published image (R-OPS-010, R-OPS-028).
+- No database check, `db-change` notice or release check in CI, no schema snapshot (`schema.sql`,
+  `scripts/db-schema.sh`) — all come with phase 0 (a-db-check, R-OPS-038…040), not earlier.
+- Patches writing new kinds of stored values (R-OPS-041) are not caught by any check; only the planned test matrix,
+  enum fallbacks and the checklist line cover it.
 - Stored enums other than `ErrorCode` (`Role`, `RegionKind`, …) have no fallback for unknown values; an older
   release would fail on values written by a newer one.
 - Portability findings (details and actions in the plan):

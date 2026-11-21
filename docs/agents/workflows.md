@@ -99,19 +99,23 @@ Site: GitHub Pages of the main repository (`https://<owner>.github.io/Musicus/`)
 
 ### Change the schema
 New `crates/musicus-server/migrations/000N_<desc>.sql` (never edit applied ones); update `data-model.md`; update queries; tests.
-Planned for 1.0 (d-update-model, a-preview-migrations; not implemented): changes become preview updates in
-`migrations/preview/` with an additive and a removal part; removals never go into the additive part; access
+Planned for 1.0 (d-update-model, a-preview-migrations, a-db-check; not implemented): changes become preview updates in
+`migrations/preview/` with an additive and a removal part, plus the regenerated schema snapshot; removals never go into the additive part; access
 restrictions count as removals; patch releases never contain a database update.
 
 ### Release (planned; nothing of this exists yet)
 Plan and roadmap: `docs/technical/chapters/14-updates.typ`. Phase 0 must be done before 1.0.0. In short:
+0. Open a release pull request from a branch `release/<version>` (e.g. `release/1.3.0`); only such a branch may
+   delete previews and add the merged update (a-db-check). A normal pull request that changes the database adds a
+   preview plus the regenerated schema snapshot (`scripts/db-schema.sh` → `crates/musicus-server/schema.sql`) and
+   gets the label `db-change` (the next release must then be a minor).
 1. Merge all preview updates into `migrations/<version>.sql` (release script; previews deleted). Patch release:
-   no database update at all (a-patch-no-db-changes).
+   no database update and no new kinds of stored values ("patch: no new stored values"; a-patch-no-db-changes).
 2. Set the version (workspace `Cargo.toml`, title pages of `docs/user-guide` and `docs/technical`).
 3. Tag `vX.Y.Z` in `docs/requirements` on the pinned commit (R-OPS-036); merge docs first (a-submodule-pins).
 4. Tag the main repository; the release workflow builds and publishes the linux/amd64 + linux/arm64 image with
-   version tags (R-OPS-028) and the release check fails on previews, a database update in a patch, or a wrong
-   version on a title page. Publishing the GitHub release rebuilds the guide site (a-guide-site).
+   version tags (R-OPS-028); the release check (R-OPS-040) fails on previews, a database update in a patch, a merged
+   update that does not list exactly the removed previews, or a wrong version on a title page. Publishing the GitHub release rebuilds the guide site (a-guide-site).
 5. Release notes: removed features with their data, access restrictions that shorten the downgrade window,
    downgrade targets (R-OPS-014).
 
