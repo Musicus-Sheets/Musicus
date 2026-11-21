@@ -19,6 +19,7 @@ cargo run -p musicus-server -- serve --data-dir /tmp/m --web-dir target/dx/music
 node e2e/smoke.mjs <admin-invite-url-from-log> some.pdf /tmp/shots   # fresh data dir required; BROWSER=firefox for Firefox
 python3 scripts/check-ui-literals.py  # no literal UI text in the client (R-I18N-010; CI: workflow `UI literals`)
 node e2e/pseudo.mjs <admin-invite-url>   # pseudo-locale run (fresh data dir; every UI text marked)
+python3 scripts/i18n-review.py de > review-de.md   # side-by-side English | German for the maintainer's review (not shipped)
 python3 docs/agents/check.py [--since <ref>]
 uv run docs/requirements/tools/validate.py
 docker compose up -d --build
@@ -85,7 +86,15 @@ Site: GitHub Pages of the main repository (`https://<owner>.github.io/Musicus/`)
 ### Add or change a UI text (d-i18n-fluent, a-i18n-keys)
 1. Add the English message to `crates/musicus-i18n/locales/en/<area>.ftl` (id `<area>-<page>-<what>`, comment for translators; counts as `{ $count -> [one] … *[other] … }`); terms from `docs/agents/glossary.md`.
 2. Use it as `musicus_i18n::t::<id with _>(args)`; a missing message or wrong argument does not compile.
-3. `cargo test -p musicus-i18n` fails for unused messages and for other languages with other arguments or obsolete ids. Changed meaning = new id.
+3. Add the German draft to `locales/de/<area>.ftl` (same id, same file; glossary terms, "du"; a-i18n-german). `cargo test -p musicus-i18n` fails for unused messages, a German message missing (`COMPLETE`), other arguments, obsolete ids, a message in another file than its English source, and plural variants that are not CLDR categories. Changed meaning = new id (and a new German draft).
+4. Tell the maintainer which German messages are new (German is a draft until reviewed; `scripts/i18n-review.py`).
+
+### Add a language
+1. `crates/musicus-i18n/locales/<lang>/*.ftl` (same files and ids as `en`); `LANGUAGES` and negotiation pick it up.
+2. Its CLDR plural categories in `tests/catalogue.rs::PLURAL_CATEGORIES`; add it to `COMPLETE` once it must ship complete.
+3. Its key names (`key-name-<code>`) and the words of `part-name-with-key` become search spellings/connectors: add a
+   migration `DELETE FROM part_fts;` and update `part_index::tests::INDEXED_SPELLINGS` (the test fails until then).
+4. Glossary column, e2e run like `e2e/german.mjs`, requirement R-I18N-* checks, docs (`status.md`, `13-i18n.typ`).
 
 ### Change the schema
 New `crates/musicus-server/migrations/000N_<desc>.sql` (never edit applied ones); update `data-model.md`; update queries; tests.

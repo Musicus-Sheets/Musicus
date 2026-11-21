@@ -16,6 +16,8 @@ pub struct Msg {
     pub text: String,
     /// Literal text of the value, without placeables (for search tables).
     pub literal: String,
+    /// Identifier keys of select variants (`[one]`, `[librarian]`; number keys like `[0]` left out).
+    pub variant_keys: Vec<String>,
     pub has_attributes: bool,
     pub has_value: bool,
     pub file: String,
@@ -56,14 +58,17 @@ pub fn messages(path: &Path) -> Result<Vec<Msg>, String> {
                 let mut vars = Vec::new();
                 let mut text = String::new();
                 let mut literal = String::new();
+                let mut variant_keys = Vec::new();
                 if let Some(p) = &m.value {
                     pattern(p, &mut vars, &mut text, &mut literal);
+                    keys_of(p, &mut variant_keys);
                 }
                 out.push(Msg {
                     id: m.id.name.to_owned(),
                     vars,
                     text: text.trim().to_owned(),
                     literal,
+                    variant_keys,
                     has_attributes: !m.attributes.is_empty(),
                     has_value: m.value.is_some(),
                     file: file.clone(),
@@ -107,6 +112,21 @@ fn expr(e: &ast::Expression<&str>, vars: &mut Vec<String>, text: &mut String, li
                 if v.default {
                     text.push_str(t.trim());
                 }
+            }
+        }
+    }
+}
+
+fn keys_of(p: &ast::Pattern<&str>, keys: &mut Vec<String>) {
+    for el in &p.elements {
+        if let ast::PatternElement::Placeable { expression: ast::Expression::Select { variants, .. } } = el {
+            for v in variants {
+                if let ast::VariantKey::Identifier { name } = v.key
+                    && !keys.iter().any(|k| k == name)
+                {
+                    keys.push(name.to_owned());
+                }
+                keys_of(&v.value, keys);
             }
         }
     }

@@ -821,6 +821,24 @@ async fn part_names_keys_and_part_search() {
     assert_eq!(s.hits("solo%20flute", anna).await, 0, "anna cannot read the flute part");
     assert_eq!(s.hits("solo%20flute", admin).await, 1);
     assert_eq!(s.hits("trumpet%20concerto", anna).await, 0, "every word must match");
+    // German key names are search words too (German shipped): "Horn Es" and
+    // "Horn in Es" find a horn part in E♭; "Trompete in B" style queries work
+    // with the ensemble's instrument name.
+    let horn: Instrument =
+        s.ok(Method::POST, "/api/instruments", &lib.admin, json!({"name": "Horn", "family": "Brass"})).await;
+    let horn_part: Part = s
+        .ok(
+            Method::POST,
+            &format!("/api/scores/{}/parts", lib.score),
+            &lib.admin,
+            json!({"instrument_ids": [horn.id], "transposition": "Eb"}),
+        )
+        .await;
+    assert_eq!(s.hits("horn%20es", admin).await, 1, "Horn Es");
+    assert_eq!(s.hits("horn%20in%20es", admin).await, 1, "Horn in Es: the German connector is dropped too");
+    assert_eq!(s.hits("horn%20E%E2%99%AD", admin).await, 1, "Horn E♭");
+    assert_eq!(s.hits("trumpet%20in%20b%201", anna).await, 1, "German B = B♭");
+    s.send(Method::DELETE, &part(horn_part.id), Auth::Bearer(&lib.admin), &[], Body::empty()).await;
 
     // Renaming an instrument renames derived part names and re-indexes them.
     let trumpet_id = trumpet[0];

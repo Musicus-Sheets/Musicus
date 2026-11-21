@@ -246,7 +246,7 @@ mod tests {
         assert_eq!(name(&["Horn"], Some("Es/F"), &[]), "Horn in Es/F");
         assert_eq!(t::key_option("H").as_deref(), Some("B♮ (H)"));
         assert_eq!(t::key_option("Bb").as_deref(), Some("B♭"));
-        assert_eq!(key_spellings("Bb"), ["B♭"]);
+        assert_eq!(key_spellings("Bb"), ["B♭", "B"], "English and German names");
         assert!(is_name_connector("In"));
         assert!(!is_name_connector("clarinet"));
         for k in musicus_api::naming::KEYS {
@@ -255,7 +255,47 @@ mod tests {
     }
 
     #[test]
+    fn german_part_names_and_key_names() {
+        set_language("de");
+        let w = name_words();
+        let name = |i: &[&str], k: Option<&str>, v: &[&str]| musicus_api::naming::part_name(&w, None, i, k, v);
+        assert_eq!(name(&["Klarinette"], Some("Bb"), &["1", "2"]), "Klarinette in B 1 & 2");
+        assert_eq!(name(&["Horn"], Some("Eb"), &[]), "Horn in Es");
+        assert_eq!(name(&["Posaune"], Some("H"), &["3"]), "Posaune in H 3");
+        assert_eq!(name(&["Oboe", "Flöte"], None, &["1"]), "Flöte / Oboe 1");
+        assert_eq!(name(&[], Some("F"), &["2"]), "Stimme in F 2");
+        assert_eq!(name(&[], None, &[]), "Unbenannte Stimme");
+        assert_eq!(name(&["Horn"], Some("Es/F"), &[]), "Horn in Es/F", "unknown legacy key as stored");
+        let keys: Vec<String> =
+            ["Bb", "Eb", "Ab", "Db", "Gb", "H", "F", "C"].iter().filter_map(|k| t::key_name(k)).collect();
+        assert_eq!(keys, ["B", "Es", "As", "Des", "Ges", "H", "F", "C"]);
+        assert_eq!(t::key_option("H").as_deref(), Some("H"), "no English hint in German");
+        assert_eq!(t::annotations_set_default_name(), "Meine Anmerkungen");
+        assert_eq!(current_language(), "de");
+        set_language("en");
+    }
+
+    #[test]
+    fn german_plurals_and_selectors() {
+        set_language("de");
+        assert_eq!(t::common_pages(1), "1 Seite");
+        assert_eq!(t::common_pages(2), "2 Seiten");
+        assert_eq!(t::common_pages(0), "0 Seiten");
+        assert_eq!(t::library_parts_without_pdf(1), "1 Stimme ohne PDF");
+        assert_eq!(t::import_undone(1, 3), "Rückgängig gemacht: 1 Stück und 3 Stimmen entfernt.");
+        assert_eq!(t::account_user_line("Anna", "anna", "librarian"), "Anna · Benutzername anna · Rolle Notenwart");
+        assert_eq!(t::import_progress_uploading(2, 5, 0, "a.pdf"), "2 von 5 werden hochgeladen: a.pdf");
+        assert_eq!(
+            t::import_progress_uploading(2, 5, 1, "a.pdf"),
+            "2 von 5 werden hochgeladen (1 fehlgeschlagen): a.pdf"
+        );
+        set_language("en");
+    }
+
+    #[test]
     fn negotiation_takes_the_first_shipped_language() {
+        assert_eq!(negotiate(&["fr-FR", "de-CH", "en"]), ("de", "de-CH".to_owned()), "German by language subtag");
+        assert_eq!(negotiate(&["de_AT"]).0, "de");
         assert_eq!(negotiate(&["fr-FR", "en-GB", "de"]), ("en", "en-GB".to_owned()));
         assert_eq!(negotiate(&["fr-FR"]), ("en", "en".to_owned()), "English when nothing is shipped");
         assert_eq!(negotiate::<&str>(&[]), ("en", "en".to_owned()));

@@ -1,4 +1,4 @@
-# Data model (SQLite, `crates/musicus-server/migrations/0001_init.sql`, `0002_part_names.sql`, `0003_system_layouts.sql`, `0004_layout_corrections.sql`, `0005_part_voices.sql`, `0009_i18n_names.sql`, `0006_archive_number.sql`, `0007_import.sql`)
+# Data model (SQLite, `crates/musicus-server/migrations/0001_init.sql`, `0002_part_names.sql`, `0003_system_layouts.sql`, `0004_layout_corrections.sql`, `0005_part_voices.sql`, `0009_i18n_names.sql`, `0010_german_key_spellings.sql`, `0006_archive_number.sql`, `0007_import.sql`)
 
 Times = Unix seconds (`db::now()`); dates = `YYYY-MM-DD` text; booleans = INTEGER 0/1; JSON arrays as TEXT.
 Migrations: applied at start by `sqlx::migrate!` (R-OPS-004). NEVER edit an applied migration (checksum mismatch aborts start-up); add `000N_<name>.sql`. Update this file in the same commit.
@@ -18,7 +18,7 @@ Migrations: applied at start by `sqlx::migrate!` (R-OPS-004). NEVER edit an appl
 | `score_fts` | FTS5 external content (`content='scores'`), cols title, subtitle, composer, arranger, genre, tags, archive_search (0006); `tokenize='unicode61 remove_diacritics 2'` | kept in sync by triggers `scores_fts_insert/delete/update`; 0006 dropped and recreated table + triggers and ran `'rebuild'` | R-LIB-004, R-LIB-015 |
 | `parts` | `id`, `score_id` FK cascade, `label` TEXT NULL = custom name (NULL ⇒ derived name, a-part-names), `transposition` TEXT NULL = key code of `musicus_api::naming::KEYS` (Bb, Eb, F, C, A, D, G, E, Ab, Db, Gb, H) or an older free-text value, `notes`, `created_at` | idx score; 0002 rebuilt `label`/`voice` with ADD/DROP/RENAME COLUMN; 0005 dropped `voice` (now `part_voices`); column order: id, score_id, transposition, notes, created_at, label | R-LIB-002, R-LIB-010, R-LIB-011 |
 | `part_voices` | PK (`part_id`, `position` 0-based), `voice` TEXT NOT NULL COLLATE NOCASE (≤20 chars, checked by the server), UNIQUE (`part_id`, `voice`) | WITHOUT ROWID; part FK cascade; idx `voice` (for a later grant per voice, R-ACL-005 proposed; not used by `part_visible!()` yet); written by `library::set_voices` (delete + `json_each` insert, key = position); read as `json_group_array(json_array(position, voice))` and sorted in Rust (`library::voices_from_json`) (0005, a-part-voices) | R-LIB-002, R-LIB-010 |
-| `part_fts` | FTS5 standalone, col `name` = `part_index::index_text` (components: custom name, instrument names, voices, key code + the key's names in every shipped language from `musicus_i18n::KEY_SPELLINGS`; no composed name, a-client-part-names; emptied by 0009 for a rebuild), rowid = part id; `unicode61 remove_diacritics 2` | written by the server (`part_index::reindex`) on part create/update and instrument rename; trigger `parts_fts_delete` removes rows; rebuilt on start if row count ≠ parts | R-LIB-004, R-LIB-010 |
+| `part_fts` | FTS5 standalone, col `name` = `part_index::index_text` (components: custom name, instrument names, voices, key code + the key's names in every shipped language from `musicus_i18n::KEY_SPELLINGS`; no composed name, a-client-part-names; emptied by 0009 and 0010 (German key names) for a rebuild; every change of `KEY_SPELLINGS` needs such a migration, guarded by `part_index::tests::indexed_key_spellings_are_current`), rowid = part id; `unicode61 remove_diacritics 2` | written by the server (`part_index::reindex`) on part create/update and instrument rename; trigger `parts_fts_delete` removes rows; rebuilt on start if row count ≠ parts | R-LIB-004, R-LIB-010 |
 | `part_instruments` | PK (`instrument_id`, `part_id`) | WITHOUT ROWID; idx part; instrument FK RESTRICT (in use ⇒ 409) | R-LIB-002, R-LIB-003 |
 | `file_layouts` | `file_id` PK FK files cascade, `algorithm` (detection version), `state` CHECK done/failed, `pages` TEXT = JSON `Vec<musicus_api::layout::PageLayout>` (`[]` if failed), `updated_at` | written only by `layout::worker` (upsert); no row = pending (0003) | R-READ-010 |
 | `layout_corrections` | PK (`file_id`, `page`) 0-based, `data` TEXT = JSON `PageCorrection {full_page, bounds, kinds}`, `updated_by` FK users SET NULL, `updated_at` | WITHOUT ROWID; file FK cascade; applied on read, never touched by the worker (0004) | R-READ-016 |
@@ -71,4 +71,9 @@ itself, because SQLite cannot drop `NOT NULL` in place and dropping the old `ann
 would cascade into `annotation_pages`. New table with nullable `name`, copy (exactly "My annotations" ⇒ NULL), drop,
 rename, `annotation_sets_unnamed` partial unique index, `DELETE FROM part_fts` (rebuilt by
 `part_index::rebuild_if_needed` with the component text). Test `migration_0009_unnames_default_sets_and_keeps_their_pages`.
+
+## Migration 0010 (German key spellings, R-I18N-007)
+
+`DELETE FROM part_fts` only: German ships, so `KEY_SPELLINGS` gains B, Es, As, Des, Ges (H is the code itself); the
+index of existing installations is rebuilt on start by `part_index::rebuild_if_needed`.
 

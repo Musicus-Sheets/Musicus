@@ -246,6 +246,28 @@ mod tests {
         musicus_i18n::set_language("en");
     }
 
+    /// German texts (shipped): every code has a German sentence with its arguments.
+    #[test]
+    fn german_texts_for_codes_and_notes() {
+        musicus_i18n::set_language("de");
+        for code in musicus_api::error::examples() {
+            let text = code_text(&code);
+            assert!(text.chars().next().is_some_and(char::is_uppercase), "{code:?}: {text}");
+        }
+        assert_eq!(code_text(&ErrorCode::PasswordTooShort { min: 8 }), "Das Passwort braucht mindestens 8 Zeichen");
+        assert_eq!(
+            code_text(&ErrorCode::FieldTooLong { field: Field::DisplayName, max: 100 }),
+            "Anzeigename ist länger als 100 Zeichen"
+        );
+        assert_eq!(
+            code_text(&ErrorCode::TooManyAttempts { minutes: 1 }),
+            "Zu viele Versuche. Versuch es in 1 Minute noch einmal"
+        );
+        let failed = Note::UploadFailed(Some(Box::new(ErrorCode::NotPdf)));
+        assert_eq!(note_text(&failed), "Hochladen fehlgeschlagen: Nur PDF-Dateien werden unterstützt");
+        musicus_i18n::set_language("en");
+    }
+
     #[test]
     fn unknown_codes_show_the_server_message() {
         let e = ApiError { error: "conflict".into(), code: ErrorCode::Unknown, message: "something new".into() };
