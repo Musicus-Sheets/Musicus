@@ -116,8 +116,9 @@ Plan and roadmap: `docs/technical/chapters/14-updates.typ`. Phase 0 must be done
 4. Tag the main repository; the release workflow builds and publishes the linux/amd64 + linux/arm64 image with
    version tags (R-OPS-028); the release check (R-OPS-040) fails on previews, a database update in a patch, a merged
    update that does not list exactly the removed previews, or a wrong version on a title page. Publishing the GitHub release rebuilds the guide site (a-guide-site).
-5. Release notes: removed features with their data, access restrictions that shorten the downgrade window,
-   downgrade targets (R-OPS-014).
+5. Release notes: removed features with their data; new access restrictions (after a downgrade the restricted
+   items give no access and must be granted again by hand, R-OPS-017); downgrade targets (R-OPS-014, counted in
+   release order); platforms that failed their non-blocking check (macOS Intel, R-OPS-042).
 
 ### Add/modify a requirement-driven feature
 1. Read the requirement + its links (`refines`, `depends_on`, `constrains`, `conflicts_with`) in `docs/requirements`.

@@ -25,7 +25,8 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | R-SEC-009, R-SEC-010 | watermark, download audit log | watermark must not create blobs (conflict with R-FILE-004) |
 | R-OPS-009 | continuous replication (Litestream) | |
 | F-OPS-005, R-OPS-010…025, R-OPS-038…041 | updates and downgrades (d-update-model, a-preview-migrations, a-patch-no-db-changes, a-db-check) | plan and roadmap in `docs/technical/chapters/14-updates.typ`; phase 0 (own update runner with marker tables, additive/rebuild/removal parts, previews merged per release, snapshot + automatic restore, `backup` without updating, `restore`, refusal message, enum fallbacks) must ship in 1.0.0; see § Updates below |
-| F-OPS-006, R-OPS-026…032 | platforms (a-platforms) | multi-arch images + version tags (phase 0); Windows blocker and other findings in § Updates below; R-OPS-029…032 are `proposed` |
+| F-OPS-008, R-OPS-043…048 | open clients during shutdown, start and update (a-client-outage) | listener before updates with 503 `server_starting`, shutdown drain with 503 `server_shutting_down` (new `ErrorCode`s), banners, polling, unsaved markings kept in memory and re-sent, `beforeunload` warning, reload at a safe moment after a version change |
+| F-OPS-006, R-OPS-026…032, R-OPS-042 | platforms (a-platforms) | multi-arch images + version tags (phase 0); Windows blocker and other findings in § Updates below; R-OPS-029…032 are `proposed` |
 | F-OPS-007, R-OPS-033…036 | version visible (a-version-public) | `/api/version`, About view, title pages from the release version, requirements tag per release |
 | R-OPS-037 | backups/exports unencrypted, with guidance (a-unencrypted-export) | user guide backup section must say that backups need the same care as the data directory |
 | F-TECH-002, R-TECH-004…007 | prepared replaceability | storage modules per data area (no SQL in `routes/`), file store without `path()`, PDF engine module, conformance suites; no second backend |
@@ -97,6 +98,9 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
   `scripts/db-schema.sh`) — all come with phase 0 (a-db-check, R-OPS-038…040), not earlier.
 - Patches writing new kinds of stored values (R-OPS-041) are not caught by any check; only the planned test matrix,
   enum fallbacks and the checklist line cover it.
+- Open: container registry and image name (decided when the release workflow is built; Docker Hub and/or GHCR).
+- Today the server listens only after migrations (`open_state` before `bind`) and closes the listener on the stop
+  signal (R-OPS-008); the client shows generic errors when the server is away and reloads only on 401.
 - Stored enums other than `ErrorCode` (`Role`, `RegionKind`, …) have no fallback for unknown values; an older
   release would fail on values written by a newer one.
 - Portability findings (details and actions in the plan):
