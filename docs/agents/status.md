@@ -24,6 +24,12 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | R-FILE-010 | bilevel compression of scans | |
 | R-SEC-009, R-SEC-010 | watermark, download audit log | watermark must not create blobs (conflict with R-FILE-004) |
 | R-OPS-009 | continuous replication (Litestream) | |
+| F-OPS-005, R-OPS-010…025, R-OPS-038…041 | updates and downgrades (d-update-model, a-preview-migrations, a-patch-no-db-changes, a-db-check) | plan and roadmap in `docs/technical/chapters/14-updates.typ`; phase 0 (own update runner with marker tables, additive/rebuild/removal parts, previews merged per release, snapshot + automatic restore, `backup` without updating, `restore`, refusal message, enum fallbacks) must ship in 1.0.0; see § Updates below |
+| F-OPS-008, R-OPS-043…048 | open clients during shutdown, start and update (a-client-outage) | listener before updates with 503 `server_starting`, shutdown drain with 503 `server_shutting_down` (new `ErrorCode`s), banners, polling, unsaved markings kept in memory and re-sent, `beforeunload` warning, reload at a safe moment after a version change |
+| F-OPS-006, R-OPS-026…032, R-OPS-042 | platforms (a-platforms) | multi-arch images + version tags (phase 0); Windows blocker and other findings in § Updates below; program archives + `SHA256SUMS` (unsigned; guide text for SmartScreen/Gatekeeper), embedded web client, OS data folder, platform-dependent CI (tests, build, smoke) on all systems, the rest Linux-only (phase 1) |
+| F-OPS-007, R-OPS-033…036 | version visible (a-version-public) | `/api/version`, About view, title pages from the release version, requirements tag per release |
+| R-OPS-037 | backups/exports unencrypted, with guidance (a-unencrypted-export) | user guide backup section must say that backups need the same care as the data directory |
+| F-TECH-002, R-TECH-004…007 | prepared replaceability | storage modules per data area (no SQL in `routes/`), file store without `path()`, PDF engine module, conformance suites; no second backend |
 
 | F-LIB-004 phase 2 | mass import extensions | pattern per subfolder (archives mixing structures; today: several batches), ZIP upload, server-side paging of the review for very large batches, CSV inventory and OCR sources (R-LIB-022) |
 | R-LIB-022 | OCR / inventory list as import sources | add candidates with `Source::Ocr` / `Source::Inventory` to `PieceGuess` fields (a-import-shared) |
@@ -55,7 +61,7 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
   only simulated with CDP device-metrics emulation (sizes checked, not the painted pixels); pinch zoom sharpness checked
   by backing size only. The layout editor renders at the current ratio but does not re-render on a ratio change.
 - arm64 (Raspberry Pi) build not tested; Caddy HTTPS profile not tested end to end; release wasm with current wasm-opt not tested in CI.
-- No CI for Rust build/tests yet (only the docs gates `agent-docs.yml`, `submodules.yml` and the user-guide Pages deploy `user-guide-pages.yml`).
+- Rust CI (`rust.yml`) runs only on Linux x86_64; nothing is built or tested on Windows, macOS or arm64, and no image is built in CI (R-OPS-032).
 - User-guide Pages workflow (a-guide-site): the script is tested locally (tags, test build, skipped and failing versions, HTTPS fetch); the GitHub-side parts (`gh release list`, Pages deploy, `github-pages` environment rules for tags) are only verified by a real run.
 
 ## Known debt / quirks
@@ -80,3 +86,32 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
   position is not on whole device pixels (browser-controlled), so it is sharp but not strictly 1:1.
 - Thumbnails are blobs without a `files` row; never served except via their PDF's hash.
 - Import: `GET /api/import/batches/{id}` returns the whole review (no server paging); fine for a few thousand files, a very large batch should be split. `register_files` handles the whole list in one write transaction (one statement per new file, then `repropose`); 20 000 files per request. Files of a deleted or undone batch stay as blobs and `files` rows (no GC, R-FILE-009).
+
+## Updates, downgrades and platforms (planned; `docs/technical/chapters/14-updates.typ`)
+
+- No release, no tag, version 0.1.0. Migrations `0001`–`0010` are irrelevant (no installations with real data) and
+  are collapsed into one 1.0.0 baseline at the first release; the update guarantees (R-OPS-011, R-OPS-014) start there.
+- `backup` applies pending migrations before copying (`main.rs` → `open_state` → `Db::open`), contrary to R-OPS-021.
+- No automatic snapshot, no `restore` command (manual copy in the user guide), no `/api/version`, no About view.
+- `compose.yaml` builds locally (`build: .`, `musicus:latest`); no published image (R-OPS-010, R-OPS-028).
+- No database check, `db-change` notice or release check in CI, no schema snapshot (`schema.sql`,
+  `scripts/db-schema.sh`) — all come with phase 0 (a-db-check, R-OPS-038…040), not earlier.
+- Patches writing new kinds of stored values (R-OPS-041) are not caught by any check; only the planned test matrix,
+  enum fallbacks and the checklist line cover it.
+- Open: container registry and image name (decided when the release workflow is built; Docker Hub and/or GHCR).
+- Today the server listens only after migrations (`open_state` before `bind`) and closes the listener on the stop
+  signal (R-OPS-008); the client shows generic errors when the server is away and reloads only on 401.
+- Stored enums other than `ErrorCode` (`Role`, `RegionKind`, …) have no fallback for unknown values; an older
+  release would fail on values written by a newer one.
+- Portability findings (details and actions in the plan):
+  1. **Windows blocker:** `blobs.rs::sync_dir` (`std::fs::File::open(dir)?.sync_all()`) fails on Windows ⇒ every
+     upload fails. Fix: directory sync on Unix only.
+  2. SIGTERM handling is `#[cfg(unix)]` (`main.rs::shutdown_signal`); Ctrl+C works everywhere — fine.
+  3. The plain program needs `--web-dir` with the client files (embedding accepted, R-OPS-030).
+  4. Default data dir `data` is relative to the working directory (OS-usual folders accepted, R-OPS-031).
+  5. CI only on Linux x86_64; Docker images only for the host architecture.
+  6. Blob commit = "exists? else rename": on Windows a rename onto an open file fails and concurrent uploads of the
+     same new file race; treat "target exists" after a failed rename as success.
+  7. `backup` passes the target path to SQLite via `to_string_lossy` (non-UTF-8 paths would be altered).
+  8. Raspberry Pi 3 (1 GB) supported by decision but never measured (R-PERF-001 names the Pi 4; no Pi measured at all).
+  9. Building on Windows needs a C toolchain for `ring`/SQLite (assumption; to check in CI).
