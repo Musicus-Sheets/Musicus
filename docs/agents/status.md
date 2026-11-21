@@ -60,7 +60,7 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 
 ## Known debt / quirks
 
-- i18n: English and German are shipped (`locales/en`, `locales/de`). **German is an agent draft that needs the maintainer's review** (terminology, tone, "du"; open choices in `glossary.md` § Open choices; review aid `scripts/i18n-review.py de`). The user guide is English only (phase 7). The pseudo-locale run (`e2e/pseudo.mjs`) covers 13 pages without the reader with a file, the import review and the system editor (those are covered only by the lint). Button overflow with long translations is only reported, not failed.
+- i18n: English and German are shipped (`locales/en`, `locales/de`). **German is an agent draft that needs the maintainer's review** (terminology, tone, "du"; open choices in `glossary.md` § Open choices; review aid `scripts/i18n-review.py de`). The user guide and its screenshots are English only (phase 7; `screenshots.mjs` and `smoke.mjs` force `locale: en-US`). The German run (`e2e/german.mjs`) checks a selection of pages, not every text (completeness is checked by `tests/catalogue.rs`). The pseudo-locale run (`e2e/pseudo.mjs`) covers 13 pages without the reader with a file, the import review and the system editor (those are covered only by the lint). Button overflow with long translations is only reported, not failed.
 
 - `annotation_sets` name uniqueness is case-sensitive (SQLite UNIQUE without NOCASE) while users/groups/instruments are case-insensitive.
 - `LoginLimiter` is in-memory: resets on restart, per process.

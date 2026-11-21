@@ -19,6 +19,7 @@ cargo run -p musicus-server -- serve --data-dir /tmp/m --web-dir target/dx/music
 node e2e/smoke.mjs <admin-invite-url-from-log> some.pdf /tmp/shots   # fresh data dir required; BROWSER=firefox for Firefox
 python3 scripts/check-ui-literals.py  # no literal UI text in the client (R-I18N-010; CI: workflow `UI literals`)
 node e2e/pseudo.mjs <admin-invite-url>   # pseudo-locale run (fresh data dir; every UI text marked)
+node e2e/german.mjs <admin-invite-url> [shots]   # German run (fresh data dir; de-DE browser; screenshots + phone-width overflow with a dir)
 python3 scripts/i18n-review.py de > review-de.md   # side-by-side English | German for the maintainer's review (not shipped)
 python3 docs/agents/check.py [--since <ref>]
 uv run docs/requirements/tools/validate.py

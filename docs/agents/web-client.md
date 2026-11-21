@@ -8,7 +8,7 @@ Dioxus 0.7.10, features `web` + `router`; compiled to wasm32 by `dx`; assets `as
 shipped (`musicus_i18n::LANGUAGES`, today `en` and `de`; German is an agent draft under review, a-i18n-german), `en-XA` = pseudo-locale, else English; `<html lang>` = the matched
 preference ("en-GB"); nothing stored. Texts: every visible text, placeholder, title, ARIA label, `confirm`/`prompt` text and suggested name is
 `musicus_i18n::t::<message_id>(args)` (generated, English fallback per message; R-I18N-010, lint
-`scripts/check-ui-literals.py`, pseudo-locale run `e2e/pseudo.mjs`); user data is shown as entered. A message
+`scripts/check-ui-literals.py`, pseudo-locale run `e2e/pseudo.mjs`, German run `e2e/german.mjs`); user data is shown as entered. A message
 with one bold argument: `ui::WithStrong {text: t::x(ui::MARK, …), strong}`. Fixed option lists carry message
 functions (`viewer::COLORS` etc. as `fn() -> String`; layout kinds `kind_name`; import presets
 `import::preset_name`, sources `source_text`). Error codes, notes, pattern and ink errors are rendered by `errors.rs`
