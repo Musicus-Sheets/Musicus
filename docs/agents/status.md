@@ -121,14 +121,17 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 - Stored enums other than `ErrorCode` (`Role`, `RegionKind`, …) have no fallback for unknown values; an older
   release would fail on values written by a newer one.
 - Portability findings (details and actions in the plan):
-  1. **Windows blocker:** `blobs.rs::sync_dir` (`std::fs::File::open(dir)?.sync_all()`) fails on Windows ⇒ every
-     upload fails. Fix: directory sync on Unix only.
+  1. Fixed: `blobs.rs::sync_dir` (`File::open(dir)?.sync_all()`, which fails on Windows ⇒ every upload failed) is
+     `#[cfg(unix)]`; elsewhere a no-op (NTFS journals the rename; the order "rename durable before the database
+     commit" is therefore not forced on Windows — accepted). Compile-checked for `x86_64-pc-windows-gnu`; never run
+     on Windows (no Windows CI yet, R-OPS-032).
   2. SIGTERM handling is `#[cfg(unix)]` (`main.rs::shutdown_signal`); Ctrl+C works everywhere — fine.
   3. The plain program needs `--web-dir` with the client files (embedding accepted, R-OPS-030).
   4. Default data dir `data` is relative to the working directory (OS-usual folders accepted, R-OPS-031).
   5. CI only on Linux x86_64; Docker images only for the host architecture.
-  6. Blob commit = "exists? else rename": on Windows a rename onto an open file fails and concurrent uploads of the
-     same new file race; treat "target exists" after a failed rename as success.
+  6. Fixed: blob commit = "exists? else rename" (`blobs.rs::place`); a failed rename whose target exists meanwhile
+     (concurrent upload of the same new file, or on Windows a rename onto an open blob) counts as stored (unit test
+     `a_target_that_appeared_meanwhile_counts_as_stored`). Not tested on Windows.
   7. `backup` passes the target path to SQLite via `to_string_lossy` (non-UTF-8 paths would be altered).
   8. Raspberry Pi 3 (1 GB) supported by decision but never measured (R-PERF-001 names the Pi 4; no Pi measured at all).
   9. Building on Windows needs a C toolchain for `ring`/SQLite (assumption; to check in CI).

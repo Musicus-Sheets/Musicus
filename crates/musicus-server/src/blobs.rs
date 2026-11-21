@@ -103,10 +103,7 @@ impl BlobStore {
             tokio::fs::remove_file(&pending.tmp_path).await?;
             return Ok(());
         }
-        let dir = target.parent().expect("blob paths have a parent");
-        tokio::fs::create_dir_all(dir).await?;
-        tokio::fs::rename(&pending.tmp_path, &target).await?;
-        sync_dir(dir).await
+        place(&pending.tmp_path, &target).await
     }
 
     pub async fn discard(&self, pending: &PendingBlob) {
@@ -125,17 +122,54 @@ impl BlobStore {
         let mut file = tokio::fs::File::create(&tmp_path).await?;
         file.write_all(bytes).await?;
         file.sync_all().await?;
-        let dir = target.parent().expect("blob paths have a parent");
-        tokio::fs::create_dir_all(dir).await?;
-        tokio::fs::rename(&tmp_path, &target).await?;
-        sync_dir(dir).await?;
+        drop(file);
+        place(&tmp_path, &target).await?;
         Ok(sha256)
     }
 }
 
+/// Renames a complete, synced temporary file to its blob path and makes the
+/// rename durable.
+///
+/// The target may appear between the caller's existence check and the
+/// rename: two uploads of the same new content race, or (on Windows) the
+/// rename fails because the existing blob is open for reading. Blobs are
+/// named by their content, so an existing target holds exactly these bytes:
+/// the upload counts as stored and the temporary file is dropped
+/// (portability finding 6). Its content never changes (R-FILE-004): on Unix
+/// a rename onto it swaps in identical bytes atomically, on Windows the
+/// failed rename leaves it alone.
+async fn place(tmp: &Path, target: &Path) -> io::Result<()> {
+    let dir = target.parent().expect("blob paths have a parent");
+    tokio::fs::create_dir_all(dir).await?;
+    match tokio::fs::rename(tmp, target).await {
+        Ok(()) => sync_dir(dir).await,
+        Err(e) => {
+            if tokio::fs::try_exists(target).await.unwrap_or(false) {
+                let _ = tokio::fs::remove_file(tmp).await;
+                Ok(())
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+/// Makes a rename inside `dir` durable (fsync of the directory entry).
+#[cfg(unix)]
 async fn sync_dir(dir: &Path) -> io::Result<()> {
     let dir = dir.to_owned();
     tokio::task::spawn_blocking(move || std::fs::File::open(dir)?.sync_all()).await.map_err(io::Error::other)?
+}
+
+/// Windows cannot open a directory with `File::open` (every upload failed
+/// on it; portability finding 1) and has no directory fsync. NTFS journals
+/// the rename (`MoveFileExW`), so after a crash a blob path still either
+/// does not exist or holds complete content; only the ordering against the
+/// following database commit is not forced (accepted, `status.md`).
+#[cfg(not(unix))]
+async fn sync_dir(_dir: &Path) -> io::Result<()> {
+    Ok(())
 }
 
 #[cfg(test)]
@@ -152,6 +186,32 @@ mod tests {
         let b = store.receive(Body::from("hello"), 100).await.unwrap();
         store.commit(&b).await.unwrap();
         assert_eq!(std::fs::read(store.path(&a.sha256)).unwrap(), b"hello");
+        assert_eq!(std::fs::read_dir(dir.path().join("tmp")).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_target_that_appeared_meanwhile_counts_as_stored() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = BlobStore::open(dir.path()).unwrap();
+        let a = store.receive(Body::from("same"), 100).await.unwrap();
+        let b = store.receive(Body::from("same"), 100).await.unwrap();
+        // `b` passed its existence check before `a` was placed.
+        store.commit(&a).await.unwrap();
+        place(&b.tmp_path, &store.path(&b.sha256)).await.unwrap();
+        assert_eq!(std::fs::read(store.path(&a.sha256)).unwrap(), b"same");
+        assert_eq!(std::fs::read_dir(dir.path().join("tmp")).unwrap().count(), 0);
+        // A rename that fails without a target is still an error.
+        let missing = dir.path().join("tmp").join("gone");
+        assert!(place(&missing, &dir.path().join("blobs").join("zz").join("x")).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn put_bytes_stores_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = BlobStore::open(dir.path()).unwrap();
+        let first = store.put_bytes(b"thumb").await.unwrap();
+        assert_eq!(store.put_bytes(b"thumb").await.unwrap(), first);
+        assert_eq!(std::fs::read(store.path(&first)).unwrap(), b"thumb");
         assert_eq!(std::fs::read_dir(dir.path().join("tmp")).unwrap().count(), 0);
     }
 
