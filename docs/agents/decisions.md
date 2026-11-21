@@ -391,3 +391,57 @@ Implementation state of each decision: see its **State** line (and `status.md`).
 - Serves: R-I18N-001, R-I18N-002, R-I18N-005, R-SEC-001.
 - State: implemented (phase 1, `crates/musicus-web/src/locale.rs`).
 - If you change it: a language setting would need storage on the server (never on the device, R-SEC-001) and a requirement change; keep all locale logic inside `locale` (a desktop app would replace only that module).
+
+## Updates, downgrades and platforms (F-OPS-005, F-OPS-006, F-OPS-007, F-TECH-002)
+
+Plan: `docs/technical/chapters/14-updates.typ` (label `updates`). **Nothing here is implemented yet**; phase 0 of the
+plan's roadmap must ship in 1.0.0. Each entry has a **State** line.
+
+### d-update-model
+- Decision: every database change has an *additive* part (new tables/columns, copy of existing data into them; runs at the first start of the release), a *rebuild* step (refills the new structures from the old ones; runs at start when an older release used the database since the additive part ran) and a *removal* part (drops/rewrites; run later by a newer release only when no release inside the downgrade window needs the old structures). Downgrade window: the 3 previous minor releases, the release the installation was upgraded from for 3 months after that upgrade, and all patches of the same minor (R-OPS-014). While a removal is pending, the newer release keeps the old structures up to date (writes both). The database records `last_version`, `oldest_allowed` and the upgrade history (proposed tables `musicus_meta`, `musicus_updates`, `musicus_upgrades`); an older release starts if `own >= oldest_allowed`, else exits unchanged naming the oldest possible release (R-OPS-015). Running a removal raises `oldest_allowed` to the release that brought it. Data that only the newer release can represent is lost on a downgrade and not restored on re-upgrade (R-OPS-016). Changes that restrict access count as removals: mirrored into the old data, or they raise `oldest_allowed` when first used (R-OPS-017; interpretation, see the plan). Every start with pending work takes a `VACUUM INTO` snapshot under `snapshots/` (keep 3) and restores it on failure (R-OPS-019, R-OPS-020); `backup` never applies updates (R-OPS-021); new `restore` command (R-OPS-022). A small own update runner replaces `sqlx::migrate!` (which refuses unknown or merged migrations). Release updates are kept in the program forever (upgrade from any release, R-OPS-011), so removal SQL lives in the update files, not in the database.
+- Why: the user's decisions (volunteer admins; going back = start the older image; no data loss except explicit feature removal, restored on downgrade; new-only data may be lost). Down-migration scripts per change were rejected: they would have to be written and tested for every change and would run in the newer program anyway. A downgrade by backup restore loses everything since the update. An earlier draft concept (expand/contract with a one-minor window and a portable archive format) is superseded by this one.
+- Serves: F-OPS-005, R-OPS-010, R-OPS-011, R-OPS-012, R-OPS-013, R-OPS-014, R-OPS-015, R-OPS-016, R-OPS-017, R-OPS-019, R-OPS-020, R-OPS-021, R-OPS-022.
+- State: planned (phase 0). Today: `sqlx::migrate!` in `Db::open` for every command (`db.rs`), `backup` migrates first (`main.rs`), forward-only migrations 0001–0010 (collapsed into the 1.0 baseline at the first release).
+- If you change it: the window is a user decision (requirements R-OPS-014, R-OPS-016) — ask first. Never write a removal into the additive part; an access restriction is never additive. Every stored enum read from the database needs a fallback for unknown values before a newer release may write new values (error codes already have `#[serde(other)]`).
+
+### a-preview-migrations
+- Decision: during development each branch that changes the database adds a preview update `crates/musicus-server/migrations/preview/NNNN-<topic>.sql` (additive and removal sections), applied by development builds so local demo databases keep working. A merged preview is never edited again (correction = new preview). At each release a script merges all previews into `migrations/<version>.sql`, lists the contained previews in its header and deletes the preview files; a database that applied all listed previews marks the release update as applied without running it, one that applied only some is reported as an unclear development database. Release builds refuse to start with preview files (R-OPS-024). Existing developer databases (`_sqlx_migrations` with 0001–0010) are recognised once as having the 1.0 baseline. Details (paths, header syntax) are design to be confirmed during implementation.
+- Why: the user's decision (developers keep demo databases; one database update per release); `sqlx::migrate!` cannot merge migrations.
+- Serves: R-OPS-023, R-OPS-024.
+- State: planned (phase 0). Until then: add `000N_<name>.sql` as before (workflows.md § Change the schema).
+- If you change it: dev databases must still survive a release merge; release builds must never contain previews.
+
+### a-patch-no-db-changes
+- Decision: patch releases (X.Y.Z, Z > 0) contain no database update; old minors get no new patches (fixes come with the next release); release rhythm irregular.
+- Why: the user's decision; makes "any patch of the same minor, in both directions" (R-OPS-014 c) hold without any mechanism.
+- Serves: R-OPS-018, R-OPS-014.
+- State: planned; enforced by the release check (phase 0).
+- If you change it: a database change in a patch would break rule (c) of the downgrade window.
+
+### a-no-update-check
+- Decision: Musicus never contacts the internet to look for newer releases; no setting enables it.
+- Why: the user's decision; servers on networks without internet, nothing about the ensemble sent anywhere.
+- Serves: R-OPS-025.
+- State: holds today (no such code exists); keep it that way.
+- If you change it: requirement change with the user's consent.
+
+### a-version-public
+- Decision: the version is visible to everyone: public `GET /api/version` (no login), an "About" view for every role, `--version`; the user guide and the technical documentation show it on the title page and the guide site on every page; the requirements repository gets a git tag `vX.Y.Z` per release (no version in its files).
+- Why: the user's decision; the version is needed to pick the guide, read release notes and know the downgrade targets. Fingerprinting risk accepted (only the number is revealed).
+- Serves: R-OPS-033, R-OPS-034, R-OPS-035, R-OPS-036.
+- State: planned (phase 0). Today: `--version` only; title pages carry a hand-written "0.1"; the guide site's version bar shows the tag (a-guide-site).
+- If you change it: hiding the version needs a requirement change.
+
+### a-unencrypted-export
+- Decision: backups, snapshots and exports are written unencrypted, like the database (plain SQLite; passwords only as Argon2 hashes, d-hashing); the user guide states they need the same care as the data directory.
+- Why: the user's decision; encryption would need key management that volunteers cannot be expected to handle, and the database itself is not encrypted.
+- Serves: R-OPS-037.
+- State: holds today for `backup`; the guidance text in the user guide is still missing.
+- If you change it: R-ANN-018 (encrypted annotations at rest) would stay encrypted inside the copies; encrypting the copies themselves needs a requirement change.
+
+### a-platforms
+- Decision: supported: Docker Compose (preferred; linux/amd64 and linux/arm64 images, also for Docker Desktop on Windows/macOS) and the plain program on Linux (x86_64, arm64), Windows (x86_64) and macOS (arm64); Raspberry Pi 3/4/5 or newer with a 64-bit OS only. Images are published per release with version tags; the Compose file uses a version tag. Proposed, not decided: program downloads per platform (R-OPS-029), the web client embedded in the program (R-OPS-030), the OS-usual data folder as default (R-OPS-031), CI on all platforms (R-OPS-032). Storage, file store and PDF engine get owned module boundaries with conformance suites, no second implementation (F-TECH-002; R-TECH-001 unchanged).
+- Why: the user's decisions (volunteer admins, Pi support, plain program must stay possible on all three systems; database/S3 replacement only prepared).
+- Serves: F-OPS-006, R-OPS-026, R-OPS-027, R-OPS-028, F-TECH-002, R-TECH-004, R-TECH-005, R-TECH-006, R-TECH-007.
+- State: planned. Known blocker: `blobs.rs::sync_dir` opens the blob directory with `File::open(dir)?.sync_all()`, which fails on Windows (every upload would fail); other findings in `status.md` and the plan.
+- If you change it: dropping a platform or 32-bit support needs the user's consent; keep platform-specific code behind `cfg` with a working fallback.

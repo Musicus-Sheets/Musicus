@@ -2,6 +2,7 @@
 
 Times = Unix seconds (`db::now()`); dates = `YYYY-MM-DD` text; booleans = INTEGER 0/1; JSON arrays as TEXT.
 Migrations: applied at start by `sqlx::migrate!` (R-OPS-004). NEVER edit an applied migration (checksum mismatch aborts start-up); add `000N_<name>.sql`. Update this file in the same commit.
+Planned for 1.0 (not implemented): 0001–0010 collapse into one 1.0.0 baseline; an own update runner with marker tables, additive/rebuild/removal parts and preview updates replaces `sqlx::migrate!` (d-update-model, a-preview-migrations, `docs/technical/chapters/14-updates.typ`).
 
 ## Tables
 

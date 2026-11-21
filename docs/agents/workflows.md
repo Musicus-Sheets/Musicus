@@ -99,6 +99,21 @@ Site: GitHub Pages of the main repository (`https://<owner>.github.io/Musicus/`)
 
 ### Change the schema
 New `crates/musicus-server/migrations/000N_<desc>.sql` (never edit applied ones); update `data-model.md`; update queries; tests.
+Planned for 1.0 (d-update-model, a-preview-migrations; not implemented): changes become preview updates in
+`migrations/preview/` with an additive and a removal part; removals never go into the additive part; access
+restrictions count as removals; patch releases never contain a database update.
+
+### Release (planned; nothing of this exists yet)
+Plan and roadmap: `docs/technical/chapters/14-updates.typ`. Phase 0 must be done before 1.0.0. In short:
+1. Merge all preview updates into `migrations/<version>.sql` (release script; previews deleted). Patch release:
+   no database update at all (a-patch-no-db-changes).
+2. Set the version (workspace `Cargo.toml`, title pages of `docs/user-guide` and `docs/technical`).
+3. Tag `vX.Y.Z` in `docs/requirements` on the pinned commit (R-OPS-036); merge docs first (a-submodule-pins).
+4. Tag the main repository; the release workflow builds and publishes the linux/amd64 + linux/arm64 image with
+   version tags (R-OPS-028) and the release check fails on previews, a database update in a patch, or a wrong
+   version on a title page. Publishing the GitHub release rebuilds the guide site (a-guide-site).
+5. Release notes: removed features with their data, access restrictions that shorten the downgrade window,
+   downgrade targets (R-OPS-014).
 
 ### Add/modify a requirement-driven feature
 1. Read the requirement + its links (`refines`, `depends_on`, `constrains`, `conflicts_with`) in `docs/requirements`.
