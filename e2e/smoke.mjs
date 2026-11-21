@@ -73,7 +73,9 @@ function watch(page) {
 }
 
 // --- Admin: accept invite, build a small library --------------------------
-const admin = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+// English UI whatever the machine's language (the checks match English texts; German: e2e/german.mjs).
+const EN = { locale: 'en-US' };
+const admin = await browser.newContext({ ...EN, viewport: { width: 1280, height: 900 } });
 const a = await admin.newPage();
 watch(a);
 a.on('dialog', (d) => d.accept());
@@ -401,7 +403,7 @@ await a.getByText('Meet at 18:30.').waitFor();
 check(true, 'programme created and edited');
 
 // --- Librarian: management controls, but no user administration -----------
-const librarian = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+const librarian = await browser.newContext({ ...EN, viewport: { width: 1280, height: 900 } });
 const l = await librarian.newPage();
 watch(l);
 await l.goto(invites.carla);
@@ -434,7 +436,7 @@ check(true, 'removed score grant stays removed after a reload');
 await librarian.close();
 
 // --- Member: invite, library, reader, annotations -------------------------
-const member = await browser.newContext({ viewport: { width: 1024, height: 1366 }, hasTouch: false });
+const member = await browser.newContext({ ...EN, viewport: { width: 1024, height: 1366 }, hasTouch: false });
 const m = await member.newPage();
 watch(m);
 await m.goto(invites.anna);
@@ -727,6 +729,7 @@ check((await m.evaluate(async () => (await (await fetch('/api/auth/me')).json())
     args: ['--force-device-scale-factor=2', '--window-size=1280,800'],
   }) : browser;
   const hiCtx = await hiBrowser.newContext({
+    ...EN,
     storageState: await member.storageState(),
     ...(chrome ? { viewport: null } : { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 2 }),
   });
