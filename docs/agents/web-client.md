@@ -5,7 +5,7 @@ Dioxus 0.7.10, features `web` + `router`; compiled to wasm32 by `dx`; assets `as
 ## Language and texts (`locale.rs`, `musicus-i18n`; d-i18n-fluent, a-intl-js)
 
 `main` calls `locale::init()` before launching: language = first entry of `navigator.languages` whose primary subtag is
-shipped (`musicus_i18n::LANGUAGES`, today `en`), `en-XA` = pseudo-locale, else English; `<html lang>` = the matched
+shipped (`musicus_i18n::LANGUAGES`, today `en` and `de`; German is an agent draft under review, a-i18n-german), `en-XA` = pseudo-locale, else English; `<html lang>` = the matched
 preference ("en-GB"); nothing stored. Texts: every visible text, placeholder, title, ARIA label, `confirm`/`prompt` text and suggested name is
 `musicus_i18n::t::<message_id>(args)` (generated, English fallback per message; R-I18N-010, lint
 `scripts/check-ui-literals.py`, pseudo-locale run `e2e/pseudo.mjs`); user data is shown as entered. A message

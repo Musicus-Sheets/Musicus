@@ -101,18 +101,48 @@ mod tests {
     #[test]
     fn index_text_has_components_and_key_spellings() {
         let v = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
-        assert_eq!(index_text(None, &["Clarinet"], Some("Bb"), &v(&["2"])), "Clarinet 2 Bb B♭");
-        assert_eq!(index_text(Some("Solo Cornet"), &["Trumpet"], Some("Bb"), &[]), "Solo Cornet Trumpet Bb B♭");
+        assert_eq!(index_text(None, &["Clarinet"], Some("Bb"), &v(&["2"])), "Clarinet 2 Bb B♭ B");
+        assert_eq!(index_text(Some("Solo Cornet"), &["Trumpet"], Some("Bb"), &[]), "Solo Cornet Trumpet Bb B♭ B");
+        assert_eq!(index_text(None, &["Horn"], Some("Eb"), &[]), "Horn Eb E♭ Es", "German name of E♭");
+        assert_eq!(index_text(None, &["Posaune"], Some("H"), &[]), "Posaune H B♮", "the code is the German name");
         assert_eq!(index_text(None, &["Flute"], None, &[]), "Flute");
         assert_eq!(index_text(None, &["Klarinette"], None, &v(&["1", "2"])), "Klarinette 1 2");
         assert_eq!(index_text(None, &["Horn"], Some("Es/F"), &[]), "Horn Es/F", "legacy keys as stored");
-        // A second shipped language adds its names (here a German table).
-        let de = |k: &str| -> &'static [&'static str] {
+        // Another table of spellings (a further language) adds its names.
+        let nl = |k: &str| -> &'static [&'static str] {
             match k {
-                "Eb" => &["E♭", "Es"],
+                "Bb" => &["Bes"],
                 _ => &[],
             }
         };
-        assert_eq!(index_text_with(None, &["Horn"], Some("Eb"), &[], de), "Horn Eb E♭ Es");
+        assert_eq!(index_text_with(None, &["Klarinet"], Some("Bb"), &[], nl), "Klarinet Bb Bes");
+    }
+
+    /// The spellings the index of existing installations was last rebuilt
+    /// with (migration 0010). When a catalogue changes a key name or a
+    /// language is added, the stored index lacks the new spellings: add a
+    /// migration `DELETE FROM part_fts;` and update this table.
+    const INDEXED_SPELLINGS: &[(&str, &[&str])] = &[
+        ("A", &["A"]),
+        ("Ab", &["A♭", "As"]),
+        ("C", &["C"]),
+        ("D", &["D"]),
+        ("Db", &["D♭", "Des"]),
+        ("E", &["E"]),
+        ("Eb", &["E♭", "Es"]),
+        ("F", &["F"]),
+        ("G", &["G"]),
+        ("Gb", &["G♭", "Ges"]),
+        ("H", &["B♮", "H"]),
+        ("Bb", &["B♭", "B"]),
+    ];
+
+    #[test]
+    fn indexed_key_spellings_are_current() {
+        let mut want: Vec<_> = INDEXED_SPELLINGS.to_vec();
+        let mut got: Vec<_> = musicus_i18n::KEY_SPELLINGS.to_vec();
+        want.sort();
+        got.sort();
+        assert_eq!(got, want, "key spellings changed: add a migration that empties part_fts, then update the table");
     }
 }

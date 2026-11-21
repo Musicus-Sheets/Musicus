@@ -1,6 +1,7 @@
 //! Catalogue checks (d-i18n-fluent): other languages contain no message the
-//! English source lacks and use the same arguments; every English message is
-//! used by the web client. A message missing in English or a wrong argument
+//! English source lacks and use the same arguments; the complete languages
+//! (German) have every English message; plural variants are categories of the
+//! language; every English message is used by the web client. A message missing in English or a wrong argument
 //! is already a compile error (generated functions).
 
 #[path = "../src/scan.rs"]
@@ -12,6 +13,15 @@ const ROOT: &str = env!("CARGO_MANIFEST_DIR");
 
 /// Messages used through a lookup by code instead of their function.
 const DYNAMIC_PREFIXES: &[(&str, &str)] = &[("key-name-", "t::key_name"), ("key-option-", "t::key_option(")];
+
+/// Languages that ship complete: every English message must be translated
+/// (a missing one would silently show English, R-I18N-003).
+const COMPLETE: &[&str] = &["de"];
+
+/// CLDR plural categories of each shipped language (cardinals). A select
+/// variant key that is neither one of these nor a key of the English message
+/// (string selectors such as `[librarian]`) is a typo.
+const PLURAL_CATEGORIES: &[(&str, &[&str])] = &[("en", &["one", "other"]), ("de", &["one", "other"])];
 
 fn catalogue(lang_files: &[std::path::PathBuf]) -> Vec<scan::Msg> {
     lang_files.iter().flat_map(|f| scan::messages(f).unwrap()).collect()
@@ -30,6 +40,57 @@ fn other_languages_match_the_english_messages() {
             a.sort();
             b.sort();
             assert_eq!(a, b, "{lang}/{}: `{}` uses other arguments than English", m.file, m.id);
+        }
+    }
+}
+
+#[test]
+fn complete_languages_have_every_english_message() {
+    let langs = scan::languages(&Path::new(ROOT).join("locales"));
+    let en = catalogue(&langs[0].1);
+    for lang in COMPLETE {
+        let Some((_, files)) = langs.iter().find(|(l, _)| l == lang) else {
+            panic!("locales/{lang} is missing");
+        };
+        let ids: Vec<String> = catalogue(files).into_iter().map(|m| m.id).collect();
+        let missing: Vec<String> =
+            en.iter().filter(|m| !ids.contains(&m.id)).map(|m| format!("{} ({})", m.id, m.file)).collect();
+        assert!(missing.is_empty(), "{lang}: not translated: {missing:?}");
+    }
+}
+
+#[test]
+fn messages_stay_in_the_file_of_their_english_source() {
+    let langs = scan::languages(&Path::new(ROOT).join("locales"));
+    let en = catalogue(&langs[0].1);
+    for (lang, files) in &langs[1..] {
+        for m in catalogue(files) {
+            if let Some(src) = en.iter().find(|e| e.id == m.id) {
+                assert_eq!(src.file, m.file, "{lang}: `{}` belongs in {}", m.id, src.file);
+            }
+        }
+    }
+}
+
+#[test]
+fn variant_keys_are_plural_categories_or_english_keys() {
+    let langs = scan::languages(&Path::new(ROOT).join("locales"));
+    let en = catalogue(&langs[0].1);
+    for (lang, files) in &langs {
+        let Some((_, plurals)) = PLURAL_CATEGORIES.iter().find(|(l, _)| l == lang) else {
+            panic!("{lang}: add its CLDR plural categories to PLURAL_CATEGORIES");
+        };
+        for m in catalogue(files) {
+            let english = en.iter().find(|e| e.id == m.id).map_or(&[][..], |e| e.variant_keys.as_slice());
+            for k in &m.variant_keys {
+                let ok = plurals.contains(&k.as_str()) || (lang != "en" && english.contains(k)) || lang == "en";
+                assert!(ok, "{lang}/{}: `{}` has the variant [{k}], not a plural category of {lang}", m.file, m.id);
+            }
+            for k in english {
+                if !plurals.contains(&k.as_str()) {
+                    assert!(m.variant_keys.contains(k), "{lang}/{}: `{}` lacks the variant [{k}]", m.file, m.id);
+                }
+            }
         }
     }
 }

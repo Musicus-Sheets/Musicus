@@ -27,7 +27,7 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 
 | F-LIB-004 phase 2 | mass import extensions | pattern per subfolder (archives mixing structures; today: several batches), ZIP upload, server-side paging of the review for very large batches, CSV inventory and OCR sources (R-LIB-022) |
 | R-LIB-022 | OCR / inventory list as import sources | add candidates with `Source::Ocr` / `Source::Inventory` to `PieceGuess` fields (a-import-shared) |
-| F-I18N-001 (R-I18N-001…010) | languages | phases (`docs/technical/chapters/13-i18n.typ`): 0 decisions/requirements/glossary done; 1 catalogue crate + `locale`; 2 errors as codes (separate branch); 3 part names in the client; 4 all client strings in the catalogue; 5 sorting in the browser; German catalogue, guide per language (R-I18N-009), Weblate later |
+| F-I18N-001 (R-I18N-001…010) | languages | phases (`docs/technical/chapters/13-i18n.typ`): 0 decisions/requirements/glossary done; 1 catalogue crate + `locale`; 2 errors as codes (separate branch); 3 part names in the client; 4 all client strings in the catalogue; 5 sorting in the browser; 6 German catalogue shipped as an agent draft (a-i18n-german; maintainer review open); 7 guide per language (R-I18N-009), Weblate later |
 
 Also not implemented (no requirement yet): user deletion, rate limiting beyond login, metrics.
 
@@ -60,7 +60,7 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 
 ## Known debt / quirks
 
-- i18n: only English is shipped (`locales/en`); the German catalogue is a later branch. The pseudo-locale run (`e2e/pseudo.mjs`) covers 13 pages without the reader with a file, the import review and the system editor (those are covered only by the lint). Button overflow with long translations is only reported, not failed.
+- i18n: English and German are shipped (`locales/en`, `locales/de`). **German is an agent draft that needs the maintainer's review** (terminology, tone, "du"; open choices in `glossary.md` § Open choices; review aid `scripts/i18n-review.py de`). The user guide is English only (phase 7). The pseudo-locale run (`e2e/pseudo.mjs`) covers 13 pages without the reader with a file, the import review and the system editor (those are covered only by the lint). Button overflow with long translations is only reported, not failed.
 
 - `annotation_sets` name uniqueness is case-sensitive (SQLite UNIQUE without NOCASE) while users/groups/instruments are case-insensitive.
 - `LoginLimiter` is in-memory: resets on restart, per process.
