@@ -104,7 +104,7 @@ ensemble's data, only " in ", the key name and the separators follow the languag
 8. "Administrator" as role name (alternative "Admin", shorter).
 9. "Freigabe" for grant ("Instrument-Freigabe").
 10. Line widths "Fein / Mittel / Breit" (alternative "Dick" for bold); colour "Pink".
-11. Button "Link zum Zurücksetzen" (users page, reset link; long) — alternative "Neuer Passwort-Link".
+11. ~~Button "Link zum Zurücksetzen"~~ — decided: "Zurücksetzen" (users page, reset link; maintainer, 2026-11-21).
 12. Key option "H" alone in German (English shows "B♮ (H)").
 13. Examples in placeholders: "Weihnachtskonzert 2026", "Treffpunkt 18:30 Uhr zur Anspielprobe", "Solo-Flügelhorn",
     "Trompete", "Blech", "Marsch, Polka, Konzertwerk …".
