@@ -26,7 +26,7 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | R-OPS-009 | continuous replication (Litestream) | |
 | F-OPS-005, R-OPS-010…025, R-OPS-038…041 | updates and downgrades (d-update-model, a-preview-migrations, a-patch-no-db-changes, a-db-check) | plan and roadmap in `docs/technical/chapters/14-updates.typ`; phase 0 (own update runner with marker tables, additive/rebuild/removal parts, previews merged per release, snapshot + automatic restore, `backup` without updating, `restore`, refusal message, enum fallbacks) must ship in 1.0.0; see § Updates below |
 | F-OPS-008, R-OPS-043…048 | open clients during shutdown, start and update (a-client-outage) | listener before updates with 503 `server_starting`, shutdown drain with 503 `server_shutting_down` (new `ErrorCode`s), banners, polling, unsaved markings kept in memory and re-sent, `beforeunload` warning, reload at a safe moment after a version change |
-| F-OPS-006, R-OPS-026…032, R-OPS-042 | platforms (a-platforms) | multi-arch images + version tags (phase 0); Windows blocker and other findings in § Updates below; R-OPS-029…032 are `proposed` |
+| F-OPS-006, R-OPS-026…032, R-OPS-042 | platforms (a-platforms) | multi-arch images + version tags (phase 0); Windows blocker and other findings in § Updates below; program archives + `SHA256SUMS` (unsigned; guide text for SmartScreen/Gatekeeper), embedded web client, OS data folder, platform-dependent CI (tests, build, smoke) on all systems, the rest Linux-only (phase 1) |
 | F-OPS-007, R-OPS-033…036 | version visible (a-version-public) | `/api/version`, About view, title pages from the release version, requirements tag per release |
 | R-OPS-037 | backups/exports unencrypted, with guidance (a-unencrypted-export) | user guide backup section must say that backups need the same care as the data directory |
 | F-TECH-002, R-TECH-004…007 | prepared replaceability | storage modules per data area (no SQL in `routes/`), file store without `path()`, PDF engine module, conformance suites; no second backend |
@@ -107,8 +107,8 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
   1. **Windows blocker:** `blobs.rs::sync_dir` (`std::fs::File::open(dir)?.sync_all()`) fails on Windows ⇒ every
      upload fails. Fix: directory sync on Unix only.
   2. SIGTERM handling is `#[cfg(unix)]` (`main.rs::shutdown_signal`); Ctrl+C works everywhere — fine.
-  3. The plain program needs `--web-dir` with the client files (embedding proposed, R-OPS-030).
-  4. Default data dir `data` is relative to the working directory (OS-usual folders proposed, R-OPS-031).
+  3. The plain program needs `--web-dir` with the client files (embedding accepted, R-OPS-030).
+  4. Default data dir `data` is relative to the working directory (OS-usual folders accepted, R-OPS-031).
   5. CI only on Linux x86_64; Docker images only for the host architecture.
   6. Blob commit = "exists? else rename": on Windows a rename onto an open file fails and concurrent uploads of the
      same new file race; treat "target exists" after a failed rename as success.

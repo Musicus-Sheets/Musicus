@@ -114,7 +114,7 @@ Plan and roadmap: `docs/technical/chapters/14-updates.typ`. Phase 0 must be done
 2. Set the version (workspace `Cargo.toml`, title pages of `docs/user-guide` and `docs/technical`).
 3. Tag `vX.Y.Z` in `docs/requirements` on the pinned commit (R-OPS-036); merge docs first (a-submodule-pins).
 4. Tag the main repository; the release workflow builds and publishes the linux/amd64 + linux/arm64 image with
-   version tags (R-OPS-028); the release check (R-OPS-040) fails on previews, a database update in a patch, a merged
+   version tags (R-OPS-028) and the program archives per platform with `SHA256SUMS` (R-OPS-029); the release check (R-OPS-040) fails on previews, a database update in a patch, a merged
    update that does not list exactly the removed previews, or a wrong version on a title page. Publishing the GitHub release rebuilds the guide site (a-guide-site).
 5. Release notes: removed features with their data; new access restrictions (after a downgrade the restricted
    items give no access and must be granted again by hand, R-OPS-017); downgrade targets (R-OPS-014, counted in
