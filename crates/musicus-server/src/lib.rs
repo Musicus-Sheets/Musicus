@@ -17,10 +17,12 @@ pub mod part_index;
 pub mod processors;
 pub mod routes;
 pub mod state;
+pub mod updates;
 
 use std::path::Path;
 
-/// Opens the data directory: database (with migrations) and file store.
+/// Opens the data directory: database (brought to this version by the update
+/// runner, a-update-runner) and file store.
 pub async fn open_state(
     data_dir: &Path,
     cache_bytes: u64,
@@ -28,8 +30,18 @@ pub async fn open_state(
 ) -> anyhow_like::Result<state::AppState> {
     std::fs::create_dir_all(data_dir)?;
     let readers = std::thread::available_parallelism().map(|n| n.get() as u32).unwrap_or(2).clamp(2, 8);
-    let db = db::Db::open(&data_dir.join("musicus.sqlite"), readers).await?;
-    if part_index::rebuild_if_needed(&db).await? {
+    let (db, report) = db::Db::open(&data_dir.join("musicus.sqlite"), readers).await?;
+    if let Some(from) = &report.upgraded_from {
+        tracing::info!("database last used by Musicus {from}; now {}", env!("CARGO_PKG_VERSION"));
+    }
+    for step in &report.steps {
+        tracing::info!("database update: {step}");
+    }
+    if !report.ignored.is_empty() {
+        tracing::info!("database updates of a newer program ignored: {}", report.ignored.join(", "));
+    }
+    // Derived data is rebuilt after another program used the database (d-update-model).
+    if part_index::rebuild_if_needed(&db, report.other_ran_last).await? {
         tracing::info!("rebuilt the search index of part names");
     }
     let blobs = blobs::BlobStore::open(data_dir)?;

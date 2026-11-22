@@ -929,40 +929,46 @@ async fn parts_with_several_voices() {
     assert_eq!(left, 0);
 }
 
+/// A development database of the `sqlx::migrate!` time: the development
+/// migrations (verbatim in `tests/fixtures/legacy-0001-0010.sql`) before
+/// `before` are applied, then `data`, then the rest with sqlx's bookkeeping.
+/// The update runner then recognises it as having the 1.0.0 baseline
+/// (a-update-runner); these tests keep the data conversions of the old
+/// migrations verified on such databases.
+async fn legacy_database(path: &std::path::Path, before: &str, data: &'static str) {
+    let fixture = include_str!("fixtures/legacy-0001-0010.sql");
+    let opts = sqlx::sqlite::SqliteConnectOptions::new().filename(path).create_if_missing(true).foreign_keys(true);
+    let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
+    let mut data = Some(data);
+    for chunk in fixture.split("\n-- ===== ").skip(1) {
+        if chunk.as_bytes()[..4] >= *before.as_bytes()
+            && let Some(d) = data.take()
+        {
+            sqlx::raw_sql(d).execute(&pool).await.unwrap();
+        }
+        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("-- {chunk}"))).execute(&pool).await.unwrap();
+    }
+    pool.close().await;
+}
+
 /// Migration 0009 (a-client-part-names): sets named "My annotations" become unnamed (NULL);
 /// the table rebuild keeps their pages, foreign keys are on again, one unnamed set per part.
 #[tokio::test]
 async fn migration_0009_unnames_default_sets_and_keeps_their_pages() {
     let dir = tempfile::tempdir().unwrap();
-    let old = tempfile::tempdir().unwrap();
-    for f in std::fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations")).unwrap() {
-        let f = f.unwrap();
-        if *f.file_name().to_string_lossy() < *"0009" {
-            std::fs::copy(f.path(), old.path().join(f.file_name())).unwrap();
-        }
-    }
-    {
-        let opts = sqlx::sqlite::SqliteConnectOptions::new()
-            .filename(dir.path().join("musicus.sqlite"))
-            .create_if_missing(true)
-            .foreign_keys(true);
-        let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
-        sqlx::migrate::Migrator::new(old.path()).await.unwrap().run(&pool).await.unwrap();
-        sqlx::raw_sql(
-            "INSERT INTO users (id, username, display_name, role, created_at) VALUES (1, 'anna', 'Anna', 'admin', 0);
-             INSERT INTO scores (id, title, tags, created_at, updated_at) VALUES (1, 'March', '[]', 0, 0);
-             INSERT INTO parts (id, score_id, created_at) VALUES (1, 1, 0);
-             INSERT INTO files (id, sha256, mime, size_bytes, created_at) VALUES (1, 'aa', 'application/pdf', 1, 0);
-             INSERT INTO part_files (part_id, version, file_id, uploaded_at) VALUES (1, 1, 1, 0);
-             INSERT INTO annotation_sets (id, user_id, part_id, file_id, name, is_default, created_at, updated_at)
-               VALUES (1, 1, 1, 1, 'My annotations', 1, 0, 0), (2, 1, 1, 1, 'Concert', 0, 0, 0);
-             INSERT INTO annotation_pages (set_id, page, revision, data, updated_at) VALUES (1, 0, 3, x'00', 0);",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        pool.close().await;
-    }
+    legacy_database(
+        &dir.path().join("musicus.sqlite"),
+        "0009",
+        "INSERT INTO users (id, username, display_name, role, created_at) VALUES (1, 'anna', 'Anna', 'admin', 0);
+         INSERT INTO scores (id, title, tags, created_at, updated_at) VALUES (1, 'March', '[]', 0, 0);
+         INSERT INTO parts (id, score_id, created_at) VALUES (1, 1, 0);
+         INSERT INTO files (id, sha256, mime, size_bytes, created_at) VALUES (1, 'aa', 'application/pdf', 1, 0);
+         INSERT INTO part_files (part_id, version, file_id, uploaded_at) VALUES (1, 1, 1, 0);
+         INSERT INTO annotation_sets (id, user_id, part_id, file_id, name, is_default, created_at, updated_at)
+           VALUES (1, 1, 1, 1, 'My annotations', 1, 0, 0), (2, 1, 1, 1, 'Concert', 0, 0, 0);
+         INSERT INTO annotation_pages (set_id, page, revision, data, updated_at) VALUES (1, 0, 3, x'00', 0);",
+    )
+    .await;
     let settings = Settings { cookie_secure: false, ..Settings::default() };
     let state = open_state(dir.path(), 1 << 20, settings).await.unwrap();
     let rows: Vec<(Id, Option<String>, i64)> = sqlx::query_as(
@@ -990,31 +996,20 @@ async fn migration_0009_unnames_default_sets_and_keeps_their_pages() {
 #[tokio::test]
 async fn migration_0002_keeps_old_parts() {
     let dir = tempfile::tempdir().unwrap();
-    let old = tempfile::tempdir().unwrap();
-    std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations/0001_init.sql"), old.path().join("0001_init.sql"))
-        .unwrap();
-    {
-        let opts = sqlx::sqlite::SqliteConnectOptions::new()
-            .filename(dir.path().join("musicus.sqlite"))
-            .create_if_missing(true);
-        let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
-        sqlx::migrate::Migrator::new(old.path()).await.unwrap().run(&pool).await.unwrap();
-        sqlx::raw_sql(
-            "INSERT INTO instruments (id, name) VALUES (1, 'Clarinet'), (2, 'Horn');
-             INSERT INTO scores (id, title, tags, created_at, updated_at) VALUES (1, 'Old March', '[]', 0, 0);
-             INSERT INTO parts (id, score_id, label, voice, transposition, created_at) VALUES
-               (1, 1, '2nd Clarinet in Bb', 2, 'in Bb', 0),
-               (2, 1, 'Horn', NULL, 'Es', 0),
-               (3, 1, '  ', NULL, 'B', 0),
-               (4, 1, 'Horn 2', 2, 'Es/F', 0),
-               (5, 1, 'Horn 3', 3, '', 0);
-             INSERT INTO part_instruments (part_id, instrument_id) VALUES (1, 1), (2, 2), (3, 1), (4, 2), (5, 2);",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        pool.close().await;
-    }
+    legacy_database(
+        &dir.path().join("musicus.sqlite"),
+        "0002",
+        "INSERT INTO instruments (id, name) VALUES (1, 'Clarinet'), (2, 'Horn');
+         INSERT INTO scores (id, title, tags, created_at, updated_at) VALUES (1, 'Old March', '[]', 0, 0);
+         INSERT INTO parts (id, score_id, label, voice, transposition, created_at) VALUES
+           (1, 1, '2nd Clarinet in Bb', 2, 'in Bb', 0),
+           (2, 1, 'Horn', NULL, 'Es', 0),
+           (3, 1, '  ', NULL, 'B', 0),
+           (4, 1, 'Horn 2', 2, 'Es/F', 0),
+           (5, 1, 'Horn 3', 3, '', 0);
+         INSERT INTO part_instruments (part_id, instrument_id) VALUES (1, 1), (2, 2), (3, 1), (4, 2), (5, 2);",
+    )
+    .await;
     let settings = Settings { cookie_secure: false, ..Settings::default() };
     let state = open_state(dir.path(), 1 << 20, settings).await.unwrap();
     let invite = bootstrap_admin(&state).await.unwrap().unwrap();

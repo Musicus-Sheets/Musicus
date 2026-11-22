@@ -94,22 +94,31 @@ Site: GitHub Pages of the main repository (`https://<owner>.github.io/Musicus/`)
 1. `crates/musicus-i18n/locales/<lang>/*.ftl` (same files and ids as `en`); `LANGUAGES` and negotiation pick it up.
 2. Its CLDR plural categories in `tests/catalogue.rs::PLURAL_CATEGORIES`; add it to `COMPLETE` once it must ship complete.
 3. Its key names (`key-name-<code>`) and the words of `part-name-with-key` become search spellings/connectors: add a
-   migration `DELETE FROM part_fts;` and update `part_index::tests::INDEXED_SPELLINGS` (the test fails until then).
+   preview update whose additive part is `DELETE FROM part_fts;` and update `part_index::tests::INDEXED_SPELLINGS` (the test fails until then).
 4. Glossary column, e2e run like `e2e/german.mjs`, requirement R-I18N-* checks, docs (`status.md`, `13-i18n.typ`).
 
 ### Change the schema
-New `crates/musicus-server/migrations/000N_<desc>.sql` (never edit applied ones); update `data-model.md`; update queries; tests.
-Planned for 1.0 (d-update-model, a-preview-migrations, a-db-check; not implemented): changes become preview updates in
-`migrations/preview/` with an additive and a removal part, plus the regenerated schema snapshot; removals never go into the additive part; access
-restrictions count as removals; patch releases never contain a database update.
+Add a preview update `crates/musicus-server/migrations/preview/NNNN-<topic>.sql` (next free number; lower-case topic) — d-update-model,
+a-preview-migrations, a-update-runner. Format (`crates/musicus-server/src/updates/file.rs`): header comments, then
+`-- @additive` (new tables/columns nullable or with default, copies into them), optional `-- @rebuild` (refill the new
+structures from the old ones; runs after an older program used the database), optional `-- @removal` (drops, the old
+half of a rename; runs only when no release in the window needs it — never on development databases, only after the
+release merge). Removals never go into the additive part; access restrictions move the item out of what older releases
+read (R-OPS-017). While a removal is pending, code writes old and new structures and must tolerate the old ones being
+gone. Never edit a merged preview (correction = new preview); never add `migrations/X.Y.0.sql` outside a release pull
+request. Update `data-model.md`, queries, tests (`tests/updates.rs` shows how to test a part with test programs). The
+schema snapshot and CI database check (a-db-check) are not built yet. Debug and plain `--release` builds apply previews;
+only builds with `MUSICUS_RELEASE_BUILD=1` refuse them. A local demo database in an unclear state (some previews of a
+merged release missing) is refused with a message: move the data directory away.
 
-### Release (planned; nothing of this exists yet)
+### Release (planned; only the merge script and the release-build flag exist)
 Plan and roadmap: `docs/technical/chapters/14-updates.typ`. Phase 0 must be done before 1.0.0. In short:
 0. Open a release pull request from a branch `release/<version>` (e.g. `release/1.3.0`); only such a branch may
    delete previews and add the merged update (a-db-check). A normal pull request that changes the database adds a
    preview plus the regenerated schema snapshot (`scripts/db-schema.sh` → `crates/musicus-server/schema.sql`) and
    gets the label `db-change` (the next release must then be a minor).
-1. Merge all preview updates into `migrations/<version>.sql` (release script; previews deleted). Patch release:
+1. Minor/major: `scripts/release-migrations.py X.Y.0` (merges all previews into `migrations/X.Y.0.sql`, deletes them, appends `X.Y` to
+   `migrations/releases.txt`; for 1.0.0 it appends into the unreleased baseline). Build the release with `MUSICUS_RELEASE_BUILD=1`. Patch release:
    no database update and no new kinds of stored values ("patch: no new stored values"; a-patch-no-db-changes).
 2. Set the version (workspace `Cargo.toml`, title pages of `docs/user-guide` and `docs/technical`).
 3. Tag `vX.Y.Z` in `docs/requirements` on the pinned commit (R-OPS-036); merge docs first (a-submodule-pins).

@@ -2,6 +2,7 @@
 //! so the pool of one *is* the write queue) and a small pool of readers,
 //! which never block on the writer in WAL mode.
 
+use crate::updates;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous};
 use std::{path::Path, time::Duration};
 
@@ -12,20 +13,38 @@ pub struct Db {
 }
 
 impl Db {
-    /// Opens (or creates) the database file and applies pending migrations.
-    pub async fn open(path: &Path, readers: u32) -> Result<Self, sqlx::Error> {
-        let base = SqliteConnectOptions::new()
+    /// Opens (or creates) the database file and brings it to this program's
+    /// version (a-update-runner): refuses a release build with previews, reads
+    /// the version marker (refusing a database outside the downgrade window
+    /// without writing anything, R-OPS-015), then runs the planned parts.
+    pub async fn open(path: &Path, readers: u32) -> Result<(Self, updates::Report), updates::UpdateError> {
+        let program = updates::Program::builtin()?;
+        program.check_build()?;
+        let write = Self::writer(path).await?;
+        let plan = updates::inspect(&write, program, now()).await?;
+        // A snapshot of the database before the updates goes here (R-OPS-019, when `plan.has_work()`).
+        let report = updates::apply(&write, program, &plan, now()).await?;
+        let read = Self::readers(path, readers).await?;
+        Ok((Self { read, write }, report))
+    }
+
+    fn options(path: &Path) -> SqliteConnectOptions {
+        SqliteConnectOptions::new()
             .filename(path)
             .journal_mode(SqliteJournalMode::Wal)
             .synchronous(SqliteSynchronous::Normal)
             .foreign_keys(true)
             .busy_timeout(Duration::from_secs(5))
-            .pragma("cache_size", "-16000");
-        let write =
-            SqlitePoolOptions::new().max_connections(1).connect_with(base.clone().create_if_missing(true)).await?;
-        sqlx::migrate!("./migrations").run(&write).await?;
-        let read = SqlitePoolOptions::new().max_connections(readers.max(1)).connect_with(base.read_only(true)).await?;
-        Ok(Self { read, write })
+            .pragma("cache_size", "-16000")
+    }
+
+    /// The single writer connection (creates an empty file if there is none).
+    pub async fn writer(path: &Path) -> Result<SqlitePool, sqlx::Error> {
+        SqlitePoolOptions::new().max_connections(1).connect_with(Self::options(path).create_if_missing(true)).await
+    }
+
+    async fn readers(path: &Path, readers: u32) -> Result<SqlitePool, sqlx::Error> {
+        SqlitePoolOptions::new().max_connections(readers.max(1)).connect_with(Self::options(path).read_only(true)).await
     }
 
     /// Writes a consistent copy of the database while the server may run.
