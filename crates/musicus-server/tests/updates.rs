@@ -373,6 +373,20 @@ fn release_script_unit_tests() {
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
 }
 
+/// The Python tests of the CI database check (`scripts/test_check_db_changes.py`, a-db-check, R-OPS-038);
+/// they need `git`.
+#[test]
+fn db_check_script_unit_tests() {
+    let script = repo().join("scripts/test_check_db_changes.py");
+    let Some(out) =
+        ["python3", "python"].iter().find_map(|py| std::process::Command::new(py).arg(&script).output().ok())
+    else {
+        eprintln!("no Python: database check script not tested");
+        return;
+    };
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
 /// The release script on the real previews (as for 1.0.0): the merged, simplified update gives
 /// the schema of the previews, and a database that applied them records it without running it.
 #[tokio::test]
@@ -401,6 +415,22 @@ async fn merging_the_development_previews_keeps_the_schema() {
     assert_eq!(schema(&fresh).await, schema(&dev.read).await);
     let r = start(&dev.write, &release, 0).await.unwrap();
     assert_eq!(r.steps, ["1.0.0 recorded from its previews"]);
+}
+
+/// R-OPS-038: `schema.sql` is the structure of a new database after all updates (a-db-check).
+#[tokio::test]
+async fn the_schema_snapshot_is_up_to_date() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _) = Db::open(&dir.path().join("musicus.sqlite"), 1).await.unwrap();
+    let got = updates::schema::snapshot(&db.read).await.unwrap();
+    let want = include_str!("../schema.sql");
+    assert!(
+        got.contains("CREATE TABLE users (") && !got.contains("TABLE musicus_meta") && !got.contains("score_fts_data")
+    );
+    assert!(
+        got == want,
+        "crates/musicus-server/schema.sql is out of date: run scripts/db-schema.sh and commit it with the preview update"
+    );
 }
 
 /// The SQL of every schema object, without comments, quotes and layout.

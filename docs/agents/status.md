@@ -24,7 +24,7 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | R-FILE-010 | bilevel compression of scans | |
 | R-SEC-009, R-SEC-010 | watermark, download audit log | watermark must not create blobs (conflict with R-FILE-004) |
 | R-OPS-009 | continuous replication (Litestream) | |
-| F-OPS-005, R-OPS-010, R-OPS-012, R-OPS-018…022, R-OPS-025, R-OPS-038…041 | updates and downgrades (d-update-model, a-preview-migrations, a-patch-no-db-changes, a-db-check) | plan and roadmap in `docs/technical/chapters/14-updates.typ`; done: own update runner (a-update-runner; R-OPS-011, 013–017 mechanism, 023, 024), handling of unknown stored values where they are read (a-stored-fallbacks). Still for 1.0.0: snapshot + automatic restore, `backup` without updating, `restore`, CI checks, release pipeline (R-OPS-049, PR G); see § Updates below |
+| F-OPS-005, R-OPS-010, R-OPS-012, R-OPS-018…022, R-OPS-025, R-OPS-040, R-OPS-041 | updates and downgrades (d-update-model, a-preview-migrations, a-patch-no-db-changes, a-db-check) | plan and roadmap in `docs/technical/chapters/14-updates.typ`; done: own update runner (a-update-runner; R-OPS-011, 013–017 mechanism, 023, 024), handling of unknown stored values where they are read (a-stored-fallbacks), schema snapshot + CI database check + `db-change` notice (a-db-check; R-OPS-038, R-OPS-039). Still for 1.0.0: snapshot + automatic restore, `backup` without updating, `restore`, release check, release pipeline (R-OPS-049, PR G); see § Updates below |
 | F-OPS-008, R-OPS-043…048 | open clients during shutdown, start and update (a-client-outage) | listener before updates with 503 `server_starting`, shutdown drain with 503 `server_shutting_down` (new `ErrorCode`s), banners, polling, unsaved markings kept in memory and re-sent, `beforeunload` warning, reload at a safe moment after a version change |
 | F-OPS-006, R-OPS-026…032, R-OPS-042 | platforms (a-platforms) | multi-arch images + version tags (phase 0); Windows blocker and other findings in § Updates below; program archives + `SHA256SUMS` (unsigned; guide text for SmartScreen/Gatekeeper), embedded web client, OS data folder, platform-dependent CI (tests, build, smoke) on all systems, the rest Linux-only (phase 1) |
 | F-OPS-007, R-OPS-036 | version visible (a-version-public) | done: `/api/version`, About view, title pages from the build's version (R-OPS-033…035); missing: the title-page check in stage 1 of the release pipeline (R-OPS-035, PR G); docs tags `vX.Y.Z` in requirements, technical docs and user guide by hand after each release (R-OPS-036, RELEASING.md § 4) |
@@ -108,11 +108,10 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
   `api::version()` with its own `musicus_api::VERSION` (reload after an update, R-OPS-048). No release check fails on a
   title page whose version differs from the release (R-OPS-035); the guide site only warns on a tag ≠ workspace version.
 - `compose.yaml` builds locally (`build: .`, `musicus:latest`); no published image (R-OPS-010, R-OPS-028).
-- Requirements referencing the schema snapshot once PR E adds it (`schema.sql`): table-related requirements
-  (R-LIB-002/003/004/015/016, R-PERF-005, R-I18N-006) then get it in `implemented_by`; update files may not be referenced
-  (`validate.py`).
-- No database check, `db-change` notice or release check in CI, no schema snapshot (`schema.sql`,
-  `scripts/db-schema.sh`) — all come with phase 0 (a-db-check, R-OPS-038…040), not earlier.
+- CI database check (job `db-check`) and `db-change` notice exist (workflow `Database`, a-db-check, R-OPS-038,
+  R-OPS-039), with the schema snapshot `crates/musicus-server/schema.sql` (`scripts/db-schema.sh`). Not yet exercised on
+  GitHub: the merge-queue path (head branch read from the API) and the label/comment calls; `db-check` still has to be
+  made a required status check. The release check (R-OPS-040) comes with the release pipeline (PR G).
 - Patches writing new kinds of stored values (R-OPS-041) are not caught by any check; the fallbacks
   (a-stored-fallbacks) and the release checklist line (`RELEASING.md` step 7) exist, the test matrix with release
   test data is still missing (phase 2).

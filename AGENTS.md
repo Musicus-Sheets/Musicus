@@ -72,7 +72,8 @@ merge commits on the docs `main` (never the feature-branch commits). The require
 - Annotation objects are immutable (edit = remove + add) — the merge depends on it (R-ANN-012).
 - Writes go through `app.db.write` (single connection), reads through `app.db.read` (R-PERF-006).
 - The web client must not persist data on the device (R-SEC-001).
-- Schema changes: a new preview `crates/musicus-server/migrations/preview/NNNN-<topic>.sql` (additive/rebuild/removal sections); never edit a merged preview or a released update.
+- Schema changes: a new preview `crates/musicus-server/migrations/preview/NNNN-<topic>.sql` (additive/rebuild/removal sections); never edit a merged preview or a released update;
+  commit the regenerated `crates/musicus-server/schema.sql` (`./scripts/db-schema.sh`) with it (CI job `db-check`).
 - Store and show user data exactly as entered; never translate or reformat it (a-data-as-entered, R-I18N-006).
   UI terms and their German translations: `docs/agents/glossary.md`.
 - Every text the web client shows comes from the catalogue `crates/musicus-i18n/locales/en/*.ftl` via

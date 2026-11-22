@@ -15,7 +15,8 @@ Steps marked **(planned)** are not automated yet; do what the step says under "u
 | Major | `X.0.0` | Like a minor; for large changes. |
 
 How to decide: if any file exists in `crates/musicus-server/migrations/preview/`, or any pull request since
-the last release had the label `db-change` or wrote new kinds of stored values, the release **must** be a
+the last release had the label `db-change` (set automatically by CI on every pull request that adds a preview) or
+wrote new kinds of stored values, the release **must** be a
 minor (or major). Otherwise a patch is possible. Old minors get no patches: a fix always comes with the next
 release.
 
@@ -48,6 +49,16 @@ release.
    release holding test data to compare its rows too (fixtures per release are planned for phase 2). The
    output lists each simplification and the verification result; if they diverge it says where and writes
    the appended version. `--no-simplify` skips the attempt.
+
+   Then check that the merge left the database structure unchanged:
+
+   ```sh
+   ./scripts/db-schema.sh --check
+   ```
+
+   It must print `crates/musicus-server/schema.sql is up to date`. Never regenerate the file here: a difference
+   means the merged update creates another structure than the previews did, so the merge is wrong (the CI job
+   `db-check` compares the same on the release pull request).
 4. Review the merged update section by section:
    - `-- @additive`: only new tables, nullable/defaulted columns, indexes and copies — nothing dropped.
    - `-- @rebuild`: refills the new structures from the old ones (runs after an older release used the data).
@@ -64,7 +75,8 @@ release.
      `scripts/release-migrations.py --no-simplify 1.0.0` on a copy of the tree), then
      `scripts/release-migrations.py --compare appended.sql crates/musicus-server/migrations/1.0.0.sql`
      (add `--fixture <db>` when a database with test data exists) must print
-     `same schema, rows and sections`; `cargo test` must pass.
+     `same schema, rows and sections`; `./scripts/db-schema.sh --check` must still report the file up to date;
+     `cargo test` must pass.
    From 1.1 on this step is not needed: the automatic simplification is enough, the update stays as written.
 6. Run all checks; every command must succeed without warnings:
    ```sh
@@ -179,6 +191,10 @@ Always mention:
 - Platforms whose non-blocking checks failed (macOS Intel, R-OPS-042), once those checks exist.
 
 ## Troubleshooting
+
+- **The CI job `db-check` fails on the release pull request**: on a `release/<version>` branch it only compares
+  `crates/musicus-server/schema.sql` with the structure the updates create. The merged update (or its
+  simplification by hand) differs from the previews: fix the update, not the snapshot (§ 2, step 3).
 
 - **The merge script refuses** (`release-migrations: …`, exit 1, nothing written): a patch with previews ⇒
   make it a minor; "already released" ⇒ wrong version or the line is in `releases.txt` already; a preview
