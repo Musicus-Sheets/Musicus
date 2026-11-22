@@ -22,6 +22,7 @@ use axum::{
 };
 use musicus_api::ErrorCode;
 use musicus_api::layout::{FileLayout, LayoutState, PageCorrection, PageLayout};
+use serde::Deserialize;
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
@@ -78,6 +79,13 @@ pub async fn get_layout(
 }
 
 /// The detected layout with the librarians' corrections applied.
+///
+/// Stored values of a newer release are handled here, where they are read
+/// (R-OPS-041, a-stored-fallbacks): an unknown state or a page list this
+/// release cannot read ⇒ `failed` (whole pages, as if not analysed); a page
+/// or a correction it cannot parse (e.g. a band kind it does not know) ⇒ that
+/// page whole, listed in `unreadable_pages`. Nothing is written back, and the
+/// worker does not redo a layout of a newer algorithm.
 async fn effective_layout(app: &App, sha256: &str) -> ApiResult<FileLayout> {
     let row: Option<(i64, i64, String, String)> = sqlx::query_as(
         "SELECT f.id, l.algorithm, l.state, l.pages FROM file_layouts l JOIN files f ON f.id = l.file_id
@@ -88,22 +96,27 @@ async fn effective_layout(app: &App, sha256: &str) -> ApiResult<FileLayout> {
     .await?;
     let sha256 = sha256.to_string();
     let Some((file_id, algorithm, state, pages)) = row else {
-        return Ok(FileLayout { sha256, state: LayoutState::Pending, algorithm: 0, pages: vec![] });
+        return Ok(FileLayout {
+            sha256,
+            state: LayoutState::Pending,
+            algorithm: 0,
+            pages: vec![],
+            unreadable_pages: vec![],
+        });
     };
-    // Values of a newer release fail closed (R-OPS-041): an unknown state or
-    // pages this release cannot read count as a failed detection (the reader
-    // shows whole pages); nothing is written back, and the worker does not
-    // redo a layout of a newer algorithm.
-    let failed = || FileLayout { sha256: sha256.clone(), state: LayoutState::Failed, algorithm, pages: vec![] };
+    let failed = || FileLayout {
+        sha256: sha256.clone(),
+        state: LayoutState::Failed,
+        algorithm,
+        pages: vec![],
+        unreadable_pages: vec![],
+    };
     if state != "done" {
         return Ok(failed());
     }
-    let mut pages: Vec<PageLayout> = match serde_json::from_str(&pages) {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!("system layout of {sha256} not readable by this release: {e}");
-            return Ok(failed());
-        }
+    let Some((mut pages, mut unreadable)) = read_pages(&pages) else {
+        tracing::warn!("system layout of {sha256} not readable by this release");
+        return Ok(failed());
     };
     let corrections: Vec<(i64, String)> =
         sqlx::query_as("SELECT page, data FROM layout_corrections WHERE file_id = ?1 ORDER BY page")
@@ -111,17 +124,48 @@ async fn effective_layout(app: &App, sha256: &str) -> ApiResult<FileLayout> {
             .fetch_all(&app.db.read)
             .await?;
     for (page, data) in corrections {
-        if let Some(p) = usize::try_from(page).ok().and_then(|i| pages.get_mut(i)) {
-            *p = match serde_json::from_str::<PageCorrection>(&data) {
-                // A band kind of a newer release: applied (the reader then shows
-                // the page whole, `reading_items`); anything else unreadable or
-                // malformed: the page is shown whole, marked as corrected.
-                Ok(c) if matches!(c.validate(), Ok(()) | Err(ErrorCode::InUseOrUnknown)) => apply_correction(p, &c),
-                _ => PageLayout { full_page: true, corrected: true, ..p.clone() },
-            };
+        let Some(index) = u32::try_from(page).ok() else { continue };
+        let Some(p) = pages.get_mut(index as usize) else { continue };
+        if unreadable.contains(&index) {
+            // The detection is not readable: shown whole, the correction only marked.
+            p.corrected = true;
+            continue;
+        }
+        *p = match serde_json::from_str::<PageCorrection>(&data) {
+            Ok(c) if c.validate().is_ok() => apply_correction(p, &c),
+            _ => {
+                unreadable.push(index);
+                whole_page(p.width_mm, p.height_mm, true)
+            }
+        };
+    }
+    unreadable.sort_unstable();
+    Ok(FileLayout { sha256, state: LayoutState::Done, algorithm, pages, unreadable_pages: unreadable })
+}
+
+/// A page shown whole because its stored layout is not readable.
+fn whole_page(width_mm: f32, height_mm: f32, corrected: bool) -> PageLayout {
+    PageLayout { width_mm, height_mm, confidence: 0.0, full_page: true, regions: vec![], corrected }
+}
+
+/// The stored pages of a detection, each parsed on its own: a page this
+/// release cannot parse becomes a whole page (its size is read leniently) and
+/// its index is returned too. `None` if not even that works.
+fn read_pages(json: &str) -> Option<(Vec<PageLayout>, Vec<u32>)> {
+    let values: Vec<serde_json::Value> = serde_json::from_str(json).ok()?;
+    let (mut pages, mut unreadable) = (Vec::with_capacity(values.len()), Vec::new());
+    for (index, v) in values.iter().enumerate() {
+        match PageLayout::deserialize(v) {
+            Ok(p) => pages.push(p),
+            Err(e) => {
+                tracing::warn!("page {index} of a system layout not readable by this release: {e}");
+                let mm = |key: &str| v.get(key).and_then(serde_json::Value::as_f64).map(|x| x as f32);
+                pages.push(whole_page(mm("width_mm")?, mm("height_mm")?, false));
+                unreadable.push(u32::try_from(index).ok()?);
+            }
         }
     }
-    Ok(FileLayout { sha256, state: LayoutState::Done, algorithm, pages })
+    Some((pages, unreadable))
 }
 
 /// Id and page count of an analysed file, for corrections (librarians only).

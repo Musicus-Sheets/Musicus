@@ -5,7 +5,7 @@ Crate `crates/musicus-api`: deps serde + postcard only, no I/O, compiles for nat
 ## DTO conventions (`dto.rs`)
 
 - `Id = i64`. Timestamps i64 Unix seconds. Dates `Option<String>` `YYYY-MM-DD`.
-- `Role` serialises lowercase; `can_manage_library()` = librarian|admin; `is_admin()`. `Role::Unknown` (`#[serde(other)]`, last variant; no `Ord` any more) = a role of a newer release: no rights, cannot log in; `Role::parse` returns known roles only, `Role::from_stored` maps the rest to `Unknown` (data-model.md § Stored values).
+- `Role` serialises lowercase; ordering Member < Librarian < Admin; `can_manage_library()` = librarian|admin; `is_admin()`. No catch-all variant: `Role::parse` gives `None` and serde an error for any other text (e.g. a role of a newer release); each read site decides (a-stored-fallbacks, data-model.md § Stored values). `UserSummary.role` is `Option<Role>` (`None` = a role this release does not know).
 - Error body for every non-2xx (except 409 page conflict and 304/204): `ApiError {error, code, args, message}` (a-error-codes, R-I18N-004), e.g.
   `{"error":"bad_request","code":"password_too_short","args":{"min":8},"message":"the password needs at least 8 characters"}`.
   `error` = generic class of the status (`not_found`, `unauthorized`, `forbidden`, `bad_request`, `conflict`, `unprocessable`, `payload_too_large`, `unsupported_media_type`, `precondition_required`, `too_many_requests`, `internal`); `code` + `args` = `error::ErrorCode` (`#[serde(flatten)]`, adjacently tagged; unit codes have no `args`); `message` = `code.to_string()`, English, for API users/logs only — the web client renders its own text (`musicus-web/src/errors.rs`). Build with `ApiError::new(class, code)`.

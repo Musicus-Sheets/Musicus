@@ -44,7 +44,7 @@ impl VersionInfo {
 
 /// Global role of a user. Access to sheets is granted to groups, not roles;
 /// roles only decide who may manage what.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     /// Reads the parts granted to their groups and annotates them.
@@ -53,11 +53,6 @@ pub enum Role {
     Librarian,
     /// Manages users and groups, plus everything a librarian may do.
     Admin,
-    /// A role stored by a newer release (R-OPS-041). Fails closed: such an
-    /// account cannot log in with this release (its rights are not known,
-    /// they may be fewer than a member's), and it is never written back.
-    #[serde(other)]
-    Unknown,
 }
 
 impl Role {
@@ -74,16 +69,11 @@ impl Role {
             Role::Member => "member",
             Role::Librarian => "librarian",
             Role::Admin => "admin",
-            Role::Unknown => "unknown",
         }
     }
 
-    /// A role read from the database: unknown text ⇒ [`Role::Unknown`].
-    pub fn from_stored(s: &str) -> Self {
-        Self::parse(s).unwrap_or(Role::Unknown)
-    }
-
-    /// A known role (`Unknown` is never parsed from text).
+    /// `None` for any other text, e.g. a role stored by a newer release
+    /// (R-OPS-041): each read site decides what that means (a-stored-fallbacks).
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "member" => Some(Role::Member),
@@ -187,7 +177,10 @@ pub struct UserSummary {
     pub id: Id,
     pub username: String,
     pub display_name: String,
-    pub role: Role,
+    /// `None`: the stored role is not one of this release (written by a newer
+    /// one, R-OPS-041). Such an account cannot log in; the admin page shows it
+    /// and offers no role change (a-stored-fallbacks).
+    pub role: Option<Role>,
     pub disabled: bool,
     /// `false` until the user has accepted their invite.
     pub has_password: bool,
@@ -737,11 +730,11 @@ mod tests {
     }
 
     #[test]
-    fn unknown_roles_have_no_rights() {
-        assert_eq!(Role::from_stored("conductor"), Role::Unknown);
-        assert_eq!(Role::from_stored("admin"), Role::Admin);
-        assert_eq!(Role::parse("unknown"), None, "never parsed as a role to store");
-        assert_eq!(serde_json::from_str::<Role>("\"conductor\"").unwrap(), Role::Unknown);
-        assert!(!Role::Unknown.can_manage_library() && !Role::Unknown.is_admin());
+    fn unknown_roles_do_not_parse() {
+        assert_eq!(Role::parse("conductor"), None);
+        assert_eq!(Role::parse("unknown"), None);
+        assert!(serde_json::from_str::<Role>("\"conductor\"").is_err());
+        let user = r#"{"id":1,"username":"a","display_name":"A","role":null,"disabled":false,"has_password":true,"group_ids":[]}"#;
+        assert_eq!(serde_json::from_str::<UserSummary>(user).unwrap().role, None);
     }
 }

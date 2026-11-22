@@ -91,8 +91,6 @@ reader-systems-kind-system = System
 reader-systems-kind-header = Header (title)
 reader-systems-kind-footer = Footer
 reader-systems-kind-hidden = Hidden
-# A band kind saved by a newer version of Musicus; the page is shown whole in the reader.
-reader-systems-kind-unknown = Unknown (newer version)
 reader-systems-band-kind = Kind of band { $band }
 reader-systems-split-band = Split band { $band }
 reader-systems-split = Split
@@ -103,5 +101,5 @@ reader-systems-remove-cut-hint = Remove this cut: join the bands above and below
 reader-systems-save = Save page
 reader-systems-reset = Reset to automatic
 reader-systems-unsaved = Unsaved changes
-# Shown instead of saving while a band still has the kind "Unknown (newer version)".
-reader-systems-unknown-kinds = Choose a kind for every band marked "Unknown" to save this page.
+# Shown in the systems editor for a page whose saved layout or correction this version cannot read.
+reader-systems-newer-version = This page was saved by a newer version of Musicus. It is shown whole and cannot be edited with this version; a correction can only be reset.

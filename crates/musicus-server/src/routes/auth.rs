@@ -28,11 +28,13 @@ pub async fn current_user(app: &AppState, id: Id) -> ApiResult<CurrentUser> {
             .bind(id)
             .fetch_one(&app.db.read)
             .await?;
+    // A role of a newer release: no session for this release (R-OPS-041).
+    let role = Role::parse(&role).ok_or(AppError::Unauthorized)?;
     let reader = ReaderSettings {
         mode: ReaderMode::parse(&mode).unwrap_or_default(),
         staff_size: StaffSize::parse(&size).unwrap_or_default(),
     };
-    Ok(CurrentUser { id, username, display_name, role: Role::from_stored(&role), reader })
+    Ok(CurrentUser { id, username, display_name, role, reader })
 }
 
 /// Stores the user's reader mode and staff size (on the server, because the

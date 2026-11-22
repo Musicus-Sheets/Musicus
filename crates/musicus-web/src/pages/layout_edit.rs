@@ -29,7 +29,6 @@ fn kind_name(k: RegionKind) -> String {
         RegionKind::Header => t::reader_systems_kind_header(),
         RegionKind::Footer => t::reader_systems_kind_footer(),
         RegionKind::Hidden => t::reader_systems_kind_hidden(),
-        RegionKind::Unknown => t::reader_systems_kind_unknown(),
     }
 }
 
@@ -39,7 +38,6 @@ fn kind_value(k: RegionKind) -> &'static str {
         RegionKind::Header => "header",
         RegionKind::Footer => "footer",
         RegionKind::Hidden => "hidden",
-        RegionKind::Unknown => "unknown",
     }
 }
 
@@ -231,8 +229,9 @@ fn Editor(part: Part, sha256: String) -> Element {
     let (w, h) = size().unwrap_or((0.0, 0.0));
     let corrected = shown.as_ref().is_some_and(|p| p.corrected);
     let n_bounds = d.bounds.len();
-    // The server refuses to store a kind of a newer release (R-OPS-041).
-    let unknown_kinds = d.kinds.contains(&RegionKind::Unknown);
+    // Stored by a newer release (R-OPS-041): shown whole, only a reset is
+    // offered, nothing is written over it (a-stored-fallbacks).
+    let newer = l.unreadable_pages.contains(&(page() as u32));
 
     rsx! {
         {header}
@@ -248,134 +247,139 @@ fn Editor(part: Part, sha256: String) -> Element {
                 span { class: "tag genre", {t::reader_systems_corrected()} }
             }
             if let Some(p) = &shown {
-                if !p.corrected {
+                if !p.corrected && !newer {
                     span { class: "muted small", {t::reader_systems_confidence(crate::locale::format_number(p.confidence as f64, 2, 2))} }
                 }
             }
         }
-        label { class: "check",
-            input { r#type: "checkbox", checked: d.full_page,
-                onchange: move |e| { let on = e.checked(); edit(&|d: &mut PageCorrection| d.full_page = on); } }
-            {t::reader_systems_whole_page()}
+        if newer {
+            p { class: "muted small", {t::reader_systems_newer_version()} }
+        } else {
+            label { class: "check",
+                input { r#type: "checkbox", checked: d.full_page,
+                    onchange: move |e| { let on = e.checked(); edit(&|d: &mut PageCorrection| d.full_page = on); } }
+                {t::reader_systems_whole_page()}
+            }
         }
         div { class: "layout-page", style: "width: {w}px; height: {h}px",
             canvas { id: CANVAS }
-            div {
-                id: OVERLAY,
-                class: if d.full_page { "layout-overlay whole" } else { "layout-overlay" },
-                onpointermove: move |e: PointerEvent| {
-                    if let (Some(j), Some(y)) = (dragging(), overlay_y(e.client_coordinates().y)) {
-                        move_bound(j, y);
-                    }
-                },
-                onpointerup: move |_| dragging.set(None),
-                onpointercancel: move |_| dragging.set(None),
-                for (i, k) in d.kinds.iter().copied().enumerate() {
-                    div {
-                        key: "band-{i}",
-                        class: "band {kind_value(k)}",
-                        style: "top: {d.bounds[i] * 100.0}%; height: {(d.bounds[i + 1] - d.bounds[i]) * 100.0}%",
-                        div { class: "band-tools",
-                            select {
-                                "aria-label": t::reader_systems_band_kind(i + 1),
-                                onchange: move |e| {
-                                    let v = e.value();
-                                    if let Some(kind) = KINDS.iter().find(|x| kind_value(**x) == v) {
-                                        let kind = *kind;
-                                        edit(&|d: &mut PageCorrection| d.kinds[i] = kind);
-                                    }
-                                },
-                                for kind in KINDS {
-                                    option { value: kind_value(kind), selected: kind == k, {kind_name(kind)} }
-                                }
-                                // A kind of a newer release: shown until the librarian picks one.
-                                if k == RegionKind::Unknown {
-                                    option { value: kind_value(k), selected: true, disabled: true, {kind_name(k)} }
-                                }
-                            }
-                            button {
-                                "aria-label": t::reader_systems_split_band(i + 1),
-                                title: t::reader_systems_split_hint(),
-                                onclick: move |_| edit(&|d: &mut PageCorrection| {
-                                    let mid = (d.bounds[i] + d.bounds[i + 1]) / 2.0;
-                                    if d.bounds[i + 1] - d.bounds[i] >= 2.0 * MIN_BAND_HEIGHT {
-                                        d.bounds.insert(i + 1, mid);
-                                        let kind = d.kinds[i];
-                                        d.kinds.insert(i + 1, kind);
-                                    }
-                                }),
-                                {t::reader_systems_split()}
-                            }
+            if !newer {
+                div {
+                    id: OVERLAY,
+                    class: if d.full_page { "layout-overlay whole" } else { "layout-overlay" },
+                    onpointermove: move |e: PointerEvent| {
+                        if let (Some(j), Some(y)) = (dragging(), overlay_y(e.client_coordinates().y)) {
+                            move_bound(j, y);
                         }
-                        span { class: "band-label", "{kind_name(k)}" }
-                    }
-                }
-                for j in 0..n_bounds {
-                    div {
-                        key: "cut-{j}",
-                        class: if dragging() == Some(j) { "cut dragging" } else { "cut" },
-                        style: "top: {d.bounds[j] * 100.0}%",
+                    },
+                    onpointerup: move |_| dragging.set(None),
+                    onpointercancel: move |_| dragging.set(None),
+                    for (i, k) in d.kinds.iter().copied().enumerate() {
                         div {
-                            class: "grip",
-                            role: "separator",
-                            tabindex: "0",
-                            "aria-label": t::reader_systems_cut(j + 1),
-                            "aria-valuenow": "{(d.bounds[j] * 1000.0).round() / 10.0}",
-                            onpointerdown: move |e: PointerEvent| {
-                                e.prevent_default();
-                                if let Some(el) = web_sys::window()
-                                    .and_then(|w| w.document())
-                                    .and_then(|doc| doc.get_element_by_id(OVERLAY))
-                                {
-                                    let _ = el.set_pointer_capture(e.pointer_id());
+                            key: "band-{i}",
+                            class: "band {kind_value(k)}",
+                            style: "top: {d.bounds[i] * 100.0}%; height: {(d.bounds[i + 1] - d.bounds[i]) * 100.0}%",
+                            div { class: "band-tools",
+                                select {
+                                    "aria-label": t::reader_systems_band_kind(i + 1),
+                                    onchange: move |e| {
+                                        let v = e.value();
+                                        if let Some(kind) = KINDS.iter().find(|x| kind_value(**x) == v) {
+                                            let kind = *kind;
+                                            edit(&|d: &mut PageCorrection| d.kinds[i] = kind);
+                                        }
+                                    },
+                                    for kind in KINDS {
+                                        option { value: kind_value(kind), selected: kind == k, {kind_name(kind)} }
+                                    }
                                 }
-                                dragging.set(Some(j));
-                            },
-                            onkeydown: move |e: KeyboardEvent| {
-                                let step = match e.key() {
-                                    Key::ArrowUp => -KEY_STEP,
-                                    Key::ArrowDown => KEY_STEP,
-                                    _ => return,
-                                };
-                                e.prevent_default();
-                                let y = draft.peek().as_ref().map(|d| d.bounds[j]).unwrap_or(0.0) + step;
-                                move_bound(j, y);
-                            },
+                                button {
+                                    "aria-label": t::reader_systems_split_band(i + 1),
+                                    title: t::reader_systems_split_hint(),
+                                    onclick: move |_| edit(&|d: &mut PageCorrection| {
+                                        let mid = (d.bounds[i] + d.bounds[i + 1]) / 2.0;
+                                        if d.bounds[i + 1] - d.bounds[i] >= 2.0 * MIN_BAND_HEIGHT {
+                                            d.bounds.insert(i + 1, mid);
+                                            let kind = d.kinds[i];
+                                            d.kinds.insert(i + 1, kind);
+                                        }
+                                    }),
+                                    {t::reader_systems_split()}
+                                }
+                            }
+                            span { class: "band-label", "{kind_name(k)}" }
                         }
-                        if j > 0 && j + 1 < n_bounds {
-                            button {
-                                class: "cut-remove",
-                                "aria-label": t::reader_systems_remove_cut(j + 1),
-                                title: t::reader_systems_remove_cut_hint(),
-                                onclick: move |_| edit(&|d: &mut PageCorrection| {
-                                    // The joined band keeps "System" if either part was one.
-                                    let kind = if d.kinds[j - 1] == RegionKind::System || d.kinds[j] == RegionKind::System {
-                                        RegionKind::System
-                                    } else {
-                                        d.kinds[j - 1]
+                    }
+                    for j in 0..n_bounds {
+                        div {
+                            key: "cut-{j}",
+                            class: if dragging() == Some(j) { "cut dragging" } else { "cut" },
+                            style: "top: {d.bounds[j] * 100.0}%",
+                            div {
+                                class: "grip",
+                                role: "separator",
+                                tabindex: "0",
+                                "aria-label": t::reader_systems_cut(j + 1),
+                                "aria-valuenow": "{(d.bounds[j] * 1000.0).round() / 10.0}",
+                                onpointerdown: move |e: PointerEvent| {
+                                    e.prevent_default();
+                                    if let Some(el) = web_sys::window()
+                                        .and_then(|w| w.document())
+                                        .and_then(|doc| doc.get_element_by_id(OVERLAY))
+                                    {
+                                        let _ = el.set_pointer_capture(e.pointer_id());
+                                    }
+                                    dragging.set(Some(j));
+                                },
+                                onkeydown: move |e: KeyboardEvent| {
+                                    let step = match e.key() {
+                                        Key::ArrowUp => -KEY_STEP,
+                                        Key::ArrowDown => KEY_STEP,
+                                        _ => return,
                                     };
-                                    d.bounds.remove(j);
-                                    d.kinds.remove(j);
-                                    d.kinds[j - 1] = kind;
-                                }),
-                                "×"
+                                    e.prevent_default();
+                                    let y = draft.peek().as_ref().map(|d| d.bounds[j]).unwrap_or(0.0) + step;
+                                    move_bound(j, y);
+                                },
+                            }
+                            if j > 0 && j + 1 < n_bounds {
+                                button {
+                                    class: "cut-remove",
+                                    "aria-label": t::reader_systems_remove_cut(j + 1),
+                                    title: t::reader_systems_remove_cut_hint(),
+                                    onclick: move |_| edit(&|d: &mut PageCorrection| {
+                                        // The joined band keeps "System" if either part was one.
+                                        let kind = if d.kinds[j - 1] == RegionKind::System || d.kinds[j] == RegionKind::System {
+                                            RegionKind::System
+                                        } else {
+                                            d.kinds[j - 1]
+                                        };
+                                        d.bounds.remove(j);
+                                        d.kinds.remove(j);
+                                        d.kinds[j - 1] = kind;
+                                    }),
+                                    "×"
+                                }
                             }
                         }
                     }
                 }
             }
         }
-        div { class: "actions layout-actions",
-            button { class: "primary", disabled: !dirty() || unknown_kinds, onclick: save, {t::reader_systems_save()} }
-            if corrected {
-                button { onclick: reset, {t::reader_systems_reset()} }
-            }
-            match status() {
-                Some(Ok(s)) => rsx! { span { class: "ok small", "{s}" } },
-                Some(Err(e)) => rsx! { span { class: "error-text small", "{e}" } },
-                None if unknown_kinds => rsx! { span { class: "muted small", {t::reader_systems_unknown_kinds()} } },
-                None if dirty() => rsx! { span { class: "muted small", {t::reader_systems_unsaved()} } },
-                None => rsx! {},
+        if !newer || corrected || status().is_some() {
+            div { class: "actions layout-actions",
+                if !newer {
+                    button { class: "primary", disabled: !dirty(), onclick: save, {t::reader_systems_save()} }
+                }
+                if corrected {
+                    button { onclick: reset, {t::reader_systems_reset()} }
+                }
+                match status() {
+                    Some(Ok(s)) => rsx! { span { class: "ok small", "{s}" } },
+                    Some(Err(e)) => rsx! { span { class: "error-text small", "{e}" } },
+                    None if dirty() => rsx! { span { class: "muted small", {t::reader_systems_unsaved()} } },
+                    None => rsx! {},
+                }
             }
         }
     }

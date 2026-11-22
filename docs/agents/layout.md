@@ -96,8 +96,8 @@ pages. Known misses: footnotes below the last system are attached to it (harmles
 
 ## Reading sequence (`musicus_api::layout::reading_items`)
 
-Per page in order: `full_page`, no system or a band of an unknown kind (`RegionKind::Unknown`, written by a newer
-release, R-OPS-041) ⇒ one `Page` item (whole page). Else per region: System ⇒ item;
+Per page in order: `full_page` or no system ⇒ one `Page` item (whole page). (A stored page of a newer release, e.g.
+with a band kind this release does not know, arrives as a whole page already: `files::read_pages`, R-OPS-041.) Else per region: System ⇒ item;
 Header kept on the first page, Header/Footer kept if `ink_y1 − ink_y0 > TALL_TEXT` (0.06) (title block, verses) ⇒
 `Text`; Hidden and small header/footer skipped. Crop y = ink ± (`SYSTEM_PADDING_SPACES` 1 × staff_space for systems,
 0.005 for text), clamped to the cut lines; x = region x. `staff_mm` = 4 · staff_space · page height mm.
@@ -158,9 +158,10 @@ other screen, pinch) changes the sizes, hence new keys and a re-render.
 
 `PageCorrection {full_page, bounds, kinds}`: band i = `bounds[i]..bounds[i+1]` (0..1 of the page height) of kind
 `kinds[i]`; nothing outside the first/last bound is shown. `validate`: ≤ `MAX_CORRECTED_BANDS` 60 bands; full_page
-may have no bands; else `bounds.len() == kinds.len() + 1`, values in 0..1, each band ≥ `MIN_BAND_HEIGHT` 0.005;
-last: no `RegionKind::Unknown` (`in_use_or_unknown`; a stored correction failing only this check is still applied,
-any other unreadable/malformed stored correction shows its page whole with `corrected`).
+may have no bands; else `bounds.len() == kinds.len() + 1`, values in 0..1, each band ≥ `MIN_BAND_HEIGHT` 0.005.
+A band kind this release does not know is a parse error (no catch-all variant): a request ⇒ 422 (JSON rejection), a
+stored correction that does not parse or validate ⇒ its page whole with `corrected`, listed in
+`FileLayout.unreadable_pages` (a stored page of the detection likewise, without `corrected`; a-stored-fallbacks).
 Stored per (file, page) in `layout_corrections`, applied when serving (`files::effective_layout` →
 `layout::apply_correction`): per band, x range / ink rows = union of the detected regions it overlaps (else whole
 width / the band); an edge that is not a detected cut line (|Δ| ≥ `CUT_EPSILON` 1e-4, i.e. the librarian moved or
@@ -169,8 +170,8 @@ staff_space = smallest of the overlapped systems (else the page's smallest); `co
 `full_page` = correction's flag or no System band with a staff size. The worker never touches corrections, so they
 survive re-analysis. Editor: `pages/layout_edit.rs` (see `web-client.md`): draft from the effective page (regions →
 bounds/kinds; no regions ⇒ one System band 0..1), Split inserts a cut in the middle, × removes a cut (the joined
-band is System if either was), a band of an unknown kind shows as "Unknown (newer version)" (disabled option) and
-disables Save until every such band has a kind, cut drag clamps between neighbours ± `MIN_BAND_HEIGHT`; Save/Reset call `layouts::forget`
+band is System if either was), a page in `unreadable_pages` is shown whole with "saved by a newer version" and only
+Reset (no bands, no Save), cut drag clamps between neighbours ± `MIN_BAND_HEIGHT`; Save/Reset call `layouts::forget`
 so this tab's readers refetch (other devices load the layout when they open the part again).
 
 ## Regression numbers (local example set, not committed)

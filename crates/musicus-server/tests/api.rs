@@ -1672,7 +1672,7 @@ async fn as_newer_release(s: &Server, statements: &[&str]) {
 
 #[tokio::test]
 async fn an_unknown_role_cannot_log_in_and_is_never_written_back() {
-    use musicus_api::{Role, UserSummary};
+    use musicus_api::UserSummary;
     let s = Server::start().await;
     let lib = library(&s).await;
     assert_eq!(s.get("/api/auth/me", &lib.anna).await.status, StatusCode::OK);
@@ -1698,11 +1698,11 @@ async fn an_unknown_role_cannot_log_in_and_is_never_written_back() {
         s.ok(Method::POST, &format!("/api/users/{}/invite", lib.anna_id), &lib.admin, json!({})).await;
     assert_eq!(s.get(&format!("/api/auth/invites/{}", invite.token), "").await.status, StatusCode::NOT_FOUND);
 
-    // Admins see the account. (Other changes to it would keep the stored role,
-    // `COALESCE(?3, role)`; not testable here: the CHECK of this release's
-    // table refuses the row, a newer release's table would allow it.)
+    // Admins see the account, without a role. (Other changes to it would keep
+    // the stored role, `COALESCE(?3, role)`; not testable here: the CHECK of
+    // this release's table refuses the row, a newer release's table would allow it.)
     let users: Vec<UserSummary> = s.get("/api/users", &lib.admin).await.json();
-    assert_eq!(users.iter().find(|u| u.id == lib.anna_id).unwrap().role, Role::Unknown);
+    assert_eq!(users.iter().find(|u| u.id == lib.anna_id).unwrap().role, None);
     let uri = format!("/api/users/{}", lib.anna_id);
     let stored: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?1")
         .bind(lib.anna_id)
@@ -1710,26 +1710,23 @@ async fn an_unknown_role_cannot_log_in_and_is_never_written_back() {
         .await
         .unwrap();
     assert_eq!(stored, "conductor");
-    // "unknown" (or any other unknown name) is never stored.
+    // A role name this release does not know is a parse error of the request
+    // body (the enum has no catch-all variant), so it is never stored.
     for role in ["unknown", "conductor"] {
-        assert_eq!(
-            s.json(Method::PATCH, &uri, &lib.admin, json!({ "role": role })).await.error(),
-            (StatusCode::BAD_REQUEST, ErrorCode::InUseOrUnknown)
-        );
+        let patch = s.json(Method::PATCH, &uri, &lib.admin, json!({ "role": role })).await;
+        assert_eq!(patch.status, StatusCode::UNPROCESSABLE_ENTITY);
         let new = json!({"username": format!("x{role}"), "display_name": "X", "role": role});
-        assert_eq!(
-            s.json(Method::POST, "/api/users", &lib.admin, new).await.error(),
-            (StatusCode::BAD_REQUEST, ErrorCode::InUseOrUnknown)
-        );
+        assert_eq!(s.json(Method::POST, "/api/users", &lib.admin, new).await.status, StatusCode::UNPROCESSABLE_ENTITY);
     }
-    // An admin picking a known role opens the account again.
+    // A known role set through the API opens the account again (the admin page
+    // offers no role change for such an account).
     s.ok::<UserSummary>(Method::PATCH, &uri, &lib.admin, json!({"role": "member"})).await;
     s.login("anna", "member-password-1").await;
 }
 
 #[tokio::test]
 async fn layouts_of_a_newer_release_show_whole_pages_and_are_not_overwritten() {
-    use musicus_api::layout::{FileLayout, LayoutState, PageCorrection, RegionKind, reading_items};
+    use musicus_api::layout::{FileLayout, ItemKind, LayoutState, reading_items};
     use musicus_server::layout::worker;
     let s = Server::start().await;
     let lib = library(&s).await;
@@ -1740,11 +1737,12 @@ async fn layouts_of_a_newer_release_show_whole_pages_and_are_not_overwritten() {
     let auto: FileLayout = s.get(&layout, &lib.anna).await.json();
     assert_eq!(auto.state, LayoutState::Done);
 
-    // A band kind of a newer release in the detection and in a correction.
+    // A band kind of a newer release in the detection of page 0 and in a
+    // correction of page 1.
     as_newer_release(
         &s,
         &[
-            "UPDATE file_layouts SET pages = replace(pages, '\"kind\":\"header\"', '\"kind\":\"ossia\"')",
+            "UPDATE file_layouts SET pages = json_set(pages, '$[0].regions[0].kind', 'ossia')",
             "INSERT INTO layout_corrections (file_id, page, data, updated_at)
              SELECT file_id, 1, '{\"full_page\":false,\"bounds\":[0.1,0.5,0.9],\"kinds\":[\"system\",\"ossia\"],\"later\":1}', 0
              FROM file_layouts",
@@ -1753,28 +1751,18 @@ async fn layouts_of_a_newer_release_show_whole_pages_and_are_not_overwritten() {
     .await;
     let got: FileLayout = s.get(&layout, &lib.anna).await.json();
     assert_eq!(got.state, LayoutState::Done);
-    assert!(got.pages.iter().all(|p| p.regions.iter().any(|r| r.kind == RegionKind::Unknown)));
-    assert!(got.pages[1].corrected);
+    assert_eq!(got.unreadable_pages, vec![0, 1]);
+    assert!(got.pages.iter().all(|p| p.full_page && p.regions.is_empty()));
+    assert_eq!((got.pages[0].corrected, got.pages[1].corrected), (false, true));
+    assert_eq!((got.pages[0].width_mm, got.pages[0].height_mm), (auto.pages[0].width_mm, auto.pages[0].height_mm));
     // The reader shows both pages whole.
     let items = reading_items(&got.pages);
     assert_eq!(items.len(), 2);
-    assert!(items.iter().all(|i| i.kind == musicus_api::layout::ItemKind::Page));
-    // Sending the unknown kind back is refused; the stored correction stays.
-    let back = PageCorrection {
-        full_page: false,
-        bounds: vec![0.1, 0.5, 0.9],
-        kinds: vec![RegionKind::System, RegionKind::Unknown],
-    };
+    assert!(items.iter().all(|i| i.kind == ItemKind::Page));
+    // Sending the unknown kind is a parse error; the stored correction stays.
     let uri = format!("/api/files/{sha}/layout/pages/1");
-    assert_eq!(
-        s.json(Method::PUT, &uri, &lib.admin, &back).await.error(),
-        (StatusCode::BAD_REQUEST, ErrorCode::InUseOrUnknown)
-    );
     let raw = json!({"full_page": false, "bounds": [0.1, 0.5, 0.9], "kinds": ["system", "ossia"]});
-    assert_eq!(
-        s.json(Method::PUT, &uri, &lib.admin, raw).await.error(),
-        (StatusCode::BAD_REQUEST, ErrorCode::InUseOrUnknown)
-    );
+    assert_eq!(s.json(Method::PUT, &uri, &lib.admin, raw).await.status, StatusCode::UNPROCESSABLE_ENTITY);
     let kept: String = sqlx::query_scalar("SELECT data FROM layout_corrections WHERE page = 1")
         .fetch_one(&s.state.db.read)
         .await
@@ -1785,6 +1773,11 @@ async fn layouts_of_a_newer_release_show_whole_pages_and_are_not_overwritten() {
     as_newer_release(&s, &["UPDATE layout_corrections SET data = '{\"bands\":[]}' WHERE page = 1"]).await;
     let got: FileLayout = s.get(&layout, &lib.anna).await.json();
     assert!(got.pages[1].full_page && got.pages[1].corrected);
+    assert_eq!(got.unreadable_pages, vec![0, 1]);
+    // Reset is the one change offered for it: page 1 shows its detection again.
+    let reset: FileLayout = s.send(Method::DELETE, &uri, Auth::Bearer(&lib.admin), &[], Body::empty()).await.json();
+    assert_eq!(reset.unreadable_pages, vec![0]);
+    assert_eq!(reset.pages[1], auto.pages[1]);
 
     // An unknown state, or pages it cannot read: a failed detection (whole pages), no error.
     as_newer_release(&s, &["UPDATE file_layouts SET state = 'partial'"]).await;

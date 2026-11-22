@@ -28,11 +28,6 @@ pub enum RegionKind {
     Footer,
     /// Never shown in the system view (set by a librarian).
     Hidden,
-    /// A kind stored by a newer release (R-OPS-041). A page with such a band
-    /// is shown whole ([`reading_items`]); a correction containing it is
-    /// rejected ([`PageCorrection::validate`]), so it is never written back.
-    #[serde(other)]
-    Unknown,
 }
 
 /// One band of a page. Bands of a page do not overlap: `y1` of one band is
@@ -94,6 +89,12 @@ pub struct FileLayout {
     /// Version of the detection algorithm that produced the pages.
     pub algorithm: i64,
     pub pages: Vec<PageLayout>,
+    /// Pages whose stored detection or correction this release cannot read
+    /// (written by a newer release, e.g. a band kind it does not know;
+    /// R-OPS-041). The server serves them as whole pages; the editor allows
+    /// only resetting their correction (a-stored-fallbacks).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unreadable_pages: Vec<u32>,
 }
 
 /// A librarian's correction of one page (`PUT /api/files/{sha256}/layout/pages/{page}`).
@@ -127,11 +128,6 @@ impl PageCorrection {
         }
         if self.bounds.windows(2).any(|w| w[1] - w[0] < MIN_BAND_HEIGHT) {
             return Err(ErrorCode::CorrectionBoundsOrder);
-        }
-        // Last: a stored correction of a newer release passes every check
-        // above, so the server can still apply it (`InUseOrUnknown` only).
-        if self.kinds.contains(&RegionKind::Unknown) {
-            return Err(ErrorCode::InUseOrUnknown);
         }
         Ok(())
     }
@@ -262,16 +258,14 @@ pub struct Item {
 }
 
 /// The reading sequence of a file: every page in order; per page either its
-/// shown regions or the whole page. A page with a band of an unknown kind
-/// (written by a newer release) is shown whole: nothing of it is left out.
+/// shown regions or the whole page.
 pub fn reading_items(pages: &[PageLayout]) -> Vec<Item> {
     let mut out = Vec::new();
     for (index, p) in pages.iter().enumerate() {
         let (w, h) = (p.width_mm as f64, p.height_mm as f64);
         let page = index as u32;
         let has_systems = p.regions.iter().any(|r| r.kind == RegionKind::System);
-        let has_unknown = p.regions.iter().any(|r| r.kind == RegionKind::Unknown);
-        if p.full_page || !has_systems || has_unknown {
+        if p.full_page || !has_systems {
             out.push(Item {
                 page,
                 kind: ItemKind::Page,
@@ -676,22 +670,27 @@ mod tests {
                 .validate()
                 .is_err()
         );
-        assert!(PageCorrection { bounds: vec![0.1], ..ok.clone() }.validate().is_err());
-        let unknown = PageCorrection { kinds: vec![RegionKind::System, RegionKind::Unknown], ..ok };
-        assert_eq!(unknown.validate(), Err(ErrorCode::InUseOrUnknown), "never stored back");
+        assert!(PageCorrection { bounds: vec![0.1], ..ok }.validate().is_err());
     }
 
     #[test]
-    fn unknown_region_kinds_show_the_page_whole() {
-        let json = r#"[{"width_mm":210,"height_mm":297,"confidence":1,"full_page":false,"regions":[
-            {"kind":"system","y0":0.1,"y1":0.5,"ink_y0":0.1,"ink_y1":0.5,"x0":0.1,"x1":0.9,"staves":1,"staff_space":0.006},
-            {"kind":"ossia","y0":0.5,"y1":0.6,"ink_y0":0.5,"ink_y1":0.6,"x0":0.1,"x1":0.9,"staves":0,"staff_space":0,
-             "later_field":true}]}]"#;
-        let pages: Vec<PageLayout> = serde_json::from_str(json).unwrap();
-        assert_eq!(pages[0].regions[1].kind, RegionKind::Unknown);
-        let items = reading_items(&pages);
-        assert_eq!(items.len(), 1);
-        assert_eq!((items[0].kind, items[0].y0, items[0].y1), (ItemKind::Page, 0.0, 1.0));
+    fn unknown_region_kinds_do_not_parse() {
+        // A band kind of a newer release is a parse error (the server then
+        // serves the page whole, `effective_layout`); unknown fields are not.
+        let page = |kind: &str| {
+            format!(
+                r#"{{"width_mm":210,"height_mm":297,"confidence":1,"full_page":false,"later_field":1,"regions":[
+                {{"kind":"{kind}","y0":0.1,"y1":0.5,"ink_y0":0.1,"ink_y1":0.5,"x0":0.1,"x1":0.9,"staves":1,"staff_space":0.006}}]}}"#
+            )
+        };
+        assert!(serde_json::from_str::<PageLayout>(&page("system")).is_ok());
+        assert!(serde_json::from_str::<PageLayout>(&page("ossia")).is_err());
+        assert!(
+            serde_json::from_str::<PageCorrection>(r#"{"full_page":false,"bounds":[0,1],"kinds":["ossia"]}"#).is_err()
+        );
+        let old: FileLayout =
+            serde_json::from_str(r#"{"sha256":"x","state":"done","algorithm":1,"pages":[]}"#).unwrap();
+        assert!(old.unreadable_pages.is_empty());
     }
 
     #[test]
