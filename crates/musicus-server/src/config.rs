@@ -26,14 +26,31 @@ pub enum Command {
         #[arg(long, env = "MUSICUS_PUBLIC_URL", default_value = "http://localhost:8080")]
         public_url: String,
     },
-    /// Write a consistent copy of the database (safe while the server runs).
-    /// Back up the `blobs` directory separately, after the database.
+    /// Write a consistent copy of the database as it is (safe while the
+    /// server runs; never updates the database, works with data of any
+    /// release). Back up the `blobs` directory separately, after the database.
     Backup {
         #[command(flatten)]
         data: DataArgs,
         /// Target file; must not exist yet.
         #[arg(long)]
         to: PathBuf,
+    },
+    /// Replace the database with a backup or snapshot (the server must be
+    /// stopped). The replaced database is kept in `snapshots/`; `blobs` is
+    /// not changed. The next start updates the restored database as usual.
+    Restore {
+        #[command(flatten)]
+        data: DataArgs,
+        /// A file written by `backup`, or a snapshot from `snapshots/`.
+        #[arg(long)]
+        from: PathBuf,
+    },
+    /// After a failed database update: let the same program try the update
+    /// again at its next start (removes `update-failed.json`).
+    RetryUpdate {
+        #[command(flatten)]
+        data: DataArgs,
     },
     /// Exit 0 if the server on this machine answers `/api/health` (for
     /// container health checks; plain HTTP only).

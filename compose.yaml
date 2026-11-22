@@ -10,6 +10,10 @@
 #
 # Backup while running (database first, then the immutable files):
 #   docker compose exec musicus musicus-server backup --to /data/backup.sqlite
+# Restore (server stopped; the replaced database is kept in /data/snapshots):
+#   docker compose stop musicus
+#   docker compose run --rm musicus restore --from /data/backup.sqlite
+#   docker compose up -d
 
 name: musicus
 

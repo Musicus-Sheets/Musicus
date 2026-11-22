@@ -1,6 +1,7 @@
 use clap::Parser;
 use musicus_server::{
-    anyhow_like::Result,
+    anyhow_like::{Result, plain},
+    backup::{self, DataLock},
     bootstrap_admin,
     config::{Cli, Command, ServeArgs},
     open_state, routes,
@@ -19,6 +20,7 @@ async fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Serve(args) => serve(args).await,
         Command::CreateAdmin { data, username, display_name, public_url } => {
+            let _lock = DataLock::shared(&data.data_dir).map_err(plain)?;
             let app = open_state(&data.data_dir, 0, Settings::default()).await?;
             let display_name = display_name.unwrap_or_else(|| username.clone());
             let id = routes::users::insert_user(&app, &username, &display_name, musicus_api::Role::Admin).await?;
@@ -28,16 +30,53 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Command::Backup { data, to } => {
-            if to.exists() {
-                return Err(format!("{} already exists", to.display()).into());
+            let done = backup::backup(&data.data_dir, &to).await.map_err(plain)?;
+            match done.version {
+                Some(v) => println!("Database (last used by Musicus {v}) written to {}.", to.display()),
+                None => println!("Database written to {}.", to.display()),
             }
-            let app = open_state(&data.data_dir, 0, Settings::default()).await?;
-            app.db.backup_to(&to).await?;
-            println!("Database written to {}.", to.display());
             println!(
                 "Now back up {} (immutable files; copy after the database).",
                 data.data_dir.join("blobs").display()
             );
+            println!("Keep backups as safe as the server: they contain all sheets, markings and password hashes.");
+            Ok(())
+        }
+        Command::Restore { data, from } => {
+            let done = backup::restore(&data.data_dir, &from, musicus_server::db::now()).await.map_err(plain)?;
+            let by = done.version.map(|v| format!(" (last used by Musicus {v})")).unwrap_or_default();
+            println!("Database restored from {}{by}.", from.display());
+            if let Some(old) = &done.replaced {
+                println!("The replaced database is kept as {}.", old.display());
+            }
+            println!("Nothing in {} was changed.", data.data_dir.join("blobs").display());
+            if done.missing_files > 0 {
+                println!(
+                    "Warning: {} sheet files of the restored database are missing in blobs/; copy the blobs \
+                     folder of the same backup back (files that exist are never overwritten).",
+                    done.missing_files
+                );
+            }
+            println!(
+                "The next start of Musicus brings the database to its own version. A release older than the one \
+                 that last used it starts only within the downgrade window; otherwise it stops with a message \
+                 naming the release to start."
+            );
+            if let Some(note) = &done.guard_note {
+                println!(
+                    "Note: {} is still there, so the release whose update failed will not try again; \
+                     run `musicus-server retry-update` when it should.",
+                    note.display()
+                );
+            }
+            Ok(())
+        }
+        Command::RetryUpdate { data } => {
+            if backup::retry_update(&data.data_dir).map_err(plain)? {
+                println!("The next start will try the failed database update again.");
+            } else {
+                println!("No failed database update was noted in {}.", data.data_dir.display());
+            }
             Ok(())
         }
         Command::Healthcheck { listen } => healthcheck(listen),
@@ -69,6 +108,8 @@ async fn serve(args: ServeArgs) -> Result<()> {
         trust_proxy: args.trust_proxy,
         ..Settings::default()
     };
+    // Held while the server runs: `restore` refuses meanwhile (R-OPS-022).
+    let _lock = DataLock::shared(&args.data.data_dir).map_err(plain)?;
     let state = open_state(&args.data.data_dir, args.ram_cache_mb * 1024 * 1024, settings).await?;
     if let Some(token) = bootstrap_admin(&state).await? {
         tracing::warn!("No users yet. Created 'admin'; set its password at:");

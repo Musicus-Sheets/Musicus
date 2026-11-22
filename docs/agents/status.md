@@ -13,7 +13,7 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | R-ACL-005, R-ACL-006 | grants per voice / per programme / expiry | extend `part_visible!()` (d-access); new tables + migration; per voice: join `part_voices` (indexed on `voice`, a-part-voices) |
 | R-LIB-007 | extended score metadata (the archive number is done: R-LIB-015) | migration + `ScoreInput`/`Score` + `pages/forms.rs::ScoreFields` + FTS columns if searchable (FTS5 needs drop + recreate + rebuild, see 0006) |
 | R-FILE-008 | MusicXML | new processor in `processors.rs`; `sniff_mime`; annotations need musical anchors (not page coords) — design first |
-| R-FILE-009 | GC of unreferenced blobs | must respect backup consistency (grace period), conflicts with R-FILE-004 resolved by "unreferenced only" |
+| R-FILE-009 | GC of unreferenced blobs | must respect backup consistency (grace period), conflicts with R-FILE-004 resolved by "unreferenced only"; every database in `<data>/snapshots/` (snapshots, `failed-*`, `replaced-*`) counts as referencing its files (a-snapshots) |
 | R-READ-007, R-READ-008 | half-page turns, conductor push | half-page turns kept as a page-view option (the system view covers the need on small tablets, see R-READ-007 notes); conductor push needs server push (SSE/WebSocket) — new component, ask user |
 | R-READ-017 | split wide systems at a barline | needs barline detection; today such music is shown at full width (`below_min`) |
 | R-ANN-017, R-ANN-018 | shared sets, encryption at rest | shared sets conflict with F-ANN-004 (explicit, read-only) |
@@ -24,12 +24,11 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | R-FILE-010 | bilevel compression of scans | |
 | R-SEC-009, R-SEC-010 | watermark, download audit log | watermark must not create blobs (conflict with R-FILE-004) |
 | R-OPS-009 | continuous replication (Litestream) | |
-| F-OPS-005, R-OPS-010, R-OPS-012, R-OPS-018…022, R-OPS-025, R-OPS-040, R-OPS-041 | updates and downgrades (d-update-model, a-preview-migrations, a-patch-no-db-changes, a-db-check) | plan and roadmap in `docs/technical/chapters/14-updates.typ`; done: own update runner (a-update-runner; R-OPS-011, 013–017 mechanism, 023, 024), handling of unknown stored values where they are read (a-stored-fallbacks), schema snapshot + CI database check + `db-change` notice (a-db-check; R-OPS-038, R-OPS-039). Still for 1.0.0: snapshot + automatic restore, `backup` without updating, `restore`, release check, release pipeline (R-OPS-049, PR G); see § Updates below |
+| F-OPS-005, R-OPS-010, R-OPS-012, R-OPS-018, R-OPS-025, R-OPS-040, R-OPS-041 | updates and downgrades (d-update-model, a-preview-migrations, a-patch-no-db-changes, a-db-check) | plan and roadmap in `docs/technical/chapters/14-updates.typ`; done: own update runner (a-update-runner; R-OPS-011, 013–017 mechanism, 023, 024), handling of unknown stored values where they are read (a-stored-fallbacks), schema snapshot + CI database check + `db-change` notice (a-db-check; R-OPS-038, R-OPS-039), snapshot + automatic restore + restart guard, `backup` without updating, `restore` (R-OPS-019…022, a-snapshots). Still for 1.0.0: release check, release pipeline (R-OPS-049, PR G); see § Updates below |
 | F-OPS-008, R-OPS-043…048 | open clients during shutdown, start and update (a-client-outage) | listener before updates with 503 `server_starting`, shutdown drain with 503 `server_shutting_down` (new `ErrorCode`s), banners, polling, unsaved markings kept in memory and re-sent, `beforeunload` warning, reload at a safe moment after a version change |
 | F-OPS-006, R-OPS-026…032, R-OPS-042 | platforms (a-platforms) | multi-arch images + version tags (phase 0); Windows blocker and other findings in § Updates below; program archives + `SHA256SUMS` (unsigned; guide text for SmartScreen/Gatekeeper), embedded web client, OS data folder, platform-dependent CI (tests, build, smoke) on all systems, the rest Linux-only (phase 1) |
 | F-OPS-007, R-OPS-036 | version visible (a-version-public) | done: `/api/version`, About view, title pages from the build's version (R-OPS-033…035); missing: the title-page check in stage 1 of the release pipeline (R-OPS-035, PR G); docs tags `vX.Y.Z` in requirements, technical docs and user guide by hand after each release (R-OPS-036, RELEASING.md § 4) |
 | R-OPS-049 | release pipeline (a-release-pipeline) | PR G: dry run on the `release/<version>` pull request, real run on its merge; stage 1 builds and checks everything into expiring artifacts, stage 2 (only if all green) pushes images → tag → GitHub release with archives + `SHA256SUMS` → guide site, each step idempotent; `user-guide-pages.yml` becomes the last step (manual test build stays) |
-| R-OPS-037 | backups/exports unencrypted, with guidance (a-unencrypted-export) | user guide backup section must say that backups need the same care as the data directory |
 | F-TECH-002, R-TECH-004…007 | prepared replaceability | storage modules per data area (no SQL in `routes/`), file store without `path()`, PDF engine module, conformance suites; no second backend |
 
 | F-LIB-004 phase 2 | mass import extensions | pattern per subfolder (archives mixing structures; today: several batches), ZIP upload, server-side paging of the review for very large batches, CSV inventory and OCR sources (R-LIB-022) |
@@ -100,9 +99,16 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
   runs only at a start; unparsable stored versions block removals; the program version stays 0.1.0 until the release sets it; nothing checks yet that a release build's line is in
   `releases.txt` (release check, a-db-check). Verified only on temporary databases with test programs
   (`tests/updates.rs`); the upgrade/downgrade matrix with real release binaries comes with the second release.
-- `backup` applies pending updates before copying (`main.rs` → `open_state` → `Db::open`), contrary to R-OPS-021;
-  `Db::open` has the slot for the snapshot between `inspect` and `apply`.
-- No automatic snapshot, no `restore` command (manual copy in the user guide).
+- Snapshot before updates, automatic restore, restart guard, `backup` without the runner, `restore` and
+  `retry-update` are implemented (a-snapshots, a-restart-guard, a-data-lock; `tests/snapshots.rs`; R-OPS-019…022).
+  Open: the restore after a failure is tested only with failing test programs and one manual run on Linux, not on
+  Windows (renames of files that were open; the pools are closed first); `failed-*` and `replaced-*` copies are
+  never deleted by the program (the admin deletes them); `backup` of a stopped server's WAL database may leave empty
+  `-wal`/`-shm` files (read-only SQLite connection); `restore` only detects servers of this release or newer (the
+  lock file is new); in development builds of one version a program that knows fewer previews removes the guard
+  note of a failing one (same version ⇒ "not older", a-restart-guard); the server does not close its pools on
+  shutdown, so `-wal`/`-shm` stay after a stop (`restore` moves the `-wal` with the replaced file). No blob clean-up
+  exists; when it is built (R-FILE-009) every database in `snapshots/` counts as referencing its files.
 - Version display (phase 0) is done: `GET /api/version` (public, `no-store`), "About Musicus" (`/about`), docs title
   pages from `build.sh` (`--input version`; fallback workspace version, else "dev"). The client does not yet compare
   `api::version()` with its own `musicus_api::VERSION` (reload after an update, R-OPS-048). No release check fails on a
@@ -133,6 +139,6 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
   6. Fixed: blob commit = "exists? else rename" (`blobs.rs::place`); a failed rename whose target exists meanwhile
      (concurrent upload of the same new file, or on Windows a rename onto an open blob) counts as stored (unit test
      `a_target_that_appeared_meanwhile_counts_as_stored`). Not tested on Windows.
-  7. `backup` passes the target path to SQLite via `to_string_lossy` (non-UTF-8 paths would be altered).
+  7. Fixed: paths reach SQLite only as UTF-8 (`updates/snapshot.rs::sql_path`); `backup` refuses other target paths.
   8. Raspberry Pi 3 (1 GB) supported by decision but never measured (R-PERF-001 names the Pi 4; no Pi measured at all).
   9. Building on Windows needs a C toolchain for `ring`/SQLite (assumption; to check in CI).

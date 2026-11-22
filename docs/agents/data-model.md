@@ -107,7 +107,7 @@ Delete score ⇒ parts ⇒ part_files, part_instruments, part_voices, annotation
 
 ## Data directory
 
-`<data>/musicus.sqlite` (+ `-wal`, `-shm`), `<data>/blobs/ab/<sha256>`, `<data>/tmp/` (upload temp files, emptied on start). Backup order: `musicus-server backup` first, then copy `blobs/` (blobs only ever added ⇒ consistent).
+`<data>/musicus.sqlite` (+ `-wal`, `-shm`), `<data>/blobs/ab/<sha256>`, `<data>/tmp/` (upload temp files, emptied on start), `<data>/musicus.lock` (OS lock: shared by `serve`/`create-admin`, exclusive by `restore`; a-data-lock), `<data>/update-failed.json` (restart guard note after a failed update, a-restart-guard), `<data>/snapshots/` (`<UTC time>-<from>-to-<to>.sqlite` before updates, newest 3 kept; `failed-<time>.sqlite` after a failed update; `replaced-<time>.sqlite` from `restore`; a-snapshots). Backup order: `musicus-server backup` first, then copy `blobs/` (blobs only ever added ⇒ consistent; the same holds for every database in `snapshots/`).
 
 ## Preview 0009 (names in the UI language, a-client-part-names)
 
