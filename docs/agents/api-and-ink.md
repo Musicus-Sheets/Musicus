@@ -5,7 +5,7 @@ Crate `crates/musicus-api`: deps serde + postcard only, no I/O, compiles for nat
 ## DTO conventions (`dto.rs`)
 
 - `Id = i64`. Timestamps i64 Unix seconds. Dates `Option<String>` `YYYY-MM-DD`.
-- `Role` serialises lowercase; ordering Member < Librarian < Admin; `can_manage_library()` = librarian|admin; `is_admin()`.
+- `Role` serialises lowercase; ordering Member < Librarian < Admin; `can_manage_library()` = librarian|admin; `is_admin()`. No catch-all variant: `Role::parse` gives `None` and serde an error for any other text (e.g. a role of a newer release); each read site decides (a-stored-fallbacks, data-model.md § Stored values). `UserSummary.role` is `Option<Role>` (`None` = a role this release does not know).
 - Error body for every non-2xx (except 409 page conflict and 304/204): `ApiError {error, code, args, message}` (a-error-codes, R-I18N-004), e.g.
   `{"error":"bad_request","code":"password_too_short","args":{"min":8},"message":"the password needs at least 8 characters"}`.
   `error` = generic class of the status (`not_found`, `unauthorized`, `forbidden`, `bad_request`, `conflict`, `unprocessable`, `payload_too_large`, `unsupported_media_type`, `precondition_required`, `too_many_requests`, `internal`); `code` + `args` = `error::ErrorCode` (`#[serde(flatten)]`, adjacently tagged; unit codes have no `args`); `message` = `code.to_string()`, English, for API users/logs only — the web client renders its own text (`musicus-web/src/errors.rs`). Build with `ApiError::new(class, code)`.
@@ -60,6 +60,7 @@ InkObject = Stroke { id: u64, tool: Pen|Highlighter, color: u32 RGBA, width: u16
 - Use `Stroke::from_points(id, tool, color, width, &[(x,y,p)])` and `stroke.points()` (clamps); do not build deltas by hand.
 - Wire/storage bytes: `[FORMAT_VERSION=1] ++ postcard(PageLayer)`. Server stores `zstd::encode_all(bytes, 3)`.
 - `decode` rejects (R-ANN-006) with `InkError` (serde data `{kind, detail}`, sent in `invalid_ink`): `Empty`, `UnsupportedVersion(v)`, `TooLarge` (> `MAX_ENCODED_BYTES` 4 MiB), `Malformed` (postcard error), `LimitExceeded(InkLimit::ObjectsPerPage|PointsPerStroke|TextLength)` (20 000 objects, 20 000 points per stroke, 1000 text chars; `InkLimit::max()`), `DuplicateId(id)`, `PressureMismatch`.
+- Reading stored pages of a newer format (unknown version byte or a postcard variant this release lacks): the client shows the page without them and locks it (`viewer.rs::PageState::unreadable`); the server never decodes stored pages (R-OPS-041).
 - `StampKind::glyph()` gives the drawn character (client uses it; changing glyphs changes the look of stored data).
 
 ## Merge (`ink::merge(base_ids, local, server)`) — d-optimistic, R-ANN-012

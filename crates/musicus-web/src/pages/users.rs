@@ -120,11 +120,17 @@ fn UserRow(
             td { "{user.display_name}" }
             td { "{user.username}" }
             td {
-                select {
-                    onchange: move |e| update(UpdateUser { role: Role::parse(&e.value()), ..Default::default() }),
-                    option { value: "member", selected: user.role == Role::Member, {t::common_role_member()} }
-                    option { value: "librarian", selected: user.role == Role::Librarian, {t::common_role_librarian()} }
-                    option { value: "admin", selected: user.role == Role::Admin, {t::common_role_admin()} }
+                match user.role {
+                    Some(role) => rsx! {
+                        select {
+                            onchange: move |e| update(UpdateUser { role: Role::parse(&e.value()), ..Default::default() }),
+                            option { value: "member", selected: role == Role::Member, {t::common_role_member()} }
+                            option { value: "librarian", selected: role == Role::Librarian, {t::common_role_librarian()} }
+                            option { value: "admin", selected: role == Role::Admin, {t::common_role_admin()} }
+                        }
+                    },
+                    // A role of a newer release: shown, no role change offered (R-OPS-041).
+                    None => rsx! { span { class: "muted", {t::common_role_unknown()} } },
                 }
             }
             td {

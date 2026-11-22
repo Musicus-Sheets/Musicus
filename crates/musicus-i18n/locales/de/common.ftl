@@ -53,6 +53,7 @@ common-saved = Gespeichert
 common-role-member = Mitglied
 common-role-librarian = Notenwart
 common-role-admin = Administrator
+common-role-unknown = Unbekannte Rolle (neuere Version, keine Anmeldung möglich)
 
 ## Search fields of pickers
 common-search-instruments = Instrument oder Register suchen …

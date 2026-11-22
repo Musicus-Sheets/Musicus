@@ -3,6 +3,8 @@
 reader-no-file = No file has been uploaded for this part yet.
 reader-open-failed = Could not open the sheet: { $error }
 reader-annotations-load-failed = Could not load annotations: { $error }
+# Shown when drawing on a page whose saved annotations this version cannot read (e.g. saved by a newer version).
+reader-annotations-page-locked = The annotations of this page cannot be shown or changed with this version of Musicus. They stay saved as they are; nothing drawn here would be kept.
 reader-set-create-failed = Could not create an annotation set: { $error }
 reader-settings-failed = Could not save the view setting: { $error }
 reader-layout-failed = The system view is not available for this sheet; showing whole pages.
@@ -99,3 +101,5 @@ reader-systems-remove-cut-hint = Remove this cut: join the bands above and below
 reader-systems-save = Save page
 reader-systems-reset = Reset to automatic
 reader-systems-unsaved = Unsaved changes
+# Shown in the systems editor for a page whose saved layout or correction this version cannot read.
+reader-systems-newer-version = This page was saved by a newer version of Musicus. It is shown whole and cannot be edited with this version; a correction can only be reset.

@@ -72,6 +72,8 @@ impl Role {
         }
     }
 
+    /// `None` for any other text, e.g. a role stored by a newer release
+    /// (R-OPS-041): each read site decides what that means (a-stored-fallbacks).
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "member" => Some(Role::Member),
@@ -175,7 +177,10 @@ pub struct UserSummary {
     pub id: Id,
     pub username: String,
     pub display_name: String,
-    pub role: Role,
+    /// `None`: the stored role is not one of this release (written by a newer
+    /// one, R-OPS-041). Such an account cannot log in; the admin page shows it
+    /// and offers no role change (a-stored-fallbacks).
+    pub role: Option<Role>,
     pub disabled: bool,
     /// `false` until the user has accepted their invite.
     pub has_password: bool,
@@ -722,5 +727,14 @@ mod tests {
             assert_eq!(json, format!("\"{}\"", role.as_str()));
         }
         assert!(Role::Admin.can_manage_library() && !Role::Member.can_manage_library());
+    }
+
+    #[test]
+    fn unknown_roles_do_not_parse() {
+        assert_eq!(Role::parse("conductor"), None);
+        assert_eq!(Role::parse("unknown"), None);
+        assert!(serde_json::from_str::<Role>("\"conductor\"").is_err());
+        let user = r#"{"id":1,"username":"a","display_name":"A","role":null,"disabled":false,"has_password":true,"group_ids":[]}"#;
+        assert_eq!(serde_json::from_str::<UserSummary>(user).unwrap().role, None);
     }
 }

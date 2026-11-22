@@ -429,12 +429,16 @@ impl FileState {
         }
     }
 
-    pub fn parse(s: &str) -> Self {
+    /// A stored state; `None` for a state of a newer release (R-OPS-041):
+    /// the server then leaves the file out of the review, the proposals and
+    /// the commit, and never rewrites its row.
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
-            "uploaded" => Self::Uploaded,
-            "duplicate" => Self::Duplicate,
-            "failed" => Self::Failed,
-            _ => Self::Pending,
+            "pending" => Some(Self::Pending),
+            "uploaded" => Some(Self::Uploaded),
+            "duplicate" => Some(Self::Duplicate),
+            "failed" => Some(Self::Failed),
+            _ => None,
         }
     }
 }
@@ -481,6 +485,19 @@ pub fn staves_per_system(pages: &[PageLayout]) -> Option<u32> {
 pub enum ItemState {
     Pending,
     Committed,
+}
+
+impl ItemState {
+    /// A stored state; `None` for a state of a newer release (R-OPS-041):
+    /// the server then leaves the piece or part out of the review and the
+    /// commit, and does not propose its file again.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "pending" => Some(Self::Pending),
+            "committed" => Some(Self::Committed),
+            _ => None,
+        }
+    }
 }
 
 /// One part row of the review.
@@ -899,6 +916,17 @@ fn review_part(p: PartInput, extra_readers: &[&Group], lib: &Library) -> ReviewP
 mod tests {
     use super::*;
     use crate::import::pattern::{PRESETS, preset};
+
+    #[test]
+    fn stored_states_of_a_newer_release_are_not_guessed() {
+        for f in [FileState::Pending, FileState::Uploaded, FileState::Duplicate, FileState::Failed] {
+            assert_eq!(FileState::parse(f.as_str()), Some(f));
+        }
+        assert_eq!(FileState::parse("archived"), None);
+        assert_eq!(ItemState::parse("pending"), Some(ItemState::Pending));
+        assert_eq!(ItemState::parse("committed"), Some(ItemState::Committed));
+        assert_eq!(ItemState::parse("skipped"), None, "never taken for pending (would be committed)");
+    }
 
     fn instruments(names: &[&str]) -> Vec<Instrument> {
         names

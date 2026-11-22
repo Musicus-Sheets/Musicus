@@ -45,6 +45,40 @@ Before 1.0 there is no release update file: the development migrations 0001–00
 
 Development databases of the `sqlx::migrate!` time keep their `_sqlx_migrations` table (unused).
 
+## Stored values and their handling where they are read (R-OPS-041, a-stored-fallbacks)
+
+Every value that a newer release could write in a form this one does not know, and what this release does with it.
+Rule: the domain enums stay exact (no `Unknown` variants, no `#[serde(other)]`); the parse fails (`None` / serde error)
+and the read site decides — fail closed: never more access, never a wrong view, nothing written back over the newer
+value (an unparsable value never exists in memory), no 500 either. Adding a value: only in a minor/major release
+(RELEASING.md checklist: "no new stored values" in a patch), only if every read site below handles it (a new ink object
+kind needs a new `ink::FORMAT_VERSION`: postcard cannot skip an unknown variant), and with a row in this table in the same
+commit. A restriction of access that a read-site fallback would not keep (e.g. an expiry on a grant) must be new-only data
+outside the structures older releases read (R-OPS-017).
+Tests: unit tests next to each parse function; API tests `an_unknown_role_cannot_log_in_and_is_never_written_back`,
+`layouts_of_a_newer_release_show_whole_pages_and_are_not_overwritten`, `annotation_pages_of_a_newer_format_are_served_unchanged`,
+`import_items_and_files_of_a_newer_release_are_left_out` (rows written with `PRAGMA ignore_check_constraints`).
+
+| Stored value | Where | Parsed by | Read site ⇒ on a parse failure | Written back? |
+| --- | --- | --- | --- | --- |
+| Role | `users.role` | `Role::parse` ⇒ `None` | `AuthUser`, `current_user`, `login` ⇒ 401 like a disabled account, invite link ⇒ 404 (never enters `AuthUser`); admin list `UserSummary.role` = `None`, shown as "Unknown role (newer version, cannot log in)" without a role select (`pages/users.rs`). Not mapped to member: a newer role may have fewer rights | never: a request body with an unknown role name ⇒ 422 (JSON rejection); other changes keep it (`COALESCE(?3, role)`); the API still allows setting a known role |
+| Reader mode, staff size | `users.reader_mode`, `users.staff_size` | `ReaderMode::parse` / `StaffSize::parse` ⇒ `None` | `current_user` ⇒ default (page, M; no access effect) | only when the user saves the view settings (both fields; the user's own choice) |
+| Stored page of a detection (incl. band kind) | JSON array in `file_layouts.pages` | `files::read_pages`: each element via serde (`RegionKind` exact; unknown fields ignored) | `effective_layout`: that page whole (size read leniently), index in `FileLayout.unreadable_pages`; editor: "saved by a newer version", only Reset; not even an array of pages with sizes ⇒ state `failed` (whole pages) | no; worker redoes a layout only if `algorithm <` its own (`worker::next_file`), so a newer algorithm's layout stays |
+| Correction (incl. band kind) | `layout_corrections.data` | serde `PageCorrection` + `validate` | `effective_layout`: that page whole, `corrected`, in `unreadable_pages`; editor offers only Reset (DELETE) | never: a request with an unknown kind ⇒ 422 (JSON rejection); the editor offers no Save for such a page |
+| Layout state | `file_layouts.state` | `effective_layout`: only `done` is done | `failed` (whole pages) | no |
+| Ink format version / object kinds | first byte of `annotation_pages.data` (after zstd); postcard variants (`InkObject`, `Tool`, `StampKind`) | the client only (`ink::decode` ⇒ `UnsupportedVersion` / `Malformed`); the server never decodes stored pages (served, copied, migrated as bytes) | client: page shown without its annotations + "Could not load annotations: …newer version…"; page locked (`PageState::unreadable`; drawing shows `reader-annotations-page-locked`) | never: nothing saved for the page, pending copy cleared (a stale If-Match would get 409 anyway). A new object kind needs a new `FORMAT_VERSION` (postcard cannot skip variants) |
+| Error code in import problems | `import_files.problem` (JSON) | `import.rs::parse_problem` | `ErrorCode::Unknown` (the API's forward-compatible error code, predates this rule; also for unknown codes with args) | only rewritten when the file is uploaded again |
+| Import file state | `import_files.state` | `FileState::parse` ⇒ `None` | file left out of review, unmatched/duplicate lists, proposals, upload and commit | never: `register_files` skips such rows |
+| Import item state / kind | `import_items.state`, `.kind` | `ItemState::parse` ⇒ `None`; kind compared as text | piece or part left out of review and commit; its files are not proposed again (`repropose` treats every non-pending item as taken) | never: `update_items` ⇒ 400 `unknown_items` (also for parts of such a piece); `repropose` deletes only `pending` pieces |
+| Proposal / overrides JSON | `import_items.proposal`, `.overrides` | `import.rs::parse` ⇒ `None` (unknown fields ignored) | item left out as above | never: `update_items` ⇒ 400 `unknown_items` (also with `reset`). Unknown *fields* inside readable overrides are dropped when a librarian edits the item (new-only data, R-OPS-016) |
+| Import language | `import_batches.language` | `Language::parse` ⇒ `None` | default language (proposals are derived data) | no (`UpdateImportBatch` absent = unchanged) |
+| Import pattern syntax | `import_batches.pattern` | `Pattern::parse` | 400 `invalid_pattern` on actions that need it (no 500) | only when a librarian sets a new pattern |
+| File type | `files.mime` | layout worker only for PDF; served with the stored type | not analysed (whole pages); the reader's render error | no |
+| Key code | `parts.transposition` | `naming` | shown verbatim, "Other: …" in the key list | only when a librarian picks a key |
+| Tags | `scores.tags` (JSON array) | `serde_json` ⇒ `[]` on failure | no tags shown | when the piece is saved (librarian's edit) |
+
+Not stored as enums: sessions, invites, grants (tables), `is_default`, numbers. Free text (instrument family, names) has no fallback need.
+
 ## Access query shape (`access::part_visible!()`; needs alias `p` for parts)
 
 ```sql

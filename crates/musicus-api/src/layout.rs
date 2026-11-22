@@ -89,6 +89,12 @@ pub struct FileLayout {
     /// Version of the detection algorithm that produced the pages.
     pub algorithm: i64,
     pub pages: Vec<PageLayout>,
+    /// Pages whose stored detection or correction this release cannot read
+    /// (written by a newer release, e.g. a band kind it does not know;
+    /// R-OPS-041). The server serves them as whole pages; the editor allows
+    /// only resetting their correction (a-stored-fallbacks).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unreadable_pages: Vec<u32>,
 }
 
 /// A librarian's correction of one page (`PUT /api/files/{sha256}/layout/pages/{page}`).
@@ -665,6 +671,26 @@ mod tests {
                 .is_err()
         );
         assert!(PageCorrection { bounds: vec![0.1], ..ok }.validate().is_err());
+    }
+
+    #[test]
+    fn unknown_region_kinds_do_not_parse() {
+        // A band kind of a newer release is a parse error (the server then
+        // serves the page whole, `effective_layout`); unknown fields are not.
+        let page = |kind: &str| {
+            format!(
+                r#"{{"width_mm":210,"height_mm":297,"confidence":1,"full_page":false,"later_field":1,"regions":[
+                {{"kind":"{kind}","y0":0.1,"y1":0.5,"ink_y0":0.1,"ink_y1":0.5,"x0":0.1,"x1":0.9,"staves":1,"staff_space":0.006}}]}}"#
+            )
+        };
+        assert!(serde_json::from_str::<PageLayout>(&page("system")).is_ok());
+        assert!(serde_json::from_str::<PageLayout>(&page("ossia")).is_err());
+        assert!(
+            serde_json::from_str::<PageCorrection>(r#"{"full_page":false,"bounds":[0,1],"kinds":["ossia"]}"#).is_err()
+        );
+        let old: FileLayout =
+            serde_json::from_str(r#"{"sha256":"x","state":"done","algorithm":1,"pages":[]}"#).unwrap();
+        assert!(old.unreadable_pages.is_empty());
     }
 
     #[test]

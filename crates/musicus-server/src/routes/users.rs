@@ -64,7 +64,8 @@ async fn load_users(app: &App, only: Option<Id>) -> ApiResult<Vec<UserSummary>> 
             id,
             username,
             display_name,
-            role: Role::parse(&role).unwrap_or(Role::Member),
+            // A role of a newer release: `None`, never guessed (R-OPS-041).
+            role: Role::parse(&role),
             disabled,
             has_password,
             group_ids: serde_json::from_str(&groups).unwrap_or_default(),

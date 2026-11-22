@@ -3,6 +3,7 @@
 reader-no-file = Für diese Stimme wurde noch keine Datei hochgeladen.
 reader-open-failed = Das Notenblatt konnte nicht geöffnet werden: { $error }
 reader-annotations-load-failed = Die Anmerkungen konnten nicht geladen werden: { $error }
+reader-annotations-page-locked = Die Anmerkungen dieser Seite können mit dieser Version von Musicus nicht angezeigt oder geändert werden. Sie bleiben so gespeichert, wie sie sind; hier Gezeichnetes würde nicht behalten.
 reader-set-create-failed = Das Anmerkungsset konnte nicht angelegt werden: { $error }
 reader-settings-failed = Die Ansichtseinstellung konnte nicht gespeichert werden: { $error }
 reader-layout-failed = Die Zeilenansicht ist für dieses Notenblatt nicht verfügbar; es werden ganze Seiten angezeigt.
@@ -96,3 +97,4 @@ reader-systems-remove-cut-hint = Diesen Schnitt entfernen: die Bänder darüber 
 reader-systems-save = Seite speichern
 reader-systems-reset = Auf automatisch zurücksetzen
 reader-systems-unsaved = Ungespeicherte Änderungen
+reader-systems-newer-version = Diese Seite wurde mit einer neueren Version von Musicus gespeichert. Sie wird ganz angezeigt und kann mit dieser Version nicht bearbeitet werden; eine Korrektur kann nur zurückgesetzt werden.
