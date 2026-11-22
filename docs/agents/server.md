@@ -3,17 +3,18 @@
 ## Module graph
 
 `main` → `config` (clap) → `lib::open_state` → `state::App {db, blobs, cache, settings, limiter, hashing, layout_jobs}`.
-`routes::app(state, web_dir)` → handlers in `routes::*` use `auth::AuthUser`, `access::part_visible!`, `error::AppError`,
+`routes::app(state, web::WebClient)` → handlers in `routes::*` use `auth::AuthUser`, `access::part_visible!`, `error::AppError`,
 `db::{now, json_ids}`, `blobs`, `cache` (files only), `processors` (upload only). `layout` (system detection, own
 module doc `layout.md`) runs in a background worker, not in handlers. `tests/api.rs` drives `routes::app` directly.
 
 ## Start-up (`main.rs::serve`)
 
 1. `ServeArgs` → `Settings {cookie_secure = !insecure_cookies, client_cache, session_ttl_secs = days*86400, invite_ttl_secs = 7d, max_upload_bytes, trust_proxy}`.
+1a. Data directory: `DataArgs::resolve` (all commands; a-data-dir-default): `--data-dir`/`MUSICUS_DATA_DIR`, else `./data` if `./data/musicus.sqlite` exists (warning naming the new default), else the OS folder (`config::default_data_dir`); logged as `data folder: <absolute path>`; no `HOME`/`APPDATA` ⇒ exit asking for `--data-dir`.
 2. `open_state(data_dir, ram_cache_mb*MiB, settings)` (after `main` took the shared `DataLock` on `<data>/musicus.lock`, a-data-lock): mkdir, `Db::open` (readers = cores clamped 2..8; `updates::start::run`: release build with previews ⇒ exit (R-OPS-024), `<data>/update-failed.json` of the same program (version + `Program::fingerprint`) ⇒ exit at once (a-restart-guard), program older than `oldest_allowed` ⇒ exit with "This data was last used by Musicus X. Musicus Y can no longer use it; start Musicus Z or newer." and nothing written (R-OPS-015), else, if there is work on existing data, free-space check and snapshot `<data>/snapshots/<UTC time>-<from>-to-<to>.sqlite` (`VACUUM INTO`, newest 3 kept; R-OPS-019, a-snapshots), then rebuilds / additive parts / due removals, each in its own transaction, then the marker; a-update-runner; on a failure the snapshot is put back, the failed state kept as `snapshots/failed-<time>.sqlite`, the guard note written and the process exits 1 with the R-OPS-020 message), log lines of the report, `part_index::rebuild_if_needed` (rebuilds `part_fts` when another program used the database last or its row count differs from `parts`), `BlobStore::open` (mkdir `blobs/`, `tmp/`, empties `tmp/`), `App::new` (semaphore permits = cores).
 3. `bootstrap_admin`: if `users` empty → insert `admin` (role admin, no password) + invite; log `<public_url>/invite/<token>` (R-ACC-003).
 3a. `layout::worker::spawn(state)`: background system detection of every file without a current layout (backfill after updates, then new uploads; a-layout-worker).
-4. `--web-dir` must contain `index.html` else exit error.
+4. Web client (`web::WebClient::choose`, a-embedded-web): `--web-dir` (must contain `index.html` else exit error) wins over the client built into the program (feature `embed-web`); neither ⇒ warning, API only. Logged as `web client: folder …` / `built into the program (N files)`.
 5. TLS if `--tls-cert` and `--tls-key` (rustls with `ring` provider installed explicitly) else plain TCP. `into_make_service_with_connect_info::<SocketAddr>()` (needed by `ClientIp`).
 6. Graceful shutdown on SIGTERM/Ctrl-C (R-OPS-008).
 
@@ -23,9 +24,9 @@ module doc `layout.md`) runs in a background worker, not in handlers. `tests/api
 
 | Option / env | Default | Effect |
 | --- | --- | --- |
-| `--data-dir` / `MUSICUS_DATA_DIR` | `data` | db + blobs + tmp |
+| `--data-dir` / `MUSICUS_DATA_DIR` | OS folder: Linux `$XDG_DATA_HOME/musicus` (absolute only) else `~/.local/share/musicus`; macOS `~/Library/Application Support/Musicus`; Windows `%APPDATA%\Musicus`; legacy `./data` if it holds `musicus.sqlite` | db + blobs + tmp (all subcommands) |
 | `--listen` / `MUSICUS_LISTEN` | `0.0.0.0:8080` | bind address |
-| `--web-dir` / `MUSICUS_WEB_DIR` | none | built client; none ⇒ API only |
+| `--web-dir` / `MUSICUS_WEB_DIR` | none | folder of a built client, overrides the built-in one; neither ⇒ API only |
 | `--public-url` / `MUSICUS_PUBLIC_URL` | `http://localhost:8080` | printed links only |
 | `--tls-cert`, `--tls-key` / `MUSICUS_TLS_*` | none | built-in HTTPS |
 | `--insecure-cookies` / `MUSICUS_INSECURE_COOKIES` | false | drop cookie `Secure` |

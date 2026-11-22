@@ -16,6 +16,9 @@ cargo clippy -p musicus-web --target wasm32-unknown-unknown
 dx build --platform web --package musicus-web            # debug → target/dx/musicus-web/debug/web/public
 dx bundle --platform web --package musicus-web --release # release (needs wasm-opt)
 cargo run -p musicus-server -- serve --data-dir /tmp/m --web-dir target/dx/musicus-web/debug/web/public --insecure-cookies
+# single file (a-embedded-web): client from `dx bundle --release` built into the program; clean the folder first so no stale files get in
+rm -rf target/dx/musicus-web/release && dx bundle --platform web --package musicus-web --release && cargo build --release -p musicus-server --features embed-web
+MUSICUS_WEB_DIST=crates/musicus-server/tests/fixtures/web cargo test -p musicus-server --features embed-web --test embedded_web   # CI does this; clippy too
 node e2e/smoke.mjs <admin-invite-url-from-log> some.pdf /tmp/shots   # fresh data dir required; BROWSER=firefox for Firefox
 python3 scripts/check-ui-literals.py  # no literal UI text in the client (R-I18N-010; CI: workflow `UI literals`)
 ./scripts/db-schema.sh [--check]      # regenerate (or compare) crates/musicus-server/schema.sql after a preview change (a-db-check)
@@ -35,6 +38,9 @@ Toolchain: Rust ≥ 1.88 (edition 2024, let-chains used), target `wasm32-unknown
 - No local wasm toolchain? Build an image `FROM rust:1.97-bookworm` + `rustup target add wasm32-unknown-unknown` +
   `cargo install dioxus-cli --version 0.7.10`, mount the repo, set `CARGO_TARGET_DIR=/src/target/docker`, and run the
   web clippy / `dx build` inside it; serve the result with a host-built server (`--web-dir target/docker/dx/...`).
+  For the single file: `MUSICUS_WEB_DIST=target/docker/dx/musicus-web/release/web/public cargo build --release -p musicus-server --features embed-web`.
+- Without `--data-dir` the server uses the OS folder (`~/.local/share/musicus`), or `./data` if that holds a database
+  (a-data-dir-default): always pass `--data-dir` in tests and e2e runs.
 - Sharpness tests: Playwright's `deviceScaleFactor` (CDP DSF emulation) lays out in CSS pixels and scales the result, so
   fractional CSS sizes always look resampled there; use a real factor (`chromium.launch({args:
   ['--force-device-scale-factor=2']})` + `viewport: null`) and compare `devicePixelContentBoxSize` with the canvas size

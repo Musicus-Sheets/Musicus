@@ -38,6 +38,10 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --locked --all-targets
+      # With the web client built in (R-OPS-030), from the test fixture.
+      - run: cargo clippy --locked --all-targets -p musicus-server --features embed-web
+        env:
+          MUSICUS_WEB_DIST: crates/musicus-server/tests/fixtures/web
 
   clippy-wasm:
     runs-on: ubuntu-latest
@@ -60,6 +64,9 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --locked
+      - run: cargo test --locked -p musicus-server --features embed-web --test embedded_web
+        env:
+          MUSICUS_WEB_DIST: crates/musicus-server/tests/fixtures/web
 
   test-web:
     runs-on: ubuntu-latest

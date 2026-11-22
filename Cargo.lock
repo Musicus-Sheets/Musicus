@@ -2832,6 +2832,7 @@ dependencies = [
  "hayro",
  "hex",
  "http-body-util",
+ "mime_guess",
  "musicus-api",
  "musicus-i18n",
  "rustls",

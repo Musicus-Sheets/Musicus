@@ -19,6 +19,7 @@ pub mod processors;
 pub mod routes;
 pub mod state;
 pub mod updates;
+pub mod web;
 
 use std::path::Path;
 

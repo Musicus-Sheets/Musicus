@@ -70,15 +70,20 @@ cargo install dioxus-cli --version 0.7.10 --locked   # or a prebuilt `dx` releas
 ./scripts/fetch-pdfjs.sh
 
 # 2. the web client -> target/dx/musicus-web/release/web/public
+rm -rf target/dx/musicus-web/release        # no files of an earlier build
 dx bundle --platform web --package musicus-web --release
 
-# 3. the server
-cargo build --release -p musicus-server
-./target/release/musicus-server serve \
-    --data-dir ./data \
-    --web-dir target/dx/musicus-web/release/web/public \
-    --public-url http://localhost:8080
+# 3. the server, with the web client built in: one file
+cargo build --release -p musicus-server --features embed-web
+./target/release/musicus-server serve --data-dir ./data --public-url http://localhost:8080
 ```
+
+`target/release/musicus-server` is then the whole program; copy it anywhere.
+Without `--data-dir` it keeps its data in the usual folder of the system
+(Linux `~/.local/share/musicus`, macOS `~/Library/Application Support/Musicus`,
+Windows `%APPDATA%\Musicus`) and prints the folder at start. Without
+`--features embed-web` the program contains no web client; pass
+`--web-dir <folder of a built client>` then (also handy in development).
 
 On the first start the server creates the user `admin` and logs a one-time
 link to choose its password. Open it, then use **Manage** to add instruments,
@@ -91,8 +96,8 @@ run `wasm-opt`, which `dx` downloads on first use.
 
 ## Docker
 
-The `Dockerfile` builds the web client and the server and puts them into a
-small image based on distroless (no shell, runs as an unprivileged user,
+The `Dockerfile` builds the program with the web client built in and puts it
+into a small image based on distroless (no shell, runs as an unprivileged user,
 data in the volume `/data`). `compose.yaml` runs it:
 
 ```sh
@@ -131,9 +136,9 @@ All options can be passed as flags or environment variables
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `MUSICUS_DATA_DIR` | `data` | Holds `musicus.sqlite`, `blobs/` and `tmp/` |
+| `MUSICUS_DATA_DIR` | usual folder of the system (see above); `/data` in Docker | Holds `musicus.sqlite`, `blobs/` and `tmp/` |
 | `MUSICUS_LISTEN` | `0.0.0.0:8080` | Address and port |
-| `MUSICUS_WEB_DIR` | none | Built web client; without it only `/api` is served |
+| `MUSICUS_WEB_DIR` | none | Folder of a built web client, used instead of the one built into the program |
 | `MUSICUS_PUBLIC_URL` | `http://localhost:8080` | Used in printed setup links |
 | `MUSICUS_TLS_CERT`, `MUSICUS_TLS_KEY` | none | PEM files: serve HTTPS directly (rustls) |
 | `MUSICUS_INSECURE_COOKIES` | off | Drop the cookie's `Secure` flag (plain-HTTP development on a LAN IP only) |

@@ -3,11 +3,12 @@ use musicus_server::{
     anyhow_like::{Result, plain},
     backup::{self, DataLock},
     bootstrap_admin,
-    config::{Cli, Command, ServeArgs},
+    config::{Cli, Command, DataArgs, DataDirSource, ServeArgs},
     open_state, routes,
     state::Settings,
+    web::WebClient,
 };
-use std::net::SocketAddr;
+use std::{net::SocketAddr, path::PathBuf};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -20,8 +21,9 @@ async fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Serve(args) => serve(args).await,
         Command::CreateAdmin { data, username, display_name, public_url } => {
-            let _lock = DataLock::shared(&data.data_dir).map_err(plain)?;
-            let app = open_state(&data.data_dir, 0, Settings::default()).await?;
+            let data_dir = data_dir(&data)?;
+            let _lock = DataLock::shared(&data_dir).map_err(plain)?;
+            let app = open_state(&data_dir, 0, Settings::default()).await?;
             let display_name = display_name.unwrap_or_else(|| username.clone());
             let id = routes::users::insert_user(&app, &username, &display_name, musicus_api::Role::Admin).await?;
             let invite = routes::users::issue_invite(&app, id).await?;
@@ -30,26 +32,25 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Command::Backup { data, to } => {
-            let done = backup::backup(&data.data_dir, &to).await.map_err(plain)?;
+            let data_dir = data_dir(&data)?;
+            let done = backup::backup(&data_dir, &to).await.map_err(plain)?;
             match done.version {
                 Some(v) => println!("Database (last used by Musicus {v}) written to {}.", to.display()),
                 None => println!("Database written to {}.", to.display()),
             }
-            println!(
-                "Now back up {} (immutable files; copy after the database).",
-                data.data_dir.join("blobs").display()
-            );
+            println!("Now back up {} (immutable files; copy after the database).", data_dir.join("blobs").display());
             println!("Keep backups as safe as the server: they contain all sheets, markings and password hashes.");
             Ok(())
         }
         Command::Restore { data, from } => {
-            let done = backup::restore(&data.data_dir, &from, musicus_server::db::now()).await.map_err(plain)?;
+            let data_dir = data_dir(&data)?;
+            let done = backup::restore(&data_dir, &from, musicus_server::db::now()).await.map_err(plain)?;
             let by = done.version.map(|v| format!(" (last used by Musicus {v})")).unwrap_or_default();
             println!("Database restored from {}{by}.", from.display());
             if let Some(old) = &done.replaced {
                 println!("The replaced database is kept as {}.", old.display());
             }
-            println!("Nothing in {} was changed.", data.data_dir.join("blobs").display());
+            println!("Nothing in {} was changed.", data_dir.join("blobs").display());
             if done.missing_files > 0 {
                 println!(
                     "Warning: {} sheet files of the restored database are missing in blobs/; copy the blobs \
@@ -72,15 +73,42 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Command::RetryUpdate { data } => {
-            if backup::retry_update(&data.data_dir).map_err(plain)? {
+            let data_dir = data_dir(&data)?;
+            if backup::retry_update(&data_dir).map_err(plain)? {
                 println!("The next start will try the failed database update again.");
             } else {
-                println!("No failed database update was noted in {}.", data.data_dir.display());
+                println!("No failed database update was noted in {}.", data_dir.display());
             }
             Ok(())
         }
         Command::Healthcheck { listen } => healthcheck(listen),
     }
+}
+
+/// Resolves the data directory and says which one is used (R-OPS-031).
+fn data_dir(args: &DataArgs) -> Result<PathBuf> {
+    let dir = args.resolve()?;
+    let shown = std::path::absolute(&dir.path).unwrap_or_else(|_| dir.path.clone());
+    match dir.source {
+        DataDirSource::Configured => tracing::info!("data folder: {}", shown.display()),
+        DataDirSource::SystemDefault => tracing::info!(
+            "data folder: {} (the usual folder of this system; choose another with --data-dir)",
+            shown.display()
+        ),
+        DataDirSource::Legacy => {
+            let usual = musicus_server::config::default_data_dir(musicus_server::config::Os::current(), &|key| {
+                std::env::var_os(key)
+            })
+            .map_or_else(|| "the usual folder of this system".to_owned(), |d| d.display().to_string());
+            tracing::warn!(
+                "data folder: {} (found a database there). Without --data-dir, Musicus now uses {usual}; \
+                 start it with --data-dir {} to keep this folder, or move the folder's contents there",
+                shown.display(),
+                dir.path.display()
+            );
+        }
+    }
+    Ok(dir.path)
 }
 
 /// A minimal HTTP/1.0 request, so the runtime image needs no curl or shell.
@@ -108,21 +136,29 @@ async fn serve(args: ServeArgs) -> Result<()> {
         trust_proxy: args.trust_proxy,
         ..Settings::default()
     };
+    let data_dir = data_dir(&args.data)?;
     // Held while the server runs: `restore` refuses meanwhile (R-OPS-022).
-    let _lock = DataLock::shared(&args.data.data_dir).map_err(plain)?;
-    let state = open_state(&args.data.data_dir, args.ram_cache_mb * 1024 * 1024, settings).await?;
+    let _lock = DataLock::shared(&data_dir).map_err(plain)?;
+    let state = open_state(&data_dir, args.ram_cache_mb * 1024 * 1024, settings).await?;
     if let Some(token) = bootstrap_admin(&state).await? {
         tracing::warn!("No users yet. Created 'admin'; set its password at:");
         tracing::warn!("{}/invite/{token}", args.public_url.trim_end_matches('/'));
     }
     // Detects the music systems of new (and not yet analysed) files in the background.
     musicus_server::layout::worker::spawn(state.clone());
-    if let Some(dir) = &args.web_dir
-        && !dir.join("index.html").exists()
-    {
-        return Err(format!("{} contains no index.html (build the web client first)", dir.display()).into());
+    let web = WebClient::choose(args.web_dir.clone());
+    match &web {
+        WebClient::Dir(dir) if !dir.join("index.html").exists() => {
+            return Err(format!("{} contains no index.html (build the web client first)", dir.display()).into());
+        }
+        WebClient::Dir(dir) => tracing::info!("web client: folder {}", dir.display()),
+        WebClient::Builtin(assets) => tracing::info!("web client: built into the program ({} files)", assets.len()),
+        WebClient::None => tracing::warn!(
+            "this program contains no web client (built without the feature embed-web): only /api is served; \
+             pass --web-dir with the folder of a built client"
+        ),
     }
-    let app = routes::app(state, args.web_dir.as_deref()).into_make_service_with_connect_info::<SocketAddr>();
+    let app = routes::app(state, web).into_make_service_with_connect_info::<SocketAddr>();
 
     match (&args.tls_cert, &args.tls_key) {
         (Some(cert), Some(key)) => {

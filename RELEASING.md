@@ -163,6 +163,9 @@ then.)
    release notes; publishing it (not as prerelease) runs `.github/workflows/user-guide-pages.yml`, which
    rebuilds the user guide site for all release tags. (In the pipeline this workflow becomes the last step;
    its manual test build stays.)
+   **(planned)** The program archives are built by the pipeline. Until then, build the program for your
+   own system as described in [Building the program](#building-the-program) and attach it only if you
+   tested it.
 5. After the release was published successfully, tag the three docs repositories by hand on exactly the
    commits the release points to (always by hand, also with the pipeline):
 
@@ -189,6 +192,28 @@ Always mention:
   (in release order), to the release it was upgraded from for three months, and to every patch of the same
   minor (R-OPS-014). Outside it the older release refuses to start and names the oldest one that can.
 - Platforms whose non-blocking checks failed (macOS Intel, R-OPS-042), once those checks exist.
+
+## Building the program
+
+The program is a single file: the web client is built into it (cargo feature `embed-web`). On the system the
+program is meant for, with Rust, the `wasm32-unknown-unknown` target and the Dioxus CLI 0.7.10 installed:
+
+```sh
+./scripts/fetch-pdfjs.sh                                  # pdf.js for the web client
+rm -rf target/dx/musicus-web/release                      # no files of an earlier build
+dx bundle --platform web --package musicus-web --release  # web client -> target/dx/musicus-web/release/web/public
+MUSICUS_RELEASE_BUILD=1 cargo build --release --locked -p musicus-server --features embed-web
+```
+
+The result is `target/release/musicus-server` (`musicus-server.exe` on Windows). The build stops with a
+message if the web client was not built first. To build in a client from another folder, set
+`MUSICUS_WEB_DIST=<folder>` (relative to the repository root) for the `cargo build`. Check the file: started
+with only `--data-dir` on an empty folder, it must print `web client: built into the program` and serve the
+login page; started without `--data-dir`, it prints the usual data folder of the system. The Docker image is
+built the same way (`Dockerfile`).
+
+A program built without `--features embed-web` contains no web client and warns at start that only the API
+is served; such a build must never be published.
 
 ## Troubleshooting
 

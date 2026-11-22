@@ -17,7 +17,7 @@ use musicus_api::{
     },
     ink::{self, InkObject, PageLayer, Stroke, Tool},
 };
-use musicus_server::{bootstrap_admin, open_state, routes, state::Settings};
+use musicus_server::{bootstrap_admin, open_state, routes, state::Settings, web::WebClient};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -94,7 +94,7 @@ impl Server {
         let state = open_state(dir.path(), 64 * 1024 * 1024, settings).await.unwrap();
         let admin_invite = bootstrap_admin(&state).await.unwrap().expect("fresh database");
         assert!(bootstrap_admin(&state).await.unwrap().is_none());
-        Server { router: routes::app(state.clone(), None), state, _dir: dir, admin_invite }
+        Server { router: routes::app(state.clone(), WebClient::None), state, _dir: dir, admin_invite }
     }
 
     async fn send(&self, method: Method, uri: &str, auth: Auth<'_>, headers: &[(&str, &str)], body: Body) -> Reply {
@@ -1027,7 +1027,7 @@ async fn migration_0002_keeps_old_parts() {
     let settings = Settings { cookie_secure: false, ..Settings::default() };
     let state = open_state(dir.path(), 1 << 20, settings).await.unwrap();
     let invite = bootstrap_admin(&state).await.unwrap().unwrap();
-    let s = Server { router: routes::app(state.clone(), None), state, _dir: dir, admin_invite: invite };
+    let s = Server { router: routes::app(state.clone(), WebClient::None), state, _dir: dir, admin_invite: invite };
     let admin = s.admin().await;
     let score: Score = s.get("/api/scores/1", &admin).await.json();
     type Row<'a> = (Option<&'a str>, Vec<&'a str>, Option<&'a str>, String);
