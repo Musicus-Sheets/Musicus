@@ -43,6 +43,11 @@ pub fn is_sha256_hex(s: &str) -> bool {
 }
 
 impl BlobStore {
+    /// The store of `data_dir` without creating or cleaning anything (for reading).
+    pub fn at(data_dir: &Path) -> Self {
+        Self { root: data_dir.to_owned() }
+    }
+
     pub fn open(data_dir: &Path) -> io::Result<Self> {
         let store = Self { root: data_dir.to_owned() };
         std::fs::create_dir_all(store.root.join("blobs"))?;

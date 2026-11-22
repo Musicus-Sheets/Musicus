@@ -8,19 +8,23 @@
 //!   release order.
 //! * The database records what ran in the marker tables `musicus_meta`,
 //!   `musicus_updates` and `musicus_upgrades` (see [`runner`]).
-//! * Start: [`Program::check_build`], [`inspect`] (reads only; refuses outside the
-//!   window), then [`apply`]. `Db::open` runs the three in that order; a snapshot
-//!   before `apply` goes between them.
+//! * Start ([`start::run`], called by `Db::open`): [`Program::check_build`], the
+//!   restart guard ([`guard`]), [`inspect`] (reads only; refuses outside the
+//!   window), a snapshot if there is work ([`snapshot`]), then [`apply`]; on a
+//!   failure the snapshot is put back.
 
 pub mod file;
+pub mod guard;
 pub mod runner;
 pub mod schema;
+pub mod snapshot;
+pub mod start;
 pub mod window;
 
 pub use runner::{Plan, Report, apply, inspect};
 pub use window::{Line, Version};
 
-use std::{fmt, sync::OnceLock};
+use std::{fmt, path::PathBuf, sync::OnceLock};
 
 /// The previews that the development migrations 0001–0010 of the
 /// `sqlx::migrate!` time became (text unchanged, a-update-runner); a database
@@ -190,6 +194,24 @@ impl Program {
         Ok(())
     }
 
+    /// Identifies the program for the restart guard: its version and the
+    /// text of every update (a fixed update text is another program).
+    pub fn fingerprint(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(self.version.to_string());
+        for u in &self.updates {
+            for part in [u.name, u.kind.as_str(), u.sections.additive, u.sections.rebuild, u.sections.removal]
+                .into_iter()
+                .chain(u.sections.previews.iter().copied())
+            {
+                h.update((part.len() as u64).to_le_bytes());
+                h.update(part);
+            }
+        }
+        hex::encode(&h.finalize()[..16])
+    }
+
     /// Names this program knows: its updates and the previews merged into them.
     pub fn known(&self) -> Vec<&'static str> {
         let mut names: Vec<&'static str> = self
@@ -234,7 +256,49 @@ pub enum UpdateError {
         source: sqlx::Error,
     },
     Db(sqlx::Error),
+    /// Not enough free space for the snapshot; nothing was written.
+    NoSpace {
+        needed: u64,
+        available: u64,
+        dir: PathBuf,
+    },
+    /// Writing the snapshot failed; no update ran.
+    Snapshot {
+        dir: PathBuf,
+        error: String,
+    },
+    /// The same program failed to update this data before (restart guard).
+    Blocked {
+        note: Box<guard::Note>,
+        path: PathBuf,
+    },
+    /// An update failed and the snapshot was put back (R-OPS-020).
+    Restored {
+        cause: Box<UpdateError>,
+        note: Box<guard::Note>,
+        guard: PathBuf,
+    },
+    /// An update failed and putting the snapshot back failed too.
+    RestoreFailed {
+        cause: Box<UpdateError>,
+        snapshot: Option<PathBuf>,
+        error: String,
+    },
+    /// A file of the data directory could not be read or written.
+    Io(String),
 }
+
+fn mib(bytes: u64) -> String {
+    format!("{} MB", bytes.div_ceil(1 << 20))
+}
+
+/// `2026-11-22 14:30 UTC`.
+fn utc(unix: i64) -> String {
+    let s = snapshot::stamp(unix);
+    format!("{}-{}-{} {}:{} UTC", &s[0..4], &s[4..6], &s[6..8], &s[9..11], &s[11..13])
+}
+
+const RETRY: &str = "`musicus-server retry-update` (with Docker: `docker compose run --rm musicus retry-update`)";
 
 impl fmt::Display for UpdateError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -266,6 +330,79 @@ impl fmt::Display for UpdateError {
                 write!(f, "The database update {update} failed in its {part} part and was rolled back: {source}")
             }
             UpdateError::Db(e) => write!(f, "Reading the database version marker failed: {e}"),
+            UpdateError::NoSpace { needed, available, dir } => write!(
+                f,
+                "Not enough free disk space for the snapshot of the database before its updates: it needs about {} \
+                 in {}, but only {} are free. No update ran and nothing was changed. Free some space \
+                 (for example old backups or old files in that folder) and start again.",
+                mib(*needed),
+                dir.display(),
+                mib(*available)
+            ),
+            UpdateError::Snapshot { dir, error } => write!(
+                f,
+                "Writing the snapshot of the database before its updates to {} failed: {error}. \
+                 No update ran and nothing was changed.",
+                dir.display()
+            ),
+            UpdateError::Blocked { note, path } => {
+                write!(
+                    f,
+                    "Musicus {} does not start: its database update {} failed on {}",
+                    note.version,
+                    note.update,
+                    utc(note.at)
+                )?;
+                if let Some(s) = &note.snapshot {
+                    write!(f, " and the database was put back from the snapshot {s}")?;
+                }
+                write!(f, " (details in {}). ", path.display())?;
+                match &note.previous {
+                    Some(p) => write!(f, "Start the release that ran before, Musicus {p}, or a fixed release. ")?,
+                    None => write!(f, "Start a fixed release. ")?,
+                }
+                write!(f, "To let Musicus {} try again, run {RETRY} or delete {}.", note.version, path.display())
+            }
+            UpdateError::Restored { cause, note, guard } => {
+                write!(f, "{cause} ")?;
+                match &note.snapshot {
+                    Some(s) => write!(
+                        f,
+                        "The database was put back from the snapshot {s} taken just before, so the data is \
+                         unchanged"
+                    )?,
+                    None => write!(f, "There was no data yet; the next start begins with an empty database again")?,
+                }
+                if let Some(c) = &note.failed_copy {
+                    write!(f, " (the failed state is kept as {c} for diagnosis)")?;
+                }
+                write!(f, ". What to do: ")?;
+                if let Some(p) = &note.previous {
+                    write!(f, "start the release that ran before, Musicus {p}, again (with Docker: its image); ")?;
+                }
+                write!(
+                    f,
+                    "please report this problem with this message at {}/issues. Musicus {} will not try this \
+                     update again on this data; a fixed release will, or run {RETRY} (or delete {}) to let \
+                     Musicus {} try again.",
+                    musicus_api::SOURCE_URL,
+                    note.version,
+                    guard.display(),
+                    note.version
+                )
+            }
+            UpdateError::RestoreFailed { cause, snapshot: Some(s), error } => write!(
+                f,
+                "{cause} Putting back the snapshot {} failed as well: {error}. Do not start Musicus again; \
+                 run `musicus-server restore --from {}` and report this problem at {}/issues.",
+                s.display(),
+                s.display(),
+                musicus_api::SOURCE_URL
+            ),
+            UpdateError::RestoreFailed { cause, snapshot: None, error } => {
+                write!(f, "{cause} Setting the failed database aside failed as well: {error}.")
+            }
+            UpdateError::Io(e) => write!(f, "{e}"),
         }
     }
 }

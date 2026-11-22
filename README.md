@@ -113,6 +113,8 @@ docker compose --profile https up -d --build
 
 Backups while running: `docker compose exec musicus musicus-server backup --to
 /data/backup-$(date +%F).sqlite`, then copy the volume's `blobs/` directory.
+To restore: `docker compose stop musicus`, then
+`docker compose run --rm musicus restore --from /data/backup-….sqlite`.
 The image has a health check (`musicus-server healthcheck`, which calls
 `GET /api/health`). For a Raspberry Pi, build on the Pi or use
 `docker buildx build --platform linux/arm64`. The first build takes a while,
@@ -152,6 +154,10 @@ Log levels follow `RUST_LOG` (default `info`).
 - **Backups:** `musicus-server backup --data-dir data --to backup.sqlite`
   writes a consistent copy while the server runs. Then back up `data/blobs/`.
   Files there are immutable, so incremental tools (restic, rsync) work well.
+  `musicus-server restore --data-dir data --from backup.sqlite` (server
+  stopped) puts a backup back. Before database updates Musicus keeps a
+  snapshot in `data/snapshots/` and restores it by itself if an update fails.
+  Backups and snapshots are unencrypted: store them as safely as the server.
 - **Resources:** the release binary idles at about 11 MB RSS. The prototypes
   served 120 simultaneous downloads of a 3 MB part on one core in 0.2 s; the
   rehearsal-room Wi-Fi is the real limit, which is why the client downloads

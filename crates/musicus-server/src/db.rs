@@ -14,16 +14,24 @@ pub struct Db {
 
 impl Db {
     /// Opens (or creates) the database file and brings it to this program's
-    /// version (a-update-runner): refuses a release build with previews, reads
-    /// the version marker (refusing a database outside the downgrade window
-    /// without writing anything, R-OPS-015), then runs the planned parts.
+    /// version (a-update-runner, [`updates::start::run`]): refuses a release
+    /// build with previews or a start that failed before (restart guard),
+    /// reads the version marker (refusing a database outside the downgrade
+    /// window without writing anything, R-OPS-015), writes a snapshot if there
+    /// is work (R-OPS-019), then runs the planned parts and puts the snapshot
+    /// back if one fails (R-OPS-020).
     pub async fn open(path: &Path, readers: u32) -> Result<(Self, updates::Report), updates::UpdateError> {
-        let program = updates::Program::builtin()?;
-        program.check_build()?;
-        let write = Self::writer(path).await?;
-        let plan = updates::inspect(&write, program, now()).await?;
-        // A snapshot of the database before the updates goes here (R-OPS-019, when `plan.has_work()`).
-        let report = updates::apply(&write, program, &plan, now()).await?;
+        Self::open_with(path, readers, updates::Program::builtin()?, &updates::start::Options::default()).await
+    }
+
+    /// [`Db::open`] with another set of updates, time or free-space source (tests).
+    pub async fn open_with(
+        path: &Path,
+        readers: u32,
+        program: &updates::Program,
+        opts: &updates::start::Options,
+    ) -> Result<(Self, updates::Report), updates::UpdateError> {
+        let (write, report) = updates::start::run(path, program, opts).await?;
         let read = Self::readers(path, readers).await?;
         Ok((Self { read, write }, report))
     }
@@ -47,10 +55,11 @@ impl Db {
         SqlitePoolOptions::new().max_connections(readers.max(1)).connect_with(Self::options(path).read_only(true)).await
     }
 
-    /// Writes a consistent copy of the database while the server may run.
-    pub async fn backup_to(&self, target: &Path) -> Result<(), sqlx::Error> {
-        sqlx::query("VACUUM INTO ?1").bind(target.to_string_lossy().into_owned()).execute(&self.write).await?;
-        Ok(())
+    /// One read-only connection that changes nothing in the file: no journal
+    /// mode, no updates, no new file (`backup`, `restore`; R-OPS-021).
+    pub async fn read_only(path: &Path) -> Result<SqlitePool, sqlx::Error> {
+        let opts = SqliteConnectOptions::new().filename(path).read_only(true).busy_timeout(Duration::from_secs(5));
+        SqlitePoolOptions::new().max_connections(1).connect_with(opts).await
     }
 }
 

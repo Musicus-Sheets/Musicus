@@ -58,13 +58,20 @@ pub struct Plan {
     /// derived data is rebuilt (search index).
     pub other_ran_last: bool,
     oldest_allowed: Option<Version>,
+    /// `last_version` as stored (the release that ran before), if any.
+    pub last_version: Option<String>,
 }
 
 impl Plan {
     /// True if the start changes more than the marker's `last_*` keys: the
-    /// moment to write a snapshot first (R-OPS-019, PR D).
+    /// moment to write a snapshot first (R-OPS-019).
     pub fn has_work(&self) -> bool {
         !self.steps.is_empty() || matches!(self.start, Start::Legacy(_))
+    }
+
+    /// An empty database: it gets every update, with nothing to keep a snapshot of.
+    pub fn is_fresh(&self) -> bool {
+        self.start == Start::Fresh
     }
 
     /// One line per step, for the log.
@@ -93,6 +100,8 @@ pub struct Report {
     pub upgraded_from: Option<String>,
     pub ignored: Vec<String>,
     pub other_ran_last: bool,
+    /// The snapshot written before the updates (set by [`super::start::run`]).
+    pub snapshot: Option<std::path::PathBuf>,
 }
 
 struct Applied {
@@ -253,7 +262,8 @@ pub async fn inspect(pool: &SqlitePool, program: &Program, now: i64) -> Result<P
     let mut steps = rebuilds;
     steps.extend(additions);
     steps.extend(removals);
-    Ok(Plan { start, steps, upgrade_from, ignored, other_ran_last, oldest_allowed })
+    let last_version = marker.last_version;
+    Ok(Plan { start, steps, upgrade_from, ignored, other_ran_last, oldest_allowed, last_version })
 }
 
 impl Marker {
@@ -399,6 +409,7 @@ pub async fn apply(pool: &SqlitePool, program: &Program, plan: &Plan, now: i64) 
         upgraded_from: plan.upgrade_from.clone(),
         ignored: plan.ignored.clone(),
         other_ran_last: plan.other_ran_last,
+        snapshot: None,
     })
 }
 

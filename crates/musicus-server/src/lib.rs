@@ -7,6 +7,7 @@
 
 pub mod access;
 pub mod auth;
+pub mod backup;
 pub mod blobs;
 pub mod cache;
 pub mod config;
@@ -63,4 +64,27 @@ pub async fn bootstrap_admin(app: &state::App) -> anyhow_like::Result<Option<Str
 pub mod anyhow_like {
     pub type Error = Box<dyn std::error::Error + Send + Sync>;
     pub type Result<T> = std::result::Result<T, Error>;
+
+    /// A message for the administrator; `main` prints errors with `{:?}`,
+    /// and this prints the text without quotes.
+    pub struct Plain(pub String);
+
+    impl std::fmt::Display for Plain {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+
+    impl std::fmt::Debug for Plain {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+
+    impl std::error::Error for Plain {}
+
+    /// For `map_err`: a `String` error as a [`Plain`] message.
+    pub fn plain(text: String) -> Error {
+        Box::new(Plain(text))
+    }
 }
