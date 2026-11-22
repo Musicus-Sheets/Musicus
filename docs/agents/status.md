@@ -103,6 +103,9 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
   `Db::open` has the slot for the snapshot between `inspect` and `apply`.
 - No automatic snapshot, no `restore` command (manual copy in the user guide), no `/api/version`, no About view.
 - `compose.yaml` builds locally (`build: .`, `musicus:latest`); no published image (R-OPS-010, R-OPS-028).
+- Requirements referencing the schema snapshot once PR E adds it (`schema.sql`): table-related requirements
+  (R-LIB-002/003/004/015/016, R-PERF-005, R-I18N-006) then get it in `implemented_by`; update files may not be referenced
+  (`validate.py`).
 - No database check, `db-change` notice or release check in CI, no schema snapshot (`schema.sql`,
   `scripts/db-schema.sh`) — all come with phase 0 (a-db-check, R-OPS-038…040), not earlier.
 - Patches writing new kinds of stored values (R-OPS-041) are not caught by any check; only the planned test matrix,

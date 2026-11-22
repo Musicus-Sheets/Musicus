@@ -122,7 +122,10 @@ Keep `RELEASING.md` in step when one of these is built.
 ### Add/modify a requirement-driven feature
 1. Read the requirement + its links (`refines`, `depends_on`, `constrains`, `conflicts_with`) in `docs/requirements`.
 2. Implement; add tests.
-3. In `docs/requirements` (submodule): set `status` (`implemented`/`verified`), add `implemented_by`/`verified_by`; new behaviour ⇒ new requirement file (next free number in the area; `refines` a feature); `uv run tools/validate.py`; commit in the submodule, push it, then commit the pointer in the main repo.
+3. In `docs/requirements` (submodule): set `status` (`implemented`/`verified`), add `implemented_by`/`verified_by`
+   (code and tests; never database update files under `crates/musicus-server/migrations/` except `releases.txt` —
+   previews are merged and deleted at a release, `validate.py` rejects them; table-related requirements will reference
+   the schema snapshot `crates/musicus-server/schema.sql` once it exists, a-db-check); new behaviour ⇒ new requirement file (next free number in the area; `refines` a feature); `uv run tools/validate.py`; commit in the submodule, push it, then commit the pointer in the main repo.
 4. Update `docs/agents/*` (this folder) and run `check.py`.
 
 ### Change a design decision
