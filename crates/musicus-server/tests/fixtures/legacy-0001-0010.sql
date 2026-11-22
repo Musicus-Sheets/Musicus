@@ -1,7 +1,7 @@
 -- Test fixture: a development database of the sqlx::migrate! time, i.e. the
 -- migrations 0001-0010 as they were applied (verbatim) plus sqlx's bookkeeping
 -- table. Used by tests/updates.rs to check that such databases are recognised
--- as having the 1.0.0 baseline and that the baseline gives the same schema.
+-- as having the previews 0001-0010 and that the previews give the same schema.
 -- Never applied by the program; do not edit.
 
 -- ===== 0001_init.sql

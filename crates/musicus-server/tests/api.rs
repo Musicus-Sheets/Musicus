@@ -929,25 +929,25 @@ async fn parts_with_several_voices() {
     assert_eq!(left, 0);
 }
 
-/// A development database of the `sqlx::migrate!` time: the development
-/// migrations (verbatim in `tests/fixtures/legacy-0001-0010.sql`) before
-/// `before` are applied, then `data`, then the rest with sqlx's bookkeeping.
-/// The update runner then recognises it as having the 1.0.0 baseline
-/// (a-update-runner); these tests keep the data conversions of the old
-/// migrations verified on such databases.
+/// A database that applied the previews before `before` (the development
+/// migrations of the sqlx time, `migrations/preview/`), then `data`; the test
+/// then opens it with the full program, which applies the remaining previews.
+/// Keeps the data conversions of 0002 and 0009 verified.
 async fn legacy_database(path: &std::path::Path, before: &str, data: &'static str) {
-    let fixture = include_str!("fixtures/legacy-0001-0010.sql");
-    let opts = sqlx::sqlite::SqliteConnectOptions::new().filename(path).create_if_missing(true).foreign_keys(true);
-    let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
-    let mut data = Some(data);
-    for chunk in fixture.split("\n-- ===== ").skip(1) {
-        if chunk.as_bytes()[..4] >= *before.as_bytes()
-            && let Some(d) = data.take()
-        {
-            sqlx::raw_sql(d).execute(&pool).await.unwrap();
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations/preview");
+    let old = tempfile::tempdir().unwrap();
+    std::fs::create_dir(old.path().join("preview")).unwrap();
+    for f in std::fs::read_dir(&src).unwrap() {
+        let f = f.unwrap();
+        if *f.file_name().to_string_lossy() < *before {
+            std::fs::copy(f.path(), old.path().join("preview").join(f.file_name())).unwrap();
         }
-        sqlx::raw_sql(sqlx::AssertSqlSafe(format!("-- {chunk}"))).execute(&pool).await.unwrap();
     }
+    let program = musicus_server::updates::Program::from_dir(old.path(), env!("CARGO_PKG_VERSION"), false).unwrap();
+    let pool = musicus_server::db::Db::writer(path).await.unwrap();
+    let plan = musicus_server::updates::inspect(&pool, &program, 0).await.unwrap();
+    musicus_server::updates::apply(&pool, &program, &plan, 0).await.unwrap();
+    sqlx::raw_sql(data).execute(&pool).await.unwrap();
     pool.close().await;
 }
 

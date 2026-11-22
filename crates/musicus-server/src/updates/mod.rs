@@ -21,9 +21,21 @@ pub use window::{Line, Version};
 
 use std::{fmt, sync::OnceLock};
 
-/// The update that the 1.0.0 release starts from (it replaced the development
-/// migrations 0001–0010, a-update-runner).
-pub const BASELINE: &str = "1.0.0";
+/// The previews that the development migrations 0001–0010 of the
+/// `sqlx::migrate!` time became (text unchanged, a-update-runner); a database
+/// that applied sqlx migrations 1..k is recorded once as having the first k.
+pub const LEGACY_PREVIEWS: [&str; 10] = [
+    "0001-init",
+    "0002-part-names",
+    "0003-system-layouts",
+    "0004-layout-corrections",
+    "0005-part-voices",
+    "0006-archive-number",
+    "0007-import",
+    "0008-import-file-problem",
+    "0009-i18n-names",
+    "0010-german-key-spellings",
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -287,9 +299,13 @@ mod tests {
     #[test]
     fn builtin_updates_are_valid() {
         let p = Program::builtin().unwrap();
-        assert_eq!(p.updates[0].name, BASELINE, "the baseline comes first");
-        assert!(p.updates.iter().all(|u| u.kind == Kind::Preview || u.release >= p.updates[0].release));
-        p.check_build().unwrap();
+        // Until a release merges them, the development migrations are previews.
+        for name in LEGACY_PREVIEWS {
+            assert!(p.known().contains(&name), "{name} is a preview or merged into a release update");
+        }
+        if p.updates.iter().all(|u| u.kind == Kind::Release) {
+            p.check_build().unwrap();
+        }
     }
 
     #[test]

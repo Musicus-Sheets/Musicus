@@ -348,7 +348,7 @@ fn release_script_refuses_mistakes() {
     assert!(release_script(src.path(), "1.2.0").unwrap().status.success());
     assert!(!src.path().join("1.2.0.sql").exists());
     assert_eq!(std::fs::read_to_string(src.path().join("releases.txt")).unwrap(), "1.0\n1.1\n1.2\n");
-    // Previews merged before the first release go into the unreleased baseline.
+    // An existing, unreleased update file gets the previews appended.
     let first = tempfile::tempdir().unwrap();
     write(first.path(), &[("releases.txt", "# none yet\n"), ("1.0.0.sql", BASE), ("preview/0001-c.sql", P1)]);
     assert!(release_script(first.path(), "1.0.0").unwrap().status.success());
@@ -358,6 +358,49 @@ fn release_script_refuses_mistakes() {
         "{base}"
     );
     Program::from_dir(first.path(), "1.0.0", true).unwrap().check_build().unwrap();
+}
+
+/// The Python tests of the merge script and its simplifications (`scripts/test_release_migrations.py`).
+#[test]
+fn release_script_unit_tests() {
+    let script = repo().join("scripts/test_release_migrations.py");
+    let Some(out) =
+        ["python3", "python"].iter().find_map(|py| std::process::Command::new(py).arg(&script).output().ok())
+    else {
+        eprintln!("no Python: release script not tested");
+        return;
+    };
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
+/// The release script on the real previews (as for 1.0.0): the merged, simplified update gives
+/// the schema of the previews, and a database that applied them records it without running it.
+#[tokio::test]
+async fn merging_the_development_previews_keeps_the_schema() {
+    let src = tempfile::tempdir().unwrap();
+    let migrations = Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations");
+    std::fs::copy(migrations.join("releases.txt"), src.path().join("releases.txt")).unwrap();
+    std::fs::create_dir(src.path().join("preview")).unwrap();
+    for f in std::fs::read_dir(migrations.join("preview")).unwrap() {
+        let f = f.unwrap();
+        std::fs::copy(f.path(), src.path().join("preview").join(f.file_name())).unwrap();
+    }
+    let Some(out) = release_script(src.path(), "1.0.0") else { return };
+    let log = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(log.contains("simplified (fold-add: column `reader_mode` into CREATE TABLE `users`)"), "{log}");
+    assert!(log.contains("verified:"), "{log}");
+    let release = Program::from_dir(src.path(), "1.0.0", true).unwrap();
+    release.check_build().unwrap();
+
+    let dev_dir = tempfile::tempdir().unwrap();
+    let (dev, _) = Db::open(&dev_dir.path().join("musicus.sqlite"), 1).await.unwrap();
+    let fresh_dir = tempfile::tempdir().unwrap();
+    let fresh = pool(fresh_dir.path()).await;
+    assert_eq!(start(&fresh, &release, 0).await.unwrap().steps, ["1.0.0 additive part"]);
+    assert_eq!(schema(&fresh).await, schema(&dev.read).await);
+    let r = start(&dev.write, &release, 0).await.unwrap();
+    assert_eq!(r.steps, ["1.0.0 recorded from its previews"]);
 }
 
 /// The SQL of every schema object, without comments, quotes and layout.
@@ -389,29 +432,38 @@ async fn schema(pool: &SqlitePool) -> Vec<(String, String, String)> {
 }
 
 /// Development databases of the `sqlx::migrate!` time (0001–0010 applied)
-/// are recorded once as having the baseline; the baseline gives exactly
-/// their schema; the data stays.
+/// are recorded once as having the previews 0001–0010; the previews (fresh
+/// database) give exactly the schema of the sqlx migrations (only 0009 lost
+/// its own PRAGMA/BEGIN/COMMIT); the data stays.
 #[tokio::test]
-async fn baseline_equals_the_development_migrations() {
+async fn previews_give_the_schema_of_the_sqlx_migrations() {
     let legacy_dir = tempfile::tempdir().unwrap();
     let legacy = pool(legacy_dir.path()).await;
     sqlx::raw_sql(include_str!("fixtures/legacy-0001-0010.sql")).execute(&legacy).await.unwrap();
     sqlx::query("INSERT INTO groups (name) VALUES ('Trumpets')").execute(&legacy).await.unwrap();
     legacy.close().await;
     let (db, report) = Db::open(&legacy_dir.path().join("musicus.sqlite"), 2).await.unwrap();
-    assert_eq!(report.steps, ["recognised development migrations 0001-0010 as update 1.0.0"]);
+    assert_eq!(report.steps.len(), 1, "{:?}", report.steps);
+    assert!(
+        report.steps[0].starts_with("recognised sqlx migrations 1-10 as the previews 0001-init, "),
+        "{:?}",
+        report.steps
+    );
     assert!(report.other_ran_last, "derived data is rebuilt");
     let groups: Vec<String> = sqlx::query_scalar("SELECT name FROM groups").fetch_all(&db.read).await.unwrap();
     assert_eq!(groups, ["Trumpets"]);
-    let applied_by: String = sqlx::query_scalar("SELECT applied_by FROM musicus_updates WHERE name = '1.0.0'")
-        .fetch_one(&db.read)
-        .await
-        .unwrap();
-    assert_eq!(applied_by, "sqlx migrations 0001-0010");
+    let rows: Vec<(String, String, String)> =
+        sqlx::query_as("SELECT name, kind, applied_by FROM musicus_updates ORDER BY name")
+            .fetch_all(&db.read)
+            .await
+            .unwrap();
+    assert_eq!(rows.len(), 10);
+    assert_eq!(rows[9], ("0010-german-key-spellings".into(), "preview".into(), "sqlx migration 10".into()));
 
     let fresh_dir = tempfile::tempdir().unwrap();
     let (fresh, report) = Db::open(&fresh_dir.path().join("musicus.sqlite"), 2).await.unwrap();
-    assert_eq!(report.steps, ["1.0.0 additive part"]);
+    assert_eq!(report.steps.len(), 10);
+    assert_eq!(report.steps[0], "0001-init additive part");
     let (want, got) = (schema(&db.read).await, schema(&fresh.read).await);
     assert!(want.len() > 40, "{want:?}");
     for (w, g) in want.iter().zip(&got) {
@@ -425,19 +477,32 @@ async fn baseline_equals_the_development_migrations() {
     assert!(report.steps.is_empty() && !report.other_ran_last);
 }
 
+/// A database that applied only sqlx migrations 1–8 gets previews 0009 and 0010.
+#[tokio::test]
+async fn an_older_development_database_gets_the_remaining_previews() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = pool(dir.path()).await;
+    let fixture = include_str!("fixtures/legacy-0001-0010.sql");
+    let upto = fixture.find("\n-- ===== 0009_").unwrap();
+    let bookkeeping = &fixture[fixture.find("\n-- ===== sqlx").unwrap()..];
+    sqlx::raw_sql(sqlx::AssertSqlSafe(format!("{}\n{bookkeeping}", &fixture[..upto]))).execute(&db).await.unwrap();
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version > 8").execute(&db).await.unwrap();
+    db.close().await;
+    let (_, report) = Db::open(&dir.path().join("musicus.sqlite"), 1).await.unwrap();
+    assert_eq!(report.steps[1..], ["0009-i18n-names additive part", "0010-german-key-spellings additive part"]);
+    assert!(report.steps[0].starts_with("recognised sqlx migrations 1-8 "), "{:?}", report.steps);
+}
+
 #[tokio::test]
 async fn unclear_and_foreign_databases_are_refused() {
     // Development migrations other than exactly 0001–0010.
     let dir = tempfile::tempdir().unwrap();
     let db = pool(dir.path()).await;
     sqlx::raw_sql(include_str!("fixtures/legacy-0001-0010.sql")).execute(&db).await.unwrap();
-    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 10").execute(&db).await.unwrap();
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 5").execute(&db).await.unwrap();
     db.close().await;
     let Err(err) = Db::open(&dir.path().join("musicus.sqlite"), 1).await else { panic!("opened") };
-    assert!(
-        err.to_string().contains("not exactly 0001-0010") && err.to_string().contains("fresh demo database"),
-        "{err}"
-    );
+    assert!(err.to_string().contains("not a gapless") && err.to_string().contains("fresh demo database"), "{err}");
     // Tables, but nothing of Musicus.
     let dir = tempfile::tempdir().unwrap();
     let db = pool(dir.path()).await;

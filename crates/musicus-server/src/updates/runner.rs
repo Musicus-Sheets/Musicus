@@ -15,7 +15,7 @@
 //!   version than the one that ran last; source of rule (b) of the window.
 
 use super::{
-    BASELINE, Kind, Program, Update, UpdateError,
+    Kind, LEGACY_PREVIEWS, Program, Update, UpdateError,
     file::is_empty,
     window::{Upgrade, Version, Window},
 };
@@ -29,9 +29,9 @@ pub const MARKER_FORMAT: u32 = 1;
 enum Start {
     /// No tables at all: everything runs.
     Fresh,
-    /// A development database of the `sqlx::migrate!` time with 0001–0010
-    /// applied: recorded once as having the baseline.
-    Legacy,
+    /// A development database of the `sqlx::migrate!` time with migrations
+    /// 1..k applied: recorded once as having the previews 0001..k.
+    Legacy(usize),
     Marked,
 }
 
@@ -64,14 +64,14 @@ impl Plan {
     /// True if the start changes more than the marker's `last_*` keys: the
     /// moment to write a snapshot first (R-OPS-019, PR D).
     pub fn has_work(&self) -> bool {
-        !self.steps.is_empty() || self.start == Start::Legacy
+        !self.steps.is_empty() || matches!(self.start, Start::Legacy(_))
     }
 
     /// One line per step, for the log.
     pub fn describe(&self, program: &Program) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
-        if self.start == Start::Legacy {
-            out.push(format!("recognised development migrations 0001-0010 as update {BASELINE}"));
+        if let Start::Legacy(k) = self.start {
+            out.push(format!("recognised sqlx migrations 1-{k} as the previews {}", LEGACY_PREVIEWS[..k].join(", ")));
         }
         for s in &self.steps {
             let (what, i) = match *s {
@@ -121,18 +121,17 @@ pub async fn inspect(pool: &SqlitePool, program: &Program, now: i64) -> Result<P
     let (start, marker) = if has("musicus_meta") {
         (Start::Marked, read_marker(&mut conn).await?)
     } else if has("_sqlx_migrations") {
-        check_legacy(&mut conn).await?;
-        let mut applied = HashMap::new();
-        applied.insert(BASELINE.to_owned(), Applied { kind: "release".into(), previews: vec![], removed: false });
-        (Start::Legacy, Marker { applied, ..Marker::empty() })
+        let k = check_legacy(&mut conn).await?;
+        let applied = LEGACY_PREVIEWS[..k]
+            .iter()
+            .map(|n| (n.to_string(), Applied { kind: "preview".into(), previews: vec![], removed: false }))
+            .collect();
+        (Start::Legacy(k), Marker { applied, ..Marker::empty() })
     } else if tables.is_empty() {
         (Start::Fresh, Marker::empty())
     } else {
         return Err(UpdateError::Unrecognised);
     };
-    if start != Start::Fresh && program.updates.first().is_none_or(|u| u.name != BASELINE) {
-        return Err(UpdateError::Invalid(format!("the first update must be the baseline {BASELINE}")));
-    }
 
     let own = program.version;
     if let Some(oldest) = marker.oldest_allowed
@@ -237,7 +236,7 @@ pub async fn inspect(pool: &SqlitePool, program: &Program, now: i64) -> Result<P
 
     let mut own_known: Vec<&str> = known.iter().copied().collect();
     own_known.sort_unstable();
-    let other_ran_last = start == Start::Legacy
+    let other_ran_last = matches!(start, Start::Legacy(_))
         || upgrade_from.is_some()
         || marker.last_updates.as_ref().is_some_and(|l| {
             let mut l: Vec<&str> = l.iter().map(String::as_str).collect();
@@ -300,18 +299,21 @@ async fn read_marker(conn: &mut SqliteConnection) -> Result<Marker, UpdateError>
     })
 }
 
-/// The development migrations 0001–0010 of the `sqlx::migrate!` time, all
-/// applied successfully, nothing else: the schema of the baseline.
-async fn check_legacy(conn: &mut SqliteConnection) -> Result<(), UpdateError> {
+/// The development migrations of the `sqlx::migrate!` time, all
+/// applied successfully, as a gapless prefix 1..k: their number k.
+async fn check_legacy(conn: &mut SqliteConnection) -> Result<usize, UpdateError> {
     let rows: Vec<(i64, bool)> =
         sqlx::query_as("SELECT version, success FROM _sqlx_migrations ORDER BY version").fetch_all(&mut *conn).await?;
-    if rows.iter().map(|(v, ok)| (*v, *ok)).eq((1..=10).map(|v| (v, true))) {
-        return Ok(());
+    let k = rows.len();
+    if (1..=LEGACY_PREVIEWS.len()).contains(&k)
+        && rows.iter().map(|(v, ok)| (*v, *ok)).eq((1..=k as i64).map(|v| (v, true)))
+    {
+        return Ok(k);
     }
     let list: Vec<String> =
         rows.iter().map(|(v, ok)| format!("{v:04}{}", if *ok { "" } else { " (failed)" })).collect();
     Err(UpdateError::Unclear(format!(
-        "it applied the development migrations [{}], not exactly 0001-0010",
+        "it applied the sqlx migrations [{}], not a gapless, successful 0001-0010 or a beginning of it",
         list.join(", ")
     )))
 }
@@ -352,16 +354,18 @@ pub async fn apply(pool: &SqlitePool, program: &Program, plan: &Plan, now: i64) 
     {
         let mut tx = conn.begin().await?;
         sqlx::raw_sql(CREATE_MARKER).execute(&mut *tx).await?;
-        if plan.start == Start::Legacy {
-            sqlx::query(INSERT_UPDATE)
-                .bind(BASELINE)
-                .bind(Kind::Release.as_str())
-                .bind(BASELINE)
-                .bind(now)
-                .bind("[]")
-                .bind("sqlx migrations 0001-0010")
-                .execute(&mut *tx)
-                .await?;
+        if let Start::Legacy(k) = plan.start {
+            for (i, name) in LEGACY_PREVIEWS[..k].iter().enumerate() {
+                sqlx::query(INSERT_UPDATE)
+                    .bind(*name)
+                    .bind(Kind::Preview.as_str())
+                    .bind(&own)
+                    .bind(now)
+                    .bind("[]")
+                    .bind(format!("sqlx migration {}", i + 1))
+                    .execute(&mut *tx)
+                    .await?;
+            }
         }
         tx.commit().await?;
     }
