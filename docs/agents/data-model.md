@@ -1,8 +1,8 @@
-# Data model (SQLite, `crates/musicus-server/migrations/1.0.0.sql` = baseline, plus later release updates and `migrations/preview/*.sql`)
+# Data model (SQLite; before 1.0: the previews `crates/musicus-server/migrations/preview/0001-init.sql` … `0010-german-key-spellings.sql`)
 
 Times = Unix seconds (`db::now()`); dates = `YYYY-MM-DD` text; booleans = INTEGER 0/1; JSON arrays as TEXT.
 Database updates: applied at start by the own update runner (`crates/musicus-server/src/updates/`, R-OPS-004, a-update-runner). A schema change is a new *preview* `migrations/preview/NNNN-<topic>.sql` with sections `-- @additive` / `-- @rebuild` / `-- @removal` (format in `updates/file.rs`); a merged preview or a released update is NEVER edited (correction = new preview); the release merges previews into `migrations/X.Y.0.sql` (`scripts/release-migrations.py`). Update this file in the same commit.
-The baseline 1.0.0 replaced the development migrations 0001–0010 (same schema; databases that applied them are recognised once). The sections "Migration 0002/0005/0009/0010" below describe what those development migrations did to data of the development time; their text is kept verbatim only in `tests/fixtures/legacy-0001-0010.sql`.
+Before 1.0 there is no release update file: the development migrations 0001–0010 of the sqlx time are the previews 0001–0010 (text unchanged, inside `-- @additive`; destructive steps there are acceptable because development databases have no downgrade guarantee). Databases that applied sqlx migrations 1..k are recognised once as having the previews 0001..k. The release of 1.0.0 merges them into `migrations/1.0.0.sql` and the maintainer simplifies that by hand to the final schema (`RELEASING.md`). The table notes "(0003)", "(0006)" etc. name the preview that added a column.
 
 ## Tables
 
@@ -59,11 +59,11 @@ Development databases of the `sqlx::migrate!` time keep their `_sqlx_migrations`
 ```
 Bind `?1` = user id, `?2` = `access::librarian_flag(user)`; further params start at `?3`. Resolves via PK lookups (PK orders chosen for this) — R-PERF-005.
 
-## Development migration 0002 (part names; history, in the baseline)
+## Preview 0002 (part names)
 
 Existing `label` ⇒ custom name (blank ⇒ NULL); numeric `voice` ⇒ text; `transposition`: blank ⇒ NULL, unambiguous spellings (case-insensitive, optional `in ` prefix: bb/b♭/b-flat/b flat/bflat, eb/…/es, ab/…/as, db/…/des, gb/…/ges, f, c, a, d, g, e, h/b♮/b natural) ⇒ code; everything else (e.g. `B`, ambiguous German/English, or `Es/F`) unchanged and kept on update. Mirrors `naming::parse_key`; test `migration_0002_keeps_old_parts` (R-LIB-012).
 
-## Development migration 0005 (voices; history)
+## Preview 0005 (voices)
 
 `part_voices` created; each non-blank `parts.voice` becomes the only entry (position 0, trimmed, not split: "1+2" stays one voice; nothing was released, so no conversion); `parts.voice` dropped; `part_fts` emptied so the start-up rebuild re-indexes all parts. Test `migration_0002_keeps_old_parts` runs through it (voices `["2"]`, `[]`).
 
@@ -75,15 +75,15 @@ Delete score ⇒ parts ⇒ part_files, part_instruments, part_voices, annotation
 
 `<data>/musicus.sqlite` (+ `-wal`, `-shm`), `<data>/blobs/ab/<sha256>`, `<data>/tmp/` (upload temp files, emptied on start). Backup order: `musicus-server backup` first, then copy `blobs/` (blobs only ever added ⇒ consistent).
 
-## Development migration 0009 (names in the UI language, a-client-part-names; history)
+## Preview 0009 (names in the UI language, a-client-part-names)
 
-`-- no-transaction` at the top: the file runs `PRAGMA foreign_keys = OFF; BEGIN; … COMMIT; PRAGMA foreign_keys = ON;`
-itself, because SQLite cannot drop `NOT NULL` in place and dropping the old `annotation_sets` with foreign keys on
-would cascade into `annotation_pages`. New table with nullable `name`, copy (exactly "My annotations" ⇒ NULL), drop,
+Relies on the runner turning foreign keys off around the part (as sqlx time: its own `PRAGMA … BEGIN … COMMIT`, removed
+in the preview), because SQLite cannot drop `NOT NULL` in place and dropping the old `annotation_sets` with foreign keys
+on would cascade into `annotation_pages`. New table with nullable `name`, copy (exactly "My annotations" ⇒ NULL), drop,
 rename, `annotation_sets_unnamed` partial unique index, `DELETE FROM part_fts` (rebuilt by
 `part_index::rebuild_if_needed` with the component text). Test `migration_0009_unnames_default_sets_and_keeps_their_pages`.
 
-## Development migration 0010 (German key spellings, R-I18N-007; history)
+## Preview 0010 (German key spellings, R-I18N-007)
 
 `DELETE FROM part_fts` only: German ships, so `KEY_SPELLINGS` gains B, Es, As, Des, Ges (H is the code itself); the
 index of existing installations is rebuilt on start by `part_index::rebuild_if_needed`.

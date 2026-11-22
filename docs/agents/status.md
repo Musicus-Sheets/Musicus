@@ -90,11 +90,13 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 ## Updates, downgrades and platforms (planned; `docs/technical/chapters/14-updates.typ`)
 
 - No release, no tag, version 0.1.0. The own update runner (a-update-runner) replaced `sqlx::migrate!`: the
-  development migrations `0001`–`0010` became the baseline `migrations/1.0.0.sql` (unreleased until `1.0` is listed in
-  `migrations/releases.txt`); development databases that applied them are recognised once. Open points of the runner:
+  development migrations `0001`–`0010` are the previews `migrations/preview/0001-…`–`0010-…`; development databases
+  that applied them (or a beginning of them) are recognised once. **Open for the 1.0.0 release (manual, `RELEASING.md`):**
+  after `scripts/release-migrations.py 1.0.0` simplify `migrations/1.0.0.sql` by hand to the final schema (the script's
+  automatic simplification covers only safe folds), keep its `-- @previews:` line, and check it against the appended
+  version. Open points of the runner:
   derived data after another program ran = only the part search index (system layouts not re-checked); a due removal
-  runs only at a start; unparsable stored versions block removals; the program version (0.1.0) is older than the
-  baseline's name (1.0.0) until the release sets it; nothing checks yet that a release build's line is in
+  runs only at a start; unparsable stored versions block removals; the program version stays 0.1.0 until the release sets it; nothing checks yet that a release build's line is in
   `releases.txt` (release check, a-db-check). Verified only on temporary databases with test programs
   (`tests/updates.rs`); the upgrade/downgrade matrix with real release binaries comes with the second release.
 - `backup` applies pending updates before copying (`main.rs` → `open_state` → `Db::open`), contrary to R-OPS-021;

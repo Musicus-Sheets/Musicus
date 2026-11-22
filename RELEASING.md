@@ -33,20 +33,42 @@ release.
 
    It merges every `migrations/preview/*.sql` (in name order) into `migrations/X.Y.0.sql`, with the header
    line `-- @previews: …` listing them, deletes the preview files and appends the line `X.Y` to
-   `migrations/releases.txt` (the release order the downgrade window is counted on). For 1.0.0 it appends to
-   the not yet released baseline `migrations/1.0.0.sql`. A minor without previews only gets its line in
-   `releases.txt` (no update file). It changes nothing and exits with a message when the release is a patch
-   but previews exist, when the line is already released, or when the version is older than the last release.
+   `migrations/releases.txt` (the release order the downgrade window is counted on). A minor without previews
+   only gets its line in `releases.txt` (no update file). It changes nothing and exits with a message when the
+   release is a patch but previews exist, when the line is already released, or when the version is older
+   than the last release.
+
+   The previews are first appended in order; that version is the reference. Then the script tries safe
+   simplifications (an `ADD COLUMN` or `RENAME COLUMN` folded into a `CREATE TABLE` of the same cycle; a
+   table, index, trigger, view or column created and dropped again disappears) where no data step lies in
+   between, and keeps them only if the simplified update gives the same schema and rows as the appended one
+   (empty database plus the earlier release updates). Pass `--fixture <db>` with a database of the previous
+   release holding test data to compare its rows too (fixtures per release are planned for phase 2). The
+   output lists each simplification and the verification result; if they diverge it says where and writes
+   the appended version. `--no-simplify` skips the attempt.
 4. Review the merged update section by section:
    - `-- @additive`: only new tables, nullable/defaulted columns, indexes and copies — nothing dropped.
    - `-- @rebuild`: refills the new structures from the old ones (runs after an older release used the data).
    - `-- @removal`: drops and destructive rewrites; runs later, by itself, once no release in the window needs
      the old structures. Restrictions of access must take the restricted item away from older releases
      (R-OPS-017).
-5. Run every check of `AGENTS.md` § Commands, plus `cargo test` (it also tests the merge script and the
+5. **Only for 1.0.0:** the merged `migrations/1.0.0.sql` contains the whole development history (the
+   development migrations 0001–0010 and later previews), only partly simplified by the script. Simplify it by
+   hand to the final schema:
+   - start from the schema of a fresh database with all previews (`sqlite3 data/musicus.sqlite .schema`
+     after starting the program before the merge on an empty data directory), keep the tables' column order,
+     the comments worth keeping, `-- @previews:` (unchanged) and the section markers;
+   - check it against the appended version: keep the script's output as `appended.sql` (or run
+     `scripts/release-migrations.py --no-simplify 1.0.0` on a copy of the tree), then
+     `scripts/release-migrations.py --compare appended.sql crates/musicus-server/migrations/1.0.0.sql`
+     (add `--fixture <db>` when a database with test data exists) must print
+     `same schema, rows and sections`; `cargo test` must pass.
+   From 1.1 on this step is not needed: the automatic simplification is enough, the update stays as written.
+6. Run every check of `AGENTS.md` § Commands, plus `cargo test` (it also tests the merge script and the
    update runner).
-6. Release checklist:
+7. Release checklist:
    - [ ] Patch: no preview, no database update, **no new stored values** (read the diff since the last tag).
+   - [ ] 1.0.0 only: `1.0.0.sql` simplified by hand and checked against the appended version (step 5).
    - [ ] Translations complete: `cargo test -p musicus-i18n` passes; new German texts reviewed
          (`scripts/i18n-review.py de`).
    - [ ] User guide (`docs/user-guide`) and technical documentation (`docs/technical`) describe the release;

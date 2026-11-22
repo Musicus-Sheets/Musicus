@@ -98,7 +98,7 @@ Site: GitHub Pages of the main repository (`https://<owner>.github.io/Musicus/`)
 4. Glossary column, e2e run like `e2e/german.mjs`, requirement R-I18N-* checks, docs (`status.md`, `13-i18n.typ`).
 
 ### Change the schema
-Add a preview update `crates/musicus-server/migrations/preview/NNNN-<topic>.sql` (next free number; lower-case topic) — d-update-model,
+Add a preview update `crates/musicus-server/migrations/preview/NNNN-<topic>.sql` (next free number after the existing previews, 0011 now; lower-case topic) — d-update-model,
 a-preview-migrations, a-update-runner. Format (`crates/musicus-server/src/updates/file.rs`): header comments, then
 `-- @additive` (new tables/columns nullable or with default, copies into them), optional `-- @rebuild` (refill the new
 structures from the old ones; runs after an older program used the database), optional `-- @removal` (drops, the old

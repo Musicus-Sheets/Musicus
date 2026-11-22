@@ -11,9 +11,15 @@ For a minor or major release X.Y.0:
     databases that applied all of them, without running it again, R-OPS-023);
   * the preview files are deleted;
   * the line `X.Y` is appended to `migrations/releases.txt` (release order for the window).
-An existing `X.Y.0.sql` that is not released yet (the 1.0.0 baseline before the first release)
-gets the previews appended. A patch release X.Y.Z (Z > 0) must have no previews (R-OPS-018);
-the script then changes nothing.
+An existing `X.Y.0.sql` that is not released yet gets the previews appended. A patch release
+X.Y.Z (Z > 0) must have no previews (R-OPS-018); the script then changes nothing.
+
+The appended additive section is the reference. Safe simplifications (`release_simplify.py`:
+fold ADD/RENAME COLUMN into the CREATE TABLE of the same cycle, drop objects created and dropped
+again) are written instead only if they give the same schema and rows as the reference, on an
+empty database with the earlier release updates and, with `--fixture DB`, on a copy of a
+database of the previous release. Otherwise the appended version is written and the script says
+where they diverged. `--no-simplify` writes the appended version without trying.
 
 The update file format is parsed like `crates/musicus-server/src/updates/file.rs`; keep both in step.
 Exit status 1 with a message on any problem; nothing is written then.
@@ -25,6 +31,8 @@ import argparse
 import re
 import sys
 from pathlib import Path
+
+import release_simplify
 
 MARKERS = ["-- @additive", "-- @rebuild", "-- @removal"]
 PREVIEWS = "-- @previews:"
@@ -69,6 +77,13 @@ def parse(path: Path) -> dict:
     return out
 
 
+def version_key(path: Path) -> tuple[int, ...]:
+    m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", path.stem)
+    if not m:
+        raise Problem(f"{path.name}: a release update is named `X.Y.Z.sql`")
+    return tuple(int(g) for g in m.groups())
+
+
 def is_empty(sql: str) -> bool:
     return all(not l.strip() or l.strip().startswith("--") for l in sql.splitlines())
 
@@ -88,7 +103,7 @@ def read_releases(path: Path) -> list[tuple[int, int]]:
     return lines
 
 
-def merge(migrations: Path, version: str) -> list[str]:
+def merge(migrations: Path, version: str, fixture: Path | None = None, simplify: bool = True) -> list[str]:
     """Does the merge; returns what it did, one line each."""
     m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", version)
     if not m:
@@ -139,6 +154,19 @@ def merge(migrations: Path, version: str) -> list[str]:
                     intro = f"-- ---- preview {p.stem} ----\n" + ("".join(f["header"]) if i == 0 else "")
                     sep = "" if not sections[i] or sections[i].endswith("\n\n") else "\n"
                     sections[i] += sep + intro + body
+        if simplify:
+            simplified, notes = release_simplify.simplify(sections[0])
+            if notes:
+                earlier = [parse(f)["sections"][0] for f in sorted(migrations.glob("*.sql"), key=version_key)
+                           if version_key(f) < version_key(target)]
+                problem = release_simplify.verify(earlier, sections[0], simplified, fixture)
+                if problem:
+                    done.append(f"simplification discarded, the appended version is written: {problem}")
+                else:
+                    sections[0] = simplified
+                    done.extend(f"simplified ({n})" for n in notes)
+                    done.append("verified: the simplified update gives the same schema and rows as the appended one"
+                                + (" (also on the fixture)" if fixture else ""))
         text = "".join(base["header"]) + f"{PREVIEWS} {' '.join(listed)}\n"
         for marker, body in zip(MARKERS, sections):
             if marker == MARKERS[0] or not is_empty(body):
@@ -161,13 +189,41 @@ def merge(migrations: Path, version: str) -> list[str]:
     return done
 
 
+def compare_files(appended: Path, simplified: Path, fixture: Path | None) -> str | None:
+    """None if `simplified` (e.g. 1.0.0.sql simplified by hand) is equivalent to `appended`: same
+    previews listed, same rebuild and removal sections, same schema and rows from the additive part
+    (on an empty database with the release updates older than it in its folder, and on the fixture)."""
+    a, b = parse(appended), parse(simplified)
+    if a["previews"] != b["previews"]:
+        return "the `-- @previews:` lines differ"
+    for i, name in ((1, "rebuild"), (2, "removal")):
+        if release_simplify.normalise(a["sections"][i]) != release_simplify.normalise(b["sections"][i]):
+            return f"the {name} sections differ"
+    earlier = [parse(f)["sections"][0] for f in sorted(simplified.parent.glob("*.sql"), key=version_key)
+               if version_key(f) < version_key(simplified)]
+    return release_simplify.verify(earlier, a["sections"][0], b["sections"][0], fixture)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("version", help="the release version X.Y.Z")
+    ap.add_argument("version", nargs="?", help="the release version X.Y.Z")
+    ap.add_argument("--compare", nargs=2, type=Path, metavar=("APPENDED", "SIMPLIFIED"),
+                    help="only check that SIMPLIFIED (hand-simplified update) is equivalent to APPENDED")
     ap.add_argument("--migrations", type=Path, default=DEFAULT_DIR, help="the migrations folder")
+    ap.add_argument("--fixture", type=Path, help="database of the previous release with test data, for the verification")
+    ap.add_argument("--no-simplify", action="store_true", help="write the appended version only")
     args = ap.parse_args()
+    if args.fixture is not None and not args.fixture.is_file():
+        print(f"release-migrations: fixture {args.fixture} not found", file=sys.stderr)
+        return 1
     try:
-        for line in merge(args.migrations, args.version):
+        if args.compare:
+            problem = compare_files(args.compare[0], args.compare[1], args.fixture)
+            print(f"different: {problem}" if problem else "same schema, rows and sections")
+            return 1 if problem else 0
+        if not args.version:
+            ap.error("the release version is required")
+        for line in merge(args.migrations, args.version, args.fixture, not args.no_simplify):
             print(line)
     except Problem as e:
         print(f"release-migrations: {e}", file=sys.stderr)

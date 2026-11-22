@@ -1,4 +1,4 @@
-//! Search index of parts (`part_fts`, baseline `migrations/1.0.0.sql`). The server composes
+//! Search index of parts (`part_fts`, preview `migrations/preview/0002-part-names.sql`). The server composes
 //! no part names (a-client-part-names): it indexes the components (custom
 //! name, instrument names as entered, voices) plus the key code and every
 //! name of the key in the shipped languages (`musicus_i18n::KEY_SPELLINGS`),
@@ -122,7 +122,7 @@ mod tests {
     }
 
     /// The spellings the index of existing installations was last rebuilt
-    /// with (development migration 0010, now part of the 1.0.0 baseline).
+    /// with (development migration 0010, now preview `0010-german-key-spellings`).
     /// When a catalogue changes a key name or a language is added, the stored
     /// index lacks the new spellings: add a preview update whose additive part
     /// is `DELETE FROM part_fts;` and update this table.
