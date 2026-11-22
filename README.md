@@ -230,6 +230,11 @@ annotation sets and a conductor push. Known gaps and deviations from the
 original design are listed in `docs/agents/status.md`; the design rationale
 and all measurements in `docs/agents/background.md`.
 
+## Releasing
+
+How to make a release (kinds, release branch, merging the database updates, tags, release notes):
+[RELEASING.md](RELEASING.md).
+
 ## License
 
     Musicus: sheet music for the members of an orchestra or band.

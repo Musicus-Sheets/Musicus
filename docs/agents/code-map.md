@@ -156,6 +156,7 @@ Columns: path | purpose | key symbols | requirements implemented | decisions.
 | `.env.example` | Compose settings template | — | R-OPS-002 | — |
 | `AGENTS.md` | Mandatory agent instructions (entry point) | — | — | — |
 | `CLAUDE.md` | Imports `AGENTS.md` for Claude Code | — | — | — |
+| `RELEASING.md` | Maintainer guide for a release (kinds, branch, version, `scripts/release-migrations.py`, checklist, tags, release notes, troubleshooting); planned steps marked | — | R-OPS-018, R-OPS-023, R-OPS-036, R-OPS-041 | a-preview-migrations, a-patch-no-db-changes, a-update-runner |
 | `.githooks/pre-commit` | Runs `docs/agents/check.py --staged` | — | — | — |
 | `.github/workflows/submodules.yml` | Merge gate (pull requests, merge queue): runs `scripts/check-submodules.sh`; required status check `pinned` | — | — | a-submodule-pins |
 | `.github/workflows/user-guide-pages.yml` | GitHub Pages deploy of the user-guide site on `release: published` (not prereleases) and `workflow_dispatch` (input `ref` → test build); installs pinned Typst (sha256-checked), lists releases with `gh release list`, runs `scripts/build-guide-site.sh`, `upload-pages-artifact` + `deploy-pages`; `concurrency` group `user-guide-pages` | `TYPST_VERSION`, `TYPST_SHA256` | — | a-guide-site |
