@@ -137,7 +137,7 @@ All options can be passed as flags or environment variables
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `MUSICUS_DATA_DIR` | usual folder of the system (see above); `/data` in Docker | Holds `musicus.sqlite`, `blobs/` and `tmp/` |
-| `MUSICUS_LISTEN` | `0.0.0.0:8080` | Address and port |
+| `MUSICUS_LISTEN` | `[::]:8080` | Address and port; `[::]` accepts IPv6 and IPv4 (falls back to `0.0.0.0` without IPv6), any other address is used as given |
 | `MUSICUS_WEB_DIR` | none | Folder of a built web client, used instead of the one built into the program |
 | `MUSICUS_PUBLIC_URL` | `http://localhost:8080` | Used in printed setup links |
 | `MUSICUS_TLS_CERT`, `MUSICUS_TLS_KEY` | none | PEM files: serve HTTPS directly (rustls) |

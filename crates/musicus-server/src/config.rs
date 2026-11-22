@@ -59,7 +59,7 @@ pub enum Command {
     /// Exit 0 if the server on this machine answers `/api/health` (for
     /// container health checks; plain HTTP only).
     Healthcheck {
-        #[arg(long, env = "MUSICUS_LISTEN", default_value = "0.0.0.0:8080")]
+        #[arg(long, env = "MUSICUS_LISTEN", default_value = "[::]:8080")]
         listen: SocketAddr,
     },
 }
@@ -169,7 +169,9 @@ pub struct ServeArgs {
     #[command(flatten)]
     pub data: DataArgs,
 
-    #[arg(long, env = "MUSICUS_LISTEN", default_value = "0.0.0.0:8080")]
+    /// Address and port. `[::]` (the default) accepts IPv6 and IPv4 and falls
+    /// back to `0.0.0.0` where IPv6 is unavailable; others bind as given.
+    #[arg(long, env = "MUSICUS_LISTEN", default_value = "[::]:8080")]
     pub listen: SocketAddr,
 
     /// Directory of the built web client (output of `dx bundle`). Without

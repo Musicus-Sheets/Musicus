@@ -114,6 +114,12 @@ with the user's consent.
 - Serves: R-ACC-013, R-ACC-014, R-ACC-009, R-LIB-008, R-LIB-009.
 - If you change it: never rely on hidden controls for security (R-ACC-009 is enforced server side; keep the 403 tests). A new management action belongs next to the content it changes, gated by `can_manage()`/`is_admin()`; update `e2e/smoke.mjs` (member/librarian control checks) and the user guide.
 
+### a-dual-stack-listen
+- Decision: default `MUSICUS_LISTEN` is `[::]:8080`, bound by `listen::bind` as one dual-stack socket (socket2, `IPV6_V6ONLY` switched off explicitly because Windows and some BSDs default to v6-only; SO_REUSEADDR and backlog 1024 like tokio's `bind`). If binding `[::]` fails for any reason except AddrInUse/PermissionDenied (IPv6 disabled in the kernel, some containers, OpenBSD refusing dual-stack), the server warns and binds `0.0.0.0` with the same port. Any other address (also `0.0.0.0`, `127.0.0.1`, `[::1]`) is bound exactly as given, never falls back. The health check maps unspecified addresses to loopback (`[::]` ⇒ `[::1]`, then `127.0.0.1`; `0.0.0.0` ⇒ `127.0.0.1`). `ClientIp` canonicalises IPv4-mapped peers. Docs recommend `proxy_pass http://127.0.0.1:8080` for nginx anyway (`deploy/nginx.conf.example`).
+- Why: a maintainer's nginx `proxy_pass http://localhost:8080` gave frequent 502s: nginx resolves `localhost` to 127.0.0.1 and ::1 and uses both, the old default `0.0.0.0` was IPv4 only. Reproduced with nginx 1.23 (`proxy_next_upstream off`: 16 of 50 requests 502 against `0.0.0.0`, 0 against `[::]`; with the default retry the [::1] failures only show in the error log). Two sockets (v4 + v6) were not chosen: one socket is simpler and is what tokio/axum_server serve. No fallback for AddrInUse/PermissionDenied because IPv4 would fail the same way or, worse, silently serve only half the stack.
+- Serves: R-OPS-002, R-OPS-006, R-OPS-007.
+- If you change it: keep `local_targets` in step with the default (the Docker HEALTHCHECK has no `--listen`); keep the fallback limited to the unspecified `[::]`; tests in `listen.rs`.
+
 ### a-workspace-members
 - Decision: `musicus-web` is a workspace member but not in `default-members`.
 - Why: it only compiles for wasm32; plain `cargo build/test/clippy` must work for server + api.
