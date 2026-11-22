@@ -24,10 +24,11 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | R-FILE-010 | bilevel compression of scans | |
 | R-SEC-009, R-SEC-010 | watermark, download audit log | watermark must not create blobs (conflict with R-FILE-004) |
 | R-OPS-009 | continuous replication (Litestream) | |
-| F-OPS-005, R-OPS-010, R-OPS-012, R-OPS-018…022, R-OPS-025, R-OPS-038…041 | updates and downgrades (d-update-model, a-preview-migrations, a-patch-no-db-changes, a-db-check) | plan and roadmap in `docs/technical/chapters/14-updates.typ`; done: own update runner (a-update-runner; R-OPS-011, 013–017 mechanism, 023, 024). Still for 1.0.0: snapshot + automatic restore, `backup` without updating, `restore`, enum fallbacks, CI checks, release workflow; see § Updates below |
+| F-OPS-005, R-OPS-010, R-OPS-012, R-OPS-018…022, R-OPS-025, R-OPS-038…041 | updates and downgrades (d-update-model, a-preview-migrations, a-patch-no-db-changes, a-db-check) | plan and roadmap in `docs/technical/chapters/14-updates.typ`; done: own update runner (a-update-runner; R-OPS-011, 013–017 mechanism, 023, 024). Still for 1.0.0: snapshot + automatic restore, `backup` without updating, `restore`, enum fallbacks, CI checks, release pipeline (R-OPS-049, PR G); see § Updates below |
 | F-OPS-008, R-OPS-043…048 | open clients during shutdown, start and update (a-client-outage) | listener before updates with 503 `server_starting`, shutdown drain with 503 `server_shutting_down` (new `ErrorCode`s), banners, polling, unsaved markings kept in memory and re-sent, `beforeunload` warning, reload at a safe moment after a version change |
 | F-OPS-006, R-OPS-026…032, R-OPS-042 | platforms (a-platforms) | multi-arch images + version tags (phase 0); Windows blocker and other findings in § Updates below; program archives + `SHA256SUMS` (unsigned; guide text for SmartScreen/Gatekeeper), embedded web client, OS data folder, platform-dependent CI (tests, build, smoke) on all systems, the rest Linux-only (phase 1) |
-| F-OPS-007, R-OPS-036 | version visible (a-version-public) | done: `/api/version`, About view, title pages from the build's version (R-OPS-033…035); missing: requirements tag per release (R-OPS-036) and the release check that fails on a title-page version other than the release (R-OPS-035, release workflow) |
+| F-OPS-007, R-OPS-036 | version visible (a-version-public) | done: `/api/version`, About view, title pages from the build's version (R-OPS-033…035); missing: the title-page check in stage 1 of the release pipeline (R-OPS-035, PR G); docs tags `vX.Y.Z` in requirements, technical docs and user guide by hand after each release (R-OPS-036, RELEASING.md § 4) |
+| R-OPS-049 | release pipeline (a-release-pipeline) | PR G: dry run on the `release/<version>` pull request, real run on its merge; stage 1 builds and checks everything into expiring artifacts, stage 2 (only if all green) pushes images → tag → GitHub release with archives + `SHA256SUMS` → guide site, each step idempotent; `user-guide-pages.yml` becomes the last step (manual test build stays) |
 | R-OPS-037 | backups/exports unencrypted, with guidance (a-unencrypted-export) | user guide backup section must say that backups need the same care as the data directory |
 | F-TECH-002, R-TECH-004…007 | prepared replaceability | storage modules per data area (no SQL in `routes/`), file store without `path()`, PDF engine module, conformance suites; no second backend |
 
@@ -114,7 +115,7 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
   `scripts/db-schema.sh`) — all come with phase 0 (a-db-check, R-OPS-038…040), not earlier.
 - Patches writing new kinds of stored values (R-OPS-041) are not caught by any check; only the planned test matrix,
   enum fallbacks and the checklist line cover it.
-- Open: container registry and image name (decided when the release workflow is built; Docker Hub and/or GHCR).
+- Open: container registry and image name (decided when the release pipeline is built, PR G; Docker Hub and/or GHCR).
 - Today the server listens only after migrations (`open_state` before `bind`) and closes the listener on the stop
   signal (R-OPS-008); the client shows generic errors when the server is away and reloads only on 401.
 - Stored enums other than `ErrorCode` (`Role`, `RegionKind`, …) have no fallback for unknown values; an older

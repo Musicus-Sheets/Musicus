@@ -117,12 +117,16 @@ merged release missing) is refused with a message: move the data directory away.
 
 ### Release
 Step by step for the maintainer: `RELEASING.md` (repository root; kinds and what they may contain, `release/<version>`
-branch, version bump, `scripts/release-migrations.py`, checklist incl. "patch: no new stored values", requirements tag
-R-OPS-036, tag + GitHub release, release notes, troubleshooting). Not automated yet (marked "planned" there): release
-workflow building with `MUSICUS_RELEASE_BUILD=1`, multi-arch images and program archives (R-OPS-028, R-OPS-029), release
-and database checks (R-OPS-038…040, a-db-check; incl. failing on a title-page version ≠ release, R-OPS-035). The version
-on the title pages comes from the workspace version (a-version-source); RELEASING.md step 2.2 and its checklist say how
-to check it.
+branch, version bump, `scripts/release-migrations.py`, checklist incl. "patch: no new stored values", merge →
+pipeline → check the run, docs tags by hand (R-OPS-036), release notes, troubleshooting). Target flow (a-release-pipeline,
+R-OPS-049, marked "planned" there, PR G): dry run on the release pull request; merging it starts the real run; stage 1
+builds and checks everything (version = branch, title pages, release and database checks R-OPS-038…040, per-platform
+builds with `MUSICUS_RELEASE_BUILD=1` + smoke, multi-arch images, archives, docs, guide site) into expiring artifacts;
+stage 2, only if all green: images → tag `vX.Y.Z` → GitHub release with archives + `SHA256SUMS` → guide site
+(`user-guide-pages.yml`), each idempotent. Until then RELEASING.md § 4 lists the manual steps (tag, local release image,
+GitHub release ⇒ site workflow). After a successful release the maintainer tags `docs/requirements`, `docs/technical`
+and `docs/user-guide` by hand on the pinned commits. The version on the title pages comes from the workspace version
+(a-version-source); RELEASING.md step 2.2 and its checklist say how to check it.
 Keep `RELEASING.md` in step when one of these is built. `RELEASING.md` is for humans: it never refers to `AGENTS.md` or `docs/agents`; its step 6 repeats the commands of `AGENTS.md` § Commands — change both together.
 
 ### Add/modify a requirement-driven feature
