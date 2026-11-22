@@ -60,6 +60,8 @@ common-saved = Saved
 common-role-member = Member
 common-role-librarian = Librarian
 common-role-admin = Admin
+# A role saved by a newer version of Musicus; such a user cannot log in until an admin picks one of the roles above.
+common-role-unknown = Unknown role (newer version, cannot log in)
 
 ## Search fields of pickers
 common-search-instruments = Search instrument or family…

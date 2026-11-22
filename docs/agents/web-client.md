@@ -121,7 +121,7 @@ controls when `ui::can_manage()` / `ui::is_admin()`; members get exactly the mem
 - `programme_edit.rs`: `ProgrammeEditor{id: Option}` behind `NewProgramme`/`EditProgramme`: title/date/notes, ordered items (↑ ↓ ×; `+ Add pieces` = `Picker` over all scores, nothing excluded so encores work, entries already present marked "already in the programme", appended in tick order), save = POST or PUT + `PUT …/items` (a `created` signal prevents a second POST on retry) → programme view; delete → `/programmes`.
 - `instruments.rs`: list grouped by family (`by_family`, "Other" last); L: add form (family `SuggestInput` over the known families), `InstrumentRow` inline edit (`PUT`) and delete (409 ⇒ "cannot be deleted because parts still use it").
 - `groups.rs`: `Groups` + `GroupEditor` (members only if admin; instrument grants; score grants; create/delete group only admin). Each list is a `SavedList` → `AssignList`; every change (picker closed with new entries, × pressed) is sent at once as the full list (`PUT /api/groups/{id}/members|instrument-grants|score-grants`), controls disabled while it runs, `Saving…` → `Saved` (2.5 s) or error + previous list restored; no Save button.
-- `users.rs`: `Users` + `UserRow` (create → invite link shown + copy; role select; disable/enable; new invite).
+- `users.rs`: `Users` + `UserRow` (create → invite link shown + copy; role select (a role of a newer release, `Role::Unknown`, as a selected disabled option "Unknown role (newer version, cannot log in)"; only a change sends `role`); disable/enable; new invite).
 - `login.rs`, `account.rs`: forms over auth endpoints.
 
 ## Mass import (`pages/import.rs`, `pages/import_review.rs`; a-import-page, a-import-hashing)
@@ -165,13 +165,13 @@ Load: `ViewerPage` → `load(id, pid)`: `GET /api/parts/{id}`, `GET /api/scores/
 
 Signals: `sets`, `active` (set id), `page`, `page_total`, `stage` (size from `onresize`), `page_box`, `mode` (Read/Draw), `tool`, colours/widths, `show_ink`, `status` (SaveStatus), `error`, `menu`, `version` (redraw trigger). Memo `url`: file of active set (may be an old version) else current file.
 
-Non-signal state (d-reader-store): `store: Rc<RefCell<Store>>`, `Store.pages: HashMap<(set_id, page), PageState>`; `PageState {layer, revision, base_ids, loaded, generation, saved_generation, saving, undo, redo}`; `live: Rc<RefCell<Live>>` (current stroke, pointer id, `pen_seen`).
+Non-signal state (d-reader-store): `store: Rc<RefCell<Store>>`, `Store.pages: HashMap<(set_id, page), PageState>`; `PageState {layer, revision, base_ids, loaded, unreadable, generation, saved_generation, saving, undo, redo}`; `live: Rc<RefCell<Live>>` (current stroke, pointer id, `pen_seen`).
 
 Signal `ratio` (= `bridge::pixel_ratio()`, updated by a task looping on `bridge::pixel_ratio_changed()`): browser zoom, a window moved to another screen and pinch zoom re-render page and crops (a-device-pixels).
 
 Effects: url → `page_count`; (url, stage, page, ratio) → `render_page` into `page-canvas` (box = stage − 8 px) → `page_box` (CSS size returned by the bridge = pixels / ratio); (active, page) → `load_page`; (version, page_box, show_ink, active, page, ratio) → `ink::draw_layer(…, ratio)` into `ink-canvas`. On mount: `keep_awake(true)`, prefetch next piece. On drop: flush dirty pages with `spawn_forever(save_page…)`, `keep_awake(false)`; keyboard listener removed.
 
-`load_page(store, key)`: GET page; decode; if local objects were drawn before load finished ⇒ `merge(∅, local, server)`; set `revision`, `base_ids`, `loaded`.
+`load_page(store, key)`: GET page; decode (fails, e.g. a newer ink format ⇒ `unreadable = true`, layer/undo/redo emptied, pending copy cleared, error banner "Could not load annotations: …"; `change` then refuses every edit of that page with `reader-annotations-page-locked`, so nothing overwrites the stored layer, R-OPS-041); if local objects were drawn before load finished ⇒ `merge(∅, local, server)`; set `revision`, `base_ids`, `loaded`.
 
 `save_page(store, key)` (≤5 iterations, touches no signals): skip if clean/saving/not loaded; PUT with `revision`; Saved ⇒ `revision`, `base_ids = ids(sent layer)`, `saved_generation = generation_sent`, `sync_pending`, stop if no newer changes; Conflict ⇒ GET server, `layer = merge(base_ids, layer, server)`, `base_ids = ids(server)`, `revision = server rev`, `generation += 1`, `sync_pending`, retry.
 

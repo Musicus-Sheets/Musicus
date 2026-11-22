@@ -32,7 +32,7 @@ pub async fn current_user(app: &AppState, id: Id) -> ApiResult<CurrentUser> {
         mode: ReaderMode::parse(&mode).unwrap_or_default(),
         staff_size: StaffSize::parse(&size).unwrap_or_default(),
     };
-    Ok(CurrentUser { id, username, display_name, role: Role::parse(&role).unwrap_or(Role::Member), reader })
+    Ok(CurrentUser { id, username, display_name, role: Role::from_stored(&role), reader })
 }
 
 /// Stores the user's reader mode and staff size (on the server, because the
@@ -74,15 +74,16 @@ pub async fn login(
     let keys = [user_key.clone(), format!("ip:{ip}")];
     app.limiter.check(&keys)?;
 
-    let row: Option<(Id, Option<String>, bool)> =
-        sqlx::query_as("SELECT id, password_hash, disabled FROM users WHERE username = ?1")
+    let row: Option<(Id, Option<String>, bool, String)> =
+        sqlx::query_as("SELECT id, password_hash, disabled, role FROM users WHERE username = ?1")
             .bind(&username)
             .fetch_optional(&app.db.read)
             .await?;
     let hash = row.as_ref().and_then(|r| r.1.as_deref());
     let password_ok = auth::verify_password(&app, hash, &req.password).await?;
     match row {
-        Some((id, _, false)) if password_ok => {
+        // A role of a newer release: no login, like a disabled account (R-OPS-041).
+        Some((id, _, false, role)) if password_ok && Role::parse(&role).is_some() => {
             app.limiter.clear(&user_key);
             logged_in(&app, id, req.bearer, &headers).await
         }
@@ -105,15 +106,19 @@ pub async fn me(State(app): State<AppState>, user: AuthUser) -> ApiResult<Json<C
 }
 
 async fn invite_user(app: &AppState, token: &str) -> ApiResult<(Id, String, String)> {
-    sqlx::query_as(
-        "SELECT u.id, u.username, u.display_name FROM invites i JOIN users u ON u.id = i.user_id
+    let row: Option<(Id, String, String, String)> = sqlx::query_as(
+        "SELECT u.id, u.username, u.display_name, u.role FROM invites i JOIN users u ON u.id = i.user_id
          WHERE i.token_hash = ?1 AND i.expires_at > ?2 AND u.disabled = 0",
     )
     .bind(token_hash(token))
     .bind(now())
     .fetch_optional(&app.db.read)
-    .await?
-    .ok_or(AppError::NotFound)
+    .await?;
+    // An account with a role of a newer release cannot log in (R-OPS-041).
+    match row {
+        Some((id, username, display_name, role)) if Role::parse(&role).is_some() => Ok((id, username, display_name)),
+        _ => Err(AppError::NotFound),
+    }
 }
 
 pub async fn invite_info(State(app): State<AppState>, Path(token): Path<String>) -> ApiResult<Json<InviteInfo>> {

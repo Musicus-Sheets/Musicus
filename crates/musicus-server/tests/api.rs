@@ -1653,3 +1653,253 @@ async fn import_of_flat_numbered_files_groups_by_number_and_keeps_changes() {
     let review: ImportReview = s.get(&format!("/api/import/batches/{}", again.id), admin).await.json();
     assert_eq!(review.pieces.len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// Values written by a newer release (R-OPS-041, R-OPS-017: fail closed)
+// ---------------------------------------------------------------------------
+
+/// Runs statements on the write connection with CHECK constraints off, as a
+/// newer release with wider constraints would have written the rows.
+async fn as_newer_release(s: &Server, statements: &[&str]) {
+    let mut c = s.state.db.write.acquire().await.unwrap();
+    sqlx::query("PRAGMA ignore_check_constraints = ON").execute(&mut *c).await.unwrap();
+    for sql in statements {
+        // Test-only literal statements (R-SEC-006 concerns the server's queries).
+        sqlx::query(sqlx::AssertSqlSafe(sql.to_string())).execute(&mut *c).await.unwrap();
+    }
+    sqlx::query("PRAGMA ignore_check_constraints = OFF").execute(&mut *c).await.unwrap();
+}
+
+#[tokio::test]
+async fn an_unknown_role_cannot_log_in_and_is_never_written_back() {
+    use musicus_api::{Role, UserSummary};
+    let s = Server::start().await;
+    let lib = library(&s).await;
+    assert_eq!(s.get("/api/auth/me", &lib.anna).await.status, StatusCode::OK);
+    as_newer_release(&s, &["UPDATE users SET role = 'conductor' WHERE username = 'anna'"]).await;
+
+    // Fewer rights than a member, not more: the session and the login are refused.
+    assert_eq!(s.get("/api/auth/me", &lib.anna).await.status, StatusCode::UNAUTHORIZED);
+    let part = format!("/api/parts/{}", lib.trumpet_part.id);
+    assert_eq!(s.get(&part, &lib.anna).await.status, StatusCode::UNAUTHORIZED);
+    let login = json!({"username": "anna", "password": "member-password-1", "bearer": true});
+    let r = s
+        .send(
+            Method::POST,
+            "/api/auth/login",
+            Auth::None,
+            &[("content-type", "application/json")],
+            Body::from(login.to_string()),
+        )
+        .await;
+    assert_eq!(r.error(), (StatusCode::UNAUTHORIZED, ErrorCode::Unauthorized));
+    // A fresh invite does not open the account either.
+    let invite: musicus_api::Invite =
+        s.ok(Method::POST, &format!("/api/users/{}/invite", lib.anna_id), &lib.admin, json!({})).await;
+    assert_eq!(s.get(&format!("/api/auth/invites/{}", invite.token), "").await.status, StatusCode::NOT_FOUND);
+
+    // Admins see the account. (Other changes to it would keep the stored role,
+    // `COALESCE(?3, role)`; not testable here: the CHECK of this release's
+    // table refuses the row, a newer release's table would allow it.)
+    let users: Vec<UserSummary> = s.get("/api/users", &lib.admin).await.json();
+    assert_eq!(users.iter().find(|u| u.id == lib.anna_id).unwrap().role, Role::Unknown);
+    let uri = format!("/api/users/{}", lib.anna_id);
+    let stored: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?1")
+        .bind(lib.anna_id)
+        .fetch_one(&s.state.db.read)
+        .await
+        .unwrap();
+    assert_eq!(stored, "conductor");
+    // "unknown" (or any other unknown name) is never stored.
+    for role in ["unknown", "conductor"] {
+        assert_eq!(
+            s.json(Method::PATCH, &uri, &lib.admin, json!({ "role": role })).await.error(),
+            (StatusCode::BAD_REQUEST, ErrorCode::InUseOrUnknown)
+        );
+        let new = json!({"username": format!("x{role}"), "display_name": "X", "role": role});
+        assert_eq!(
+            s.json(Method::POST, "/api/users", &lib.admin, new).await.error(),
+            (StatusCode::BAD_REQUEST, ErrorCode::InUseOrUnknown)
+        );
+    }
+    // An admin picking a known role opens the account again.
+    s.ok::<UserSummary>(Method::PATCH, &uri, &lib.admin, json!({"role": "member"})).await;
+    s.login("anna", "member-password-1").await;
+}
+
+#[tokio::test]
+async fn layouts_of_a_newer_release_show_whole_pages_and_are_not_overwritten() {
+    use musicus_api::layout::{FileLayout, LayoutState, PageCorrection, RegionKind, reading_items};
+    use musicus_server::layout::worker;
+    let s = Server::start().await;
+    let lib = library(&s).await;
+    let part: Part = s.upload(&lib.admin, lib.trumpet_part.id, staff_pdf(2, 4)).await.json();
+    let sha = part.file.unwrap().sha256;
+    while worker::run_once(&s.state).await.unwrap() {}
+    let layout = format!("/api/files/{sha}/layout");
+    let auto: FileLayout = s.get(&layout, &lib.anna).await.json();
+    assert_eq!(auto.state, LayoutState::Done);
+
+    // A band kind of a newer release in the detection and in a correction.
+    as_newer_release(
+        &s,
+        &[
+            "UPDATE file_layouts SET pages = replace(pages, '\"kind\":\"header\"', '\"kind\":\"ossia\"')",
+            "INSERT INTO layout_corrections (file_id, page, data, updated_at)
+             SELECT file_id, 1, '{\"full_page\":false,\"bounds\":[0.1,0.5,0.9],\"kinds\":[\"system\",\"ossia\"],\"later\":1}', 0
+             FROM file_layouts",
+        ],
+    )
+    .await;
+    let got: FileLayout = s.get(&layout, &lib.anna).await.json();
+    assert_eq!(got.state, LayoutState::Done);
+    assert!(got.pages.iter().all(|p| p.regions.iter().any(|r| r.kind == RegionKind::Unknown)));
+    assert!(got.pages[1].corrected);
+    // The reader shows both pages whole.
+    let items = reading_items(&got.pages);
+    assert_eq!(items.len(), 2);
+    assert!(items.iter().all(|i| i.kind == musicus_api::layout::ItemKind::Page));
+    // Sending the unknown kind back is refused; the stored correction stays.
+    let back = PageCorrection {
+        full_page: false,
+        bounds: vec![0.1, 0.5, 0.9],
+        kinds: vec![RegionKind::System, RegionKind::Unknown],
+    };
+    let uri = format!("/api/files/{sha}/layout/pages/1");
+    assert_eq!(
+        s.json(Method::PUT, &uri, &lib.admin, &back).await.error(),
+        (StatusCode::BAD_REQUEST, ErrorCode::InUseOrUnknown)
+    );
+    let raw = json!({"full_page": false, "bounds": [0.1, 0.5, 0.9], "kinds": ["system", "ossia"]});
+    assert_eq!(
+        s.json(Method::PUT, &uri, &lib.admin, raw).await.error(),
+        (StatusCode::BAD_REQUEST, ErrorCode::InUseOrUnknown)
+    );
+    let kept: String = sqlx::query_scalar("SELECT data FROM layout_corrections WHERE page = 1")
+        .fetch_one(&s.state.db.read)
+        .await
+        .unwrap();
+    assert!(kept.contains("ossia") && kept.contains("later"));
+
+    // A correction this release cannot read at all: that page is shown whole.
+    as_newer_release(&s, &["UPDATE layout_corrections SET data = '{\"bands\":[]}' WHERE page = 1"]).await;
+    let got: FileLayout = s.get(&layout, &lib.anna).await.json();
+    assert!(got.pages[1].full_page && got.pages[1].corrected);
+
+    // An unknown state, or pages it cannot read: a failed detection (whole pages), no error.
+    as_newer_release(&s, &["UPDATE file_layouts SET state = 'partial'"]).await;
+    let got: FileLayout = s.get(&layout, &lib.anna).await.json();
+    assert_eq!((got.state, got.pages.len()), (LayoutState::Failed, 0));
+    as_newer_release(&s, &["UPDATE file_layouts SET state = 'done', pages = '{\"v\":2}'"]).await;
+    let got: FileLayout = s.get(&layout, &lib.anna).await.json();
+    assert_eq!(got.state, LayoutState::Failed);
+    // The worker leaves a layout of a newer algorithm alone.
+    as_newer_release(&s, &["UPDATE file_layouts SET algorithm = algorithm + 100"]).await;
+    assert!(!worker::run_once(&s.state).await.unwrap());
+}
+
+#[tokio::test]
+async fn annotation_pages_of_a_newer_format_are_served_unchanged() {
+    let s = Server::start().await;
+    let lib = library(&s).await;
+    let part = lib.trumpet_part.id;
+    let set: AnnotationSet =
+        s.ok(Method::POST, &format!("/api/parts/{part}/annotation-sets"), &lib.anna, json!({})).await;
+    let page = format!("/api/annotation-sets/{}/pages/0", set.id);
+    let saved =
+        s.send(Method::PUT, &page, Auth::Bearer(&lib.anna), &[("if-match", "\"0\"")], Body::from(layer(&[1]))).await;
+    assert_eq!(saved.status, StatusCode::OK);
+    let newer = [2u8, 0xde, 0xad];
+    sqlx::query("UPDATE annotation_pages SET data = ?1")
+        .bind(zstd::encode_all(&newer[..], 3).unwrap())
+        .execute(&s.state.db.write)
+        .await
+        .unwrap();
+    // Served as stored; the client shows the page without them (UnsupportedVersion).
+    let got = s.get(&page, &lib.anna).await;
+    assert_eq!((got.status, got.body.as_slice()), (StatusCode::OK, &newer[..]));
+    assert_eq!(ink::decode(&got.body), Err(ink::InkError::UnsupportedVersion(2)));
+    // Copying the set keeps the bytes (the server never decodes stored pages).
+    let copy: AnnotationSet = s
+        .ok(
+            Method::POST,
+            &format!("/api/parts/{part}/annotation-sets"),
+            &lib.anna,
+            json!({"name": "Copy", "copy_from": set.id}),
+        )
+        .await;
+    let copied = s.get(&format!("/api/annotation-sets/{}/pages/0", copy.id), &lib.anna).await;
+    assert_eq!(copied.body.as_slice(), &newer[..]);
+}
+
+#[tokio::test]
+async fn import_items_and_files_of_a_newer_release_are_left_out() {
+    let s = Server::start().await;
+    let lib = library(&s).await;
+    let admin = &lib.admin;
+    let folder = json!({"name": "Archiv", "pattern": PRESETS[0].pattern, "language": "de"});
+    let batch: ImportBatch = s.ok(Method::POST, "/api/import/batches", admin, &folder).await;
+    let (a, b, c) = (tiny_pdf(1, "newer-a"), tiny_pdf(1, "newer-b"), tiny_pdf(1, "newer-c"));
+    let files = [
+        ("Stück A/Trompete.pdf", a.as_slice()),
+        ("Stück B/Trompete.pdf", b.as_slice()),
+        ("Stück C/Trompete.pdf", c.as_slice()),
+    ];
+    let todo = register(&s, admin, batch.id, &files).await;
+    upload_all(&s, admin, &todo, &files).await;
+    let uri = format!("/api/import/batches/{}", batch.id);
+    let review: ImportReview = s.get(&uri, admin).await.json();
+    assert_eq!(review.pieces.len(), 3);
+    let a_id = piece(&review, "Stück A").id;
+    let a_part = piece(&review, "Stück A").parts[0].id;
+    let c_id = piece(&review, "Stück C").id;
+
+    // A newer release: piece A in a state this release does not know, file of B
+    // in an unknown state, piece C with a proposal it cannot read.
+    let park = format!("UPDATE import_items SET state = 'parked' WHERE id = {a_id}");
+    let ocr = format!("UPDATE import_items SET proposal = '{{\"kind\":\"ocr\"}}' WHERE id = {c_id}");
+    as_newer_release(
+        &s,
+        &[&park, "UPDATE import_files SET state = 'archived' WHERE path = 'Stück B/Trompete.pdf'", &ocr],
+    )
+    .await;
+    let review: ImportReview = s.get(&uri, admin).await.json();
+    let titles: Vec<_> = review.pieces.iter().map(|p| p.title.value.clone().unwrap_or_default()).collect();
+    assert_eq!(titles, vec!["Stück B".to_owned()], "A and C left out");
+    assert!(piece(&review, "Stück B").parts.is_empty(), "B's file left out");
+    assert!(!review.unmatched.iter().chain(&review.duplicates).any(|f| f.path.starts_with("Stück B")));
+
+    // Commit everything: nothing of A, B or C is imported.
+    let done: CommittedImport = s.ok(Method::POST, &format!("{uri}/commit"), admin, json!({})).await;
+    assert!(done.committed.is_empty());
+    let forced: CommittedImport =
+        s.ok(Method::POST, &format!("{uri}/commit"), admin, json!({"piece_ids": [a_id]})).await;
+    assert_eq!(forced.errors[0].code, ErrorCode::NotInBatch);
+    // Their rows are not changed.
+    assert_eq!(
+        s.json(Method::PATCH, "/api/import/items", admin, json!({"ids": [a_id], "piece": {"title": "X"}}))
+            .await
+            .error(),
+        (StatusCode::BAD_REQUEST, ErrorCode::UnknownItems)
+    );
+    assert_eq!(
+        s.json(Method::PATCH, "/api/import/items", admin, json!({"ids": [a_part], "reset": true})).await.error(),
+        (StatusCode::BAD_REQUEST, ErrorCode::UnknownItems)
+    );
+    // Registering the folder again keeps the newer rows and proposes A's file nowhere else.
+    register(&s, admin, batch.id, &files).await;
+    let state: String = sqlx::query_scalar("SELECT state FROM import_items WHERE id = ?1")
+        .bind(a_id)
+        .fetch_one(&s.state.db.read)
+        .await
+        .unwrap();
+    assert_eq!(state, "parked");
+    let file_state: String = sqlx::query_scalar("SELECT state FROM import_files WHERE path = 'Stück B/Trompete.pdf'")
+        .fetch_one(&s.state.db.read)
+        .await
+        .unwrap();
+    assert_eq!(file_state, "archived");
+    let review: ImportReview = s.get(&uri, admin).await.json();
+    assert!(review.pieces.iter().all(|p| p.parts.iter().all(|x| !x.file.path.starts_with("Stück A"))));
+    assert!(review.pieces.iter().all(|p| p.parts.iter().all(|x| !x.file.path.starts_with("Stück B"))));
+}

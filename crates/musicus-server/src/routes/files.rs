@@ -90,7 +90,21 @@ async fn effective_layout(app: &App, sha256: &str) -> ApiResult<FileLayout> {
     let Some((file_id, algorithm, state, pages)) = row else {
         return Ok(FileLayout { sha256, state: LayoutState::Pending, algorithm: 0, pages: vec![] });
     };
-    let mut pages: Vec<PageLayout> = serde_json::from_str(&pages).map_err(AppError::internal)?;
+    // Values of a newer release fail closed (R-OPS-041): an unknown state or
+    // pages this release cannot read count as a failed detection (the reader
+    // shows whole pages); nothing is written back, and the worker does not
+    // redo a layout of a newer algorithm.
+    let failed = || FileLayout { sha256: sha256.clone(), state: LayoutState::Failed, algorithm, pages: vec![] };
+    if state != "done" {
+        return Ok(failed());
+    }
+    let mut pages: Vec<PageLayout> = match serde_json::from_str(&pages) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("system layout of {sha256} not readable by this release: {e}");
+            return Ok(failed());
+        }
+    };
     let corrections: Vec<(i64, String)> =
         sqlx::query_as("SELECT page, data FROM layout_corrections WHERE file_id = ?1 ORDER BY page")
             .bind(file_id)
@@ -98,12 +112,16 @@ async fn effective_layout(app: &App, sha256: &str) -> ApiResult<FileLayout> {
             .await?;
     for (page, data) in corrections {
         if let Some(p) = usize::try_from(page).ok().and_then(|i| pages.get_mut(i)) {
-            let c: PageCorrection = serde_json::from_str(&data).map_err(AppError::internal)?;
-            *p = apply_correction(p, &c);
+            *p = match serde_json::from_str::<PageCorrection>(&data) {
+                // A band kind of a newer release: applied (the reader then shows
+                // the page whole, `reading_items`); anything else unreadable or
+                // malformed: the page is shown whole, marked as corrected.
+                Ok(c) if matches!(c.validate(), Ok(()) | Err(ErrorCode::InUseOrUnknown)) => apply_correction(p, &c),
+                _ => PageLayout { full_page: true, corrected: true, ..p.clone() },
+            };
         }
     }
-    let state = if state == "done" { LayoutState::Done } else { LayoutState::Failed };
-    Ok(FileLayout { sha256, state, algorithm, pages })
+    Ok(FileLayout { sha256, state: LayoutState::Done, algorithm, pages })
 }
 
 /// Id and page count of an analysed file, for corrections (librarians only).

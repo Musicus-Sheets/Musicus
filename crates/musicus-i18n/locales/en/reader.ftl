@@ -3,6 +3,8 @@
 reader-no-file = No file has been uploaded for this part yet.
 reader-open-failed = Could not open the sheet: { $error }
 reader-annotations-load-failed = Could not load annotations: { $error }
+# Shown when drawing on a page whose saved annotations this version cannot read (e.g. saved by a newer version).
+reader-annotations-page-locked = The annotations of this page cannot be shown or changed with this version of Musicus. They stay saved as they are; nothing drawn here would be kept.
 reader-set-create-failed = Could not create an annotation set: { $error }
 reader-settings-failed = Could not save the view setting: { $error }
 reader-layout-failed = The system view is not available for this sheet; showing whole pages.
@@ -89,6 +91,8 @@ reader-systems-kind-system = System
 reader-systems-kind-header = Header (title)
 reader-systems-kind-footer = Footer
 reader-systems-kind-hidden = Hidden
+# A band kind saved by a newer version of Musicus; the page is shown whole in the reader.
+reader-systems-kind-unknown = Unknown (newer version)
 reader-systems-band-kind = Kind of band { $band }
 reader-systems-split-band = Split band { $band }
 reader-systems-split = Split
@@ -99,3 +103,5 @@ reader-systems-remove-cut-hint = Remove this cut: join the bands above and below
 reader-systems-save = Save page
 reader-systems-reset = Reset to automatic
 reader-systems-unsaved = Unsaved changes
+# Shown instead of saving while a band still has the kind "Unknown (newer version)".
+reader-systems-unknown-kinds = Choose a kind for every band marked "Unknown" to save this page.

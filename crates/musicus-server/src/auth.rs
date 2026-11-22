@@ -186,7 +186,9 @@ impl FromRequestParts<AppState> for AuthUser {
                 .execute(&app.db.write)
                 .await?;
         }
-        let role = Role::parse(&role).ok_or_else(|| AppError::internal("invalid role in database"))?;
+        // A role of a newer release grants nothing here, not even a member's
+        // rights: the session is treated as absent (fail closed, R-OPS-041).
+        let role = Role::parse(&role).ok_or(AppError::Unauthorized)?;
         Ok(AuthUser { id: user_id, role, session_id })
     }
 }

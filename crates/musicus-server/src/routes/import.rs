@@ -89,7 +89,7 @@ async fn batch_info(app: &App, row: &BatchRow) -> ApiResult<ImportBatch> {
     let (total, pending, uploaded, duplicate, failed, unmatched): (i64, i64, i64, i64, i64, i64) = sqlx::query_as(
         "SELECT COUNT(*), COALESCE(SUM(state = 'pending'), 0), COALESCE(SUM(state = 'uploaded'), 0),
                 COALESCE(SUM(state = 'duplicate'), 0), COALESCE(SUM(state = 'failed'), 0),
-                COALESCE(SUM(state <> 'duplicate' AND NOT EXISTS (SELECT 1 FROM import_items i WHERE i.file_id = f.id)), 0)
+                COALESCE(SUM(state IN ('pending', 'uploaded', 'failed') AND NOT EXISTS (SELECT 1 FROM import_items i WHERE i.file_id = f.id)), 0)
          FROM import_files f WHERE f.batch_id = ?1",
     )
     .bind(row.id)
@@ -284,8 +284,9 @@ pub async fn register_files(
             None => false,
         };
         match existing {
-            // Unchanged, or already imported: nothing to do.
-            Some((_, known, _)) if known == *sha || committed => continue,
+            // Unchanged, or already imported: nothing to do. A row in a state
+            // of a newer release is never rewritten (R-OPS-041).
+            Some((_, known, state)) if known == *sha || committed || FileState::parse(&state).is_none() => continue,
             _ => {}
         }
         // Same content already in the library, or in this batch under another path?
@@ -373,10 +374,12 @@ async fn repropose(
     .bind(batch_id)
     .fetch_all(&mut *conn)
     .await?;
-    // Files already imported (or left out of a committed piece) are not proposed again.
+    // Files already imported (or left out of a committed piece) are not
+    // proposed again; nor are files of items in a state of a newer release
+    // (anything but pending: fail closed, R-OPS-041).
     let done: HashSet<&str> = old
         .iter()
-        .filter(|i| i.kind == "part" && (i.state == "committed" || i.piece_state.as_deref() == Some("committed")))
+        .filter(|i| i.kind == "part" && (i.state != "pending" || i.piece_state.as_deref() != Some("pending")))
         .map(|i| i.key.as_str())
         .collect();
     let piece_overrides: HashMap<&str, &str> = old
@@ -390,7 +393,9 @@ async fn repropose(
         .map(|i| (i.key.as_str(), i.overrides.as_str()))
         .collect();
     let files: Vec<(Id, String)> =
-        sqlx::query_as("SELECT id, path FROM import_files WHERE batch_id = ?1 AND state <> 'duplicate' ORDER BY id")
+        sqlx::query_as(
+            "SELECT id, path FROM import_files WHERE batch_id = ?1 AND state IN ('pending', 'uploaded', 'failed') ORDER BY id",
+        )
             .bind(batch_id)
             .fetch_all(&mut *conn)
             .await?;
@@ -472,19 +477,21 @@ struct FileRow {
     matched: bool,
 }
 
-impl From<FileRow> for StagedFile {
-    fn from(r: FileRow) -> Self {
-        StagedFile {
-            id: r.id,
-            path: r.path,
-            size_bytes: r.size_bytes,
-            sha256: r.sha256,
-            state: FileState::parse(&r.state),
-            page_count: r.page_count,
-            has_thumbnail: r.has_thumbnail.unwrap_or(false),
-            staves: r.staves.and_then(|n| u32::try_from(n).ok()),
-            problem: r.problem.as_deref().map(parse_problem),
-        }
+impl FileRow {
+    /// `None` for a state of a newer release: such a file is left out
+    /// everywhere and its row never rewritten (R-OPS-041).
+    fn staged(self) -> Option<StagedFile> {
+        Some(StagedFile {
+            id: self.id,
+            path: self.path,
+            size_bytes: self.size_bytes,
+            sha256: self.sha256,
+            state: FileState::parse(&self.state)?,
+            page_count: self.page_count,
+            has_thumbnail: self.has_thumbnail.unwrap_or(false),
+            staves: self.staves.and_then(|n| u32::try_from(n).ok()),
+            problem: self.problem.as_deref().map(parse_problem),
+        })
     }
 }
 
@@ -574,12 +581,11 @@ struct ItemRow {
     part_id: Option<Id>,
 }
 
-fn item_state(s: &str) -> ItemState {
-    if s == "committed" { ItemState::Committed } else { ItemState::Pending }
-}
-
-fn parse<T: serde::de::DeserializeOwned>(json: &str) -> ApiResult<T> {
-    serde_json::from_str(json).map_err(AppError::internal)
+/// Stored JSON of a proposal or of overrides; `None` if this release cannot
+/// read it (written by a newer one, R-OPS-041): the item is then left out
+/// like an item of an unknown state, never rewritten.
+fn parse<T: serde::de::DeserializeOwned>(json: &str) -> Option<T> {
+    serde_json::from_str(json).inspect_err(|e| tracing::warn!("import item not readable by this release: {e}")).ok()
 }
 
 /// The review rows of a batch (or of some of its pieces).
@@ -608,16 +614,23 @@ async fn review(
     }
     let mut out = Vec::new();
     for piece in items.iter().filter(|i| i.kind == "piece" && only.is_none_or(|o| o.contains(&i.id))) {
-        let guess: PieceGuess = parse(&piece.proposal)?;
-        let over: PieceOverrides = parse(&piece.overrides)?;
-        let mut guesses: Vec<(&ItemRow, PartGuess, PartOverrides, StagedFile)> = Vec::new();
+        // Pieces and parts of a newer release (unknown state, unreadable
+        // JSON) are left out: not shown, not committed (R-OPS-041).
+        let (Some(piece_state), Some(guess), Some(over)) = (
+            ItemState::parse(&piece.state),
+            parse::<PieceGuess>(&piece.proposal),
+            parse::<PieceOverrides>(&piece.overrides),
+        ) else {
+            continue;
+        };
+        let mut guesses: Vec<(&ItemRow, ItemState, PartGuess, PartOverrides, StagedFile)> = Vec::new();
         for part in parts_of.get(&piece.id).into_iter().flatten() {
             let Some(file) = part.file_id.and_then(|f| by_id.get(&f)) else { continue };
             // Content that turned out to be in the library meanwhile is not imported.
             if file.state == "duplicate" {
                 continue;
             }
-            let staged = StagedFile::from(FileRow {
+            let staged = FileRow {
                 id: file.id,
                 path: file.path.clone(),
                 size_bytes: file.size_bytes,
@@ -628,21 +641,26 @@ async fn review(
                 staves: file.staves,
                 problem: file.problem.clone(),
                 matched: true,
-            });
-            guesses.push((part, parse(&part.proposal)?, parse(&part.overrides)?, staged));
+            }
+            .staged();
+            if let (Some(state), Some(guess), Some(over), Some(staged)) =
+                (ItemState::parse(&part.state), parse(&part.proposal), parse(&part.overrides), staged)
+            {
+                guesses.push((part, state, guess, over, staged));
+            }
         }
         let inputs = guesses
             .iter()
-            .map(|(row, guess, over, file)| ReviewPartInput {
+            .map(|(row, state, guess, over, file)| ReviewPartInput {
                 id: row.id,
                 guess,
                 overrides: over,
                 file: file.clone(),
-                state: item_state(&row.state),
+                state: *state,
                 part_id: row.part_id,
             })
             .collect();
-        out.push(review_piece(piece.id, item_state(&piece.state), &guess, &over, piece.score_id, inputs, &lib));
+        out.push(review_piece(piece.id, piece_state, &guess, &over, piece.score_id, inputs, &lib));
     }
     Ok((out, files))
 }
@@ -658,9 +676,9 @@ pub async fn get_review(
     let (mut unmatched, mut duplicates) = (Vec::new(), Vec::new());
     for f in files {
         if f.state == "duplicate" {
-            duplicates.push(StagedFile::from(f));
+            duplicates.extend(f.staged());
         } else if !f.matched {
-            unmatched.push(StagedFile::from(f));
+            unmatched.extend(f.staged());
         }
     }
     Ok(Json(ImportReview { batch: batch_info(&app, &row).await?, pieces, unmatched, duplicates }))
@@ -721,8 +739,8 @@ pub async fn upload_content(
             }
         }
     }
-    let row = staged_files(&app, batch_id, Some(id)).await?.pop().ok_or(AppError::NotFound)?;
-    Ok(Json(row.into()))
+    let row = staged_files(&app, batch_id, Some(id)).await?.pop().and_then(FileRow::staged);
+    Ok(Json(row.ok_or(AppError::NotFound)?))
 }
 
 /// `(pdf sha, thumbnail sha)` of a staged file: librarians only, through its
@@ -758,6 +776,17 @@ pub async fn get_staged_thumbnail(
     serve_blob(&app, &thumbnail.ok_or(AppError::NotFound)?, "image/png", req).await
 }
 
+#[derive(sqlx::FromRow)]
+struct EditedItem {
+    id: Id,
+    batch_id: Id,
+    kind: String,
+    piece_id: Option<Id>,
+    overrides: String,
+    state: String,
+    piece_state: Option<String>,
+}
+
 /// The librarian's changes to pieces and parts (also several at once).
 /// Answers with the changed pieces' review rows.
 pub async fn update_items(
@@ -769,21 +798,33 @@ pub async fn update_items(
     if input.ids.is_empty() || input.ids.len() > MAX_ITEMS {
         return Err(AppError::BadRequest(ErrorCode::ItemCount { max: MAX_ITEMS as u32 }));
     }
-    let rows: Vec<(Id, Id, String, Option<Id>, String, String)> = sqlx::query_as(
-        "SELECT id, batch_id, kind, piece_id, overrides, state FROM import_items WHERE id IN (SELECT value FROM json_each(?1))",
+    let rows: Vec<EditedItem> = sqlx::query_as(
+        "SELECT i.id, i.batch_id, i.kind, i.piece_id, i.overrides, i.state, pc.state AS piece_state
+         FROM import_items i LEFT JOIN import_items pc ON pc.id = i.piece_id
+         WHERE i.id IN (SELECT value FROM json_each(?1))",
     )
     .bind(json_ids(&input.ids))
     .fetch_all(&app.db.read)
     .await?;
     let batch_id = match rows.first() {
-        Some(r) => r.1,
+        Some(r) => r.batch_id,
         None => return Err(AppError::NotFound),
     };
-    if rows.len() != input.ids.iter().collect::<HashSet<_>>().len() || rows.iter().any(|r| r.1 != batch_id) {
+    if rows.len() != input.ids.iter().collect::<HashSet<_>>().len() || rows.iter().any(|r| r.batch_id != batch_id) {
         return Err(AppError::BadRequest(ErrorCode::UnknownItems));
     }
-    if rows.iter().any(|r| r.5 == "committed") {
+    if rows.iter().any(|r| r.state == "committed") {
         return Err(AppError::Conflict(ErrorCode::ImportCommitted));
+    }
+    // Items of a newer release (unknown kind or state, also of the piece of a
+    // part) are not changed (R-OPS-041).
+    let known = |r: &EditedItem| {
+        r.state == "pending"
+            && (r.kind == "piece"
+                || (r.kind == "part" && r.piece_state.as_deref().and_then(ItemState::parse).is_some()))
+    };
+    if !rows.iter().all(known) {
+        return Err(AppError::BadRequest(ErrorCode::UnknownItems));
     }
     // Validate the changes before storing them.
     if let Some(PieceOverrides { target: Some(Target::Existing(score)), .. }) = &input.piece {
@@ -858,17 +899,21 @@ pub async fn update_items(
     }
     let mut tx = app.db.write.begin().await?;
     let mut pieces: Vec<Id> = Vec::new();
-    for (id, _, kind, piece_id, overrides, _) in &rows {
+    for EditedItem { id, kind, piece_id, overrides, .. } in &rows {
         let json = if kind == "piece" {
             pieces.push(*id);
-            let mut o: PieceOverrides = if input.reset { PieceOverrides::default() } else { parse(overrides)? };
+            // Overrides this release cannot read are never replaced, not even by a reset.
+            let stored: PieceOverrides = parse(overrides).ok_or(AppError::BadRequest(ErrorCode::UnknownItems))?;
+            let mut o = if input.reset { PieceOverrides::default() } else { stored };
             if let Some(c) = &input.piece {
                 o.merge(c);
             }
             serde_json::to_string(&o).map_err(AppError::internal)?
         } else {
             pieces.extend(piece_id);
-            let mut o: PartOverrides = if input.reset { PartOverrides::default() } else { parse(overrides)? };
+            // Overrides this release cannot read are never replaced, not even by a reset.
+            let stored: PartOverrides = parse(overrides).ok_or(AppError::BadRequest(ErrorCode::UnknownItems))?;
+            let mut o = if input.reset { PartOverrides::default() } else { stored };
             if let Some(c) = &part_changes {
                 o.merge(c);
             }

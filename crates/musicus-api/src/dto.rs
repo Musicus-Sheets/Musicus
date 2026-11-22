@@ -44,7 +44,7 @@ impl VersionInfo {
 
 /// Global role of a user. Access to sheets is granted to groups, not roles;
 /// roles only decide who may manage what.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Hash)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     /// Reads the parts granted to their groups and annotates them.
@@ -53,6 +53,11 @@ pub enum Role {
     Librarian,
     /// Manages users and groups, plus everything a librarian may do.
     Admin,
+    /// A role stored by a newer release (R-OPS-041). Fails closed: such an
+    /// account cannot log in with this release (its rights are not known,
+    /// they may be fewer than a member's), and it is never written back.
+    #[serde(other)]
+    Unknown,
 }
 
 impl Role {
@@ -69,9 +74,16 @@ impl Role {
             Role::Member => "member",
             Role::Librarian => "librarian",
             Role::Admin => "admin",
+            Role::Unknown => "unknown",
         }
     }
 
+    /// A role read from the database: unknown text ⇒ [`Role::Unknown`].
+    pub fn from_stored(s: &str) -> Self {
+        Self::parse(s).unwrap_or(Role::Unknown)
+    }
+
+    /// A known role (`Unknown` is never parsed from text).
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "member" => Some(Role::Member),
@@ -722,5 +734,14 @@ mod tests {
             assert_eq!(json, format!("\"{}\"", role.as_str()));
         }
         assert!(Role::Admin.can_manage_library() && !Role::Member.can_manage_library());
+    }
+
+    #[test]
+    fn unknown_roles_have_no_rights() {
+        assert_eq!(Role::from_stored("conductor"), Role::Unknown);
+        assert_eq!(Role::from_stored("admin"), Role::Admin);
+        assert_eq!(Role::parse("unknown"), None, "never parsed as a role to store");
+        assert_eq!(serde_json::from_str::<Role>("\"conductor\"").unwrap(), Role::Unknown);
+        assert!(!Role::Unknown.can_manage_library() && !Role::Unknown.is_admin());
     }
 }

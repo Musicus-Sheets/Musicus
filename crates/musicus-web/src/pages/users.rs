@@ -125,6 +125,10 @@ fn UserRow(
                     option { value: "member", selected: user.role == Role::Member, {t::common_role_member()} }
                     option { value: "librarian", selected: user.role == Role::Librarian, {t::common_role_librarian()} }
                     option { value: "admin", selected: user.role == Role::Admin, {t::common_role_admin()} }
+                    // A role of a newer release: shown, never sent back (R-OPS-041).
+                    if user.role == Role::Unknown {
+                        option { value: "unknown", selected: true, disabled: true, {t::common_role_unknown()} }
+                    }
                 }
             }
             td {

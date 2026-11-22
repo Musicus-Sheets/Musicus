@@ -163,6 +163,10 @@ struct PageState {
     /// Object ids of that revision, the base of a three-way merge.
     base_ids: HashSet<u64>,
     loaded: bool,
+    /// The saved layer could not be decoded (a newer ink format, R-OPS-041):
+    /// shown without it and never changed or saved here, so the stored
+    /// annotations stay as they are.
+    unreadable: bool,
     /// Bumped by every local change; equal to `saved_generation` when clean.
     generation: u64,
     saved_generation: u64,
@@ -192,9 +196,22 @@ async fn load_page(store: SharedStore, key: Key) -> Result<(), String> {
         return Ok(());
     }
     let (server, revision) = match api::get_page(key.0, key.1 as i64).await.map_err(|e| e.message)? {
-        PageBytes::Found { bytes, revision } => {
-            (model::decode(&bytes).map_err(|e| crate::errors::ink_error_text(&e))?, revision)
-        }
+        PageBytes::Found { bytes, revision } => match model::decode(&bytes) {
+            Ok(layer) => (layer, revision),
+            Err(e) => {
+                let mut s = store.borrow_mut();
+                let st = s.pages.entry(key).or_default();
+                // Nothing drawn here may overwrite it (not even on tab close).
+                st.unreadable = true;
+                st.layer = PageLayer::default();
+                st.saved_generation = st.generation;
+                st.undo.clear();
+                st.redo.clear();
+                drop(s);
+                bridge::clear_pending(key.0, key.1);
+                return Err(crate::errors::ink_error_text(&e));
+            }
+        },
         PageBytes::Missing => (PageLayer::default(), 0),
     };
     let mut s = store.borrow_mut();
@@ -666,6 +683,12 @@ fn Reader(data: Loaded) -> Element {
             let changed = {
                 let mut s = store.borrow_mut();
                 let st = s.pages.entry(key).or_default();
+                if st.unreadable {
+                    drop(s);
+                    error.set(Some(t::reader_annotations_page_locked()));
+                    version += 1; // redraw without the live stroke
+                    return;
+                }
                 match f(st) {
                     Some(action) => {
                         st.undo.push(action);

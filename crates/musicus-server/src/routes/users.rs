@@ -30,8 +30,15 @@ pub async fn issue_invite(app: &App, user_id: Id) -> ApiResult<Invite> {
     Ok(Invite { user_id, token, expires_at })
 }
 
+/// `Role::Unknown` (any role name this release does not know) is never
+/// stored: it would overwrite or invent a role of another release.
+fn known_role(role: Role) -> ApiResult<()> {
+    if role == Role::Unknown { Err(AppError::BadRequest(ErrorCode::InUseOrUnknown)) } else { Ok(()) }
+}
+
 /// Inserts a user without password. Used by the API and the CLI bootstrap.
 pub async fn insert_user(app: &App, username: &str, display_name: &str, role: Role) -> ApiResult<Id> {
+    known_role(role)?;
     let username = required(Field::Username, username, 64)?.to_lowercase();
     if !username.chars().all(|c| c.is_alphanumeric() || "._-".contains(c)) {
         return Err(AppError::BadRequest(ErrorCode::UsernameInvalid));
@@ -64,7 +71,7 @@ async fn load_users(app: &App, only: Option<Id>) -> ApiResult<Vec<UserSummary>> 
             id,
             username,
             display_name,
-            role: Role::parse(&role).unwrap_or(Role::Member),
+            role: Role::from_stored(&role),
             disabled,
             has_password,
             group_ids: serde_json::from_str(&groups).unwrap_or_default(),
@@ -99,6 +106,7 @@ pub async fn update(
     if id == user.id && (req.disabled == Some(true) || req.role.is_some_and(|r| r != Role::Admin)) {
         return Err(AppError::Conflict(ErrorCode::CannotLockOutSelf));
     }
+    req.role.map(known_role).transpose()?;
     let display_name = req.display_name.as_deref().map(|d| required(Field::DisplayName, d, 100)).transpose()?;
     let mut tx = app.db.write.begin().await?;
     let done = sqlx::query(

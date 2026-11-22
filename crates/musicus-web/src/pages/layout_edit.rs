@@ -29,6 +29,7 @@ fn kind_name(k: RegionKind) -> String {
         RegionKind::Header => t::reader_systems_kind_header(),
         RegionKind::Footer => t::reader_systems_kind_footer(),
         RegionKind::Hidden => t::reader_systems_kind_hidden(),
+        RegionKind::Unknown => t::reader_systems_kind_unknown(),
     }
 }
 
@@ -38,6 +39,7 @@ fn kind_value(k: RegionKind) -> &'static str {
         RegionKind::Header => "header",
         RegionKind::Footer => "footer",
         RegionKind::Hidden => "hidden",
+        RegionKind::Unknown => "unknown",
     }
 }
 
@@ -229,6 +231,8 @@ fn Editor(part: Part, sha256: String) -> Element {
     let (w, h) = size().unwrap_or((0.0, 0.0));
     let corrected = shown.as_ref().is_some_and(|p| p.corrected);
     let n_bounds = d.bounds.len();
+    // The server refuses to store a kind of a newer release (R-OPS-041).
+    let unknown_kinds = d.kinds.contains(&RegionKind::Unknown);
 
     rsx! {
         {header}
@@ -283,6 +287,10 @@ fn Editor(part: Part, sha256: String) -> Element {
                                 },
                                 for kind in KINDS {
                                     option { value: kind_value(kind), selected: kind == k, {kind_name(kind)} }
+                                }
+                                // A kind of a newer release: shown until the librarian picks one.
+                                if k == RegionKind::Unknown {
+                                    option { value: kind_value(k), selected: true, disabled: true, {kind_name(k)} }
                                 }
                             }
                             button {
@@ -358,13 +366,14 @@ fn Editor(part: Part, sha256: String) -> Element {
             }
         }
         div { class: "actions layout-actions",
-            button { class: "primary", disabled: !dirty(), onclick: save, {t::reader_systems_save()} }
+            button { class: "primary", disabled: !dirty() || unknown_kinds, onclick: save, {t::reader_systems_save()} }
             if corrected {
                 button { onclick: reset, {t::reader_systems_reset()} }
             }
             match status() {
                 Some(Ok(s)) => rsx! { span { class: "ok small", "{s}" } },
                 Some(Err(e)) => rsx! { span { class: "error-text small", "{e}" } },
+                None if unknown_kinds => rsx! { span { class: "muted small", {t::reader_systems_unknown_kinds()} } },
                 None if dirty() => rsx! { span { class: "muted small", {t::reader_systems_unsaved()} } },
                 None => rsx! {},
             }
