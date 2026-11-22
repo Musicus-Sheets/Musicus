@@ -17,7 +17,7 @@ module doc `layout.md`) runs in a background worker, not in handlers. `tests/api
 5. TLS if `--tls-cert` and `--tls-key` (rustls with `ring` provider installed explicitly) else plain TCP. `into_make_service_with_connect_info::<SocketAddr>()` (needed by `ClientIp`).
 6. Graceful shutdown on SIGTERM/Ctrl-C (R-OPS-008).
 
-Other subcommands: `create-admin --username U [--display-name D]` (prints invite URL), `backup --to FILE` (`VACUUM INTO`, refuses existing file; R-OPS-005), `healthcheck [--listen]` (TCP connect to listen addr, 0.0.0.0→127.0.0.1, `GET /api/health HTTP/1.0`, exit 0 iff status line ends with ` 200`; R-OPS-007).
+`--version` prints `musicus-server <musicus_api::VERSION>` (clap `version = musicus_api::VERSION`, a-version-source; R-OPS-033). Other subcommands: `create-admin --username U [--display-name D]` (prints invite URL), `backup --to FILE` (`VACUUM INTO`, refuses existing file; R-OPS-005), `healthcheck [--listen]` (TCP connect to listen addr, 0.0.0.0→127.0.0.1, `GET /api/health HTTP/1.0`, exit 0 iff status line ends with ` 200`; R-OPS-007).
 
 ## Configuration (`config.rs`) — all `serve` options
 
@@ -53,6 +53,7 @@ Auth column: `—` none, `U` any logged-in user, `L` librarian/admin, `A` admin.
 | Method | Path | Auth | Handler | Behaviour / status codes | Requirements |
 | --- | --- | --- | --- | --- | --- |
 | GET | `/health` | — | `routes::health` | `SELECT 1` on read pool ⇒ 200 `ok` | R-OPS-007 |
+| GET | `/version` | — | `routes::version` | 200 `VersionInfo {version}` = `musicus_api::VERSION` (workspace version), `Cache-Control: no-store`; nothing else (a-version-public) | R-OPS-033 |
 | POST | `/auth/login` | — | `auth::login` | `LoginRequest{username,password,bearer}`; limiter 429; 401 wrong; 200 `LoginResponse` + Set-Cookie (or `token` if bearer) | R-ACC-004, R-SEC-003 |
 | POST | `/auth/logout` | U | `auth::logout` | deletes current session; 204 + clearing cookie | R-ACC-006 |
 | GET | `/auth/me` | U | `auth::me` | `CurrentUser` | — |

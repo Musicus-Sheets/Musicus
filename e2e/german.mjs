@@ -138,7 +138,7 @@ check(true, 'error code rendered in German: "Das aktuelle Passwort ist falsch"')
 // Other key pages in German (headings), with the overflow report.
 for (const [path, heading] of [['/groups', 'Gruppen'], ['/users', 'Benutzer'], ['/import', 'Import'],
   ['/scores/new', 'Stück hinzufügen'], [`/scores/${marsch.id}/edit`, 'Stück bearbeiten'],
-  ['/programmes/new', 'Neues Programm']]) {
+  ['/programmes/new', 'Neues Programm'], ['/about', 'Über Musicus']]) {
   await visit(path, heading);
   check(true, `${path}: heading "${heading}"`);
 }

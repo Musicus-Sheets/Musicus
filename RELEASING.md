@@ -24,7 +24,9 @@ release.
 1. Branch from `main`: `git switch -c release/X.Y.Z`. Only a branch named `release/<version>` may delete
    previews and add the merged database update.
 2. Raise the version in the workspace `Cargo.toml` (`[workspace.package] version = "X.Y.Z"`), then
-   `cargo build` so `Cargo.lock` follows.
+   `cargo build` so `Cargo.lock` follows. This is the only place where the version is written:
+   `musicus-server --version`, `GET /api/version`, the "About Musicus" page and the title pages of the user
+   guide and of the technical documentation all take it from there (R-OPS-033…035).
 3. Merge the database updates (minor/major; for a patch it only checks that there are none):
 
    ```sh
@@ -82,9 +84,11 @@ release.
          (`scripts/i18n-review.py de`).
    - [ ] User guide (`docs/user-guide`) and technical documentation (`docs/technical`) describe the release;
          screenshots regenerated if the UI changed.
-   - [ ] The title pages show the version: `version:` in `docs/user-guide/main.typ` and
-         `docs/technical/main.typ` (R-OPS-035). **(planned:** taken from the release version
-         automatically; until then edit both by hand.)
+   - [ ] The version is right everywhere (R-OPS-033…035): `cargo run -p musicus-server -- --version` prints
+         `musicus-server X.Y.Z`; `docs/user-guide/build.sh` and `docs/technical/build.sh` (no argument: they
+         read the workspace version) print "written (version X.Y.Z)" and the title pages say
+         "Musicus X.Y.Z". The guide site builds each release with the version of its tagged commit and
+         warns if the tag `vX.Y.Z` differs from it (check the workflow log of § 4.4).
    - [ ] Requirement statuses in `docs/requirements` are current; `uv run docs/requirements/tools/validate.py`.
    - [ ] Release notes drafted (§ 5).
 
@@ -93,32 +97,61 @@ release.
 1. Docs changes go to their own pull requests in `docs/requirements`, `docs/technical` and `docs/user-guide`
    and are merged first.
 2. Point the submodules at the merge commits: `./scripts/update-submodules.sh`, commit on the release branch.
-3. Tag the requirements repository on exactly the pinned commit (R-OPS-036):
+   The tags of the docs repositories are created only after the release was published (§ 4, step 5).
 
-   ```sh
-   git -C docs/requirements tag vX.Y.Z && git -C docs/requirements push origin vX.Y.Z
-   ```
+## 4. Pull request, merge, publish
 
-## 4. Pull request, merge, tag, publish
+Target flow: one release pipeline builds and checks everything first and publishes only when all of it
+succeeded. **(planned:** the pipeline does not exist yet; below each step says what to do by hand until
+then.)
 
 1. Open the pull request from `release/X.Y.Z` to `main`; all required checks must pass.
-   **(planned:** release check on `release/<version>` branches and the database check, R-OPS-038…040 —
-   until then check by hand: patch ⇒ no preview and no `X.Y.Z.sql`; minor ⇒ `X.Y.0.sql` lists exactly the
-   deleted previews and `migrations/preview/` is gone.)
-2. Merge, then tag the merge commit and push the tag:
+   **(planned)** The pipeline runs as a *dry run* on this pull request: it builds and checks everything
+   (stage 1 below) and publishes nothing.
+   Until then check by hand: patch ⇒ no preview and no `X.Y.Z.sql`; minor ⇒ `X.Y.0.sql` lists exactly the
+   deleted previews and `migrations/preview/` is gone; the workspace version is `X.Y.Z` (§ 2 step 2) and
+   both title pages say "Musicus X.Y.Z" (§ 2 checklist).
+2. Merge the pull request. **(planned)** The merge of a `release/<version>` pull request into `main` starts
+   the real run automatically:
+   - *Stage 1* (temporary results only, workflow artifacts that expire): workspace version in `Cargo.toml` =
+     version in the branch name; all tests, lints, documentation and requirements checks; the database
+     release check; program build and smoke test on every platform, with `MUSICUS_RELEASE_BUILD=1` (a release
+     build refuses to start with preview updates); linux/amd64 + linux/arm64 images built but not pushed;
+     user guide and technical documentation built, their title pages checked to show `X.Y.Z`; the complete
+     user guide website built, including the new release.
+   - *Stage 2* (only if stage 1 is entirely green), in this order: push the images with their version tags →
+     create the tag `vX.Y.Z` on the merge commit → create the GitHub release with the program archives and
+     `SHA256SUMS` → deploy the user guide website.
+   - If anything fails, nothing is published and the artifacts are discarded: fix the problem (a normal
+     pull request) and run the pipeline again. Every publish step skips what already exists, so a run that
+     failed while publishing is simply run again.
+3. Check the run: every job green; the images `X.Y.Z` and `X.Y` exist; the tag `vX.Y.Z` and the GitHub
+   release with the archives and `SHA256SUMS` exist; the user guide site lists `vX.Y.Z` as latest.
+4. Until the pipeline exists, publish by hand instead of steps 2 and 3:
 
    ```sh
    git switch main && git pull && git tag vX.Y.Z && git push origin vX.Y.Z
    ```
 
-3. **(planned)** Release workflow on the tag: builds with `MUSICUS_RELEASE_BUILD=1` (a release build
-   refuses to start with preview updates, R-OPS-024), publishes the linux/amd64 + linux/arm64 image with
-   version tags (R-OPS-028) and program archives per platform with `SHA256SUMS` (R-OPS-029).
-   Until then: build the image locally with `MUSICUS_RELEASE_BUILD=1` set for `cargo build --release`
-   (e.g. add it to the build command in the `Dockerfile` for that build) and start it once on a copy of an
-   existing data directory; nothing is published automatically.
-4. Create the GitHub release for the tag with the release notes. Publishing it (not as prerelease) runs
-   `.github/workflows/user-guide-pages.yml`, which rebuilds the user guide site for all release tags.
+   Build the image locally with `MUSICUS_RELEASE_BUILD=1` set for `cargo build --release` (e.g. add it to
+   the build command in the `Dockerfile` for that build) and start it once on a copy of an existing data
+   directory; nothing is published automatically. Then create the GitHub release for the tag with the
+   release notes; publishing it (not as prerelease) runs `.github/workflows/user-guide-pages.yml`, which
+   rebuilds the user guide site for all release tags. (In the pipeline this workflow becomes the last step;
+   its manual test build stays.)
+5. After the release was published successfully, tag the three docs repositories by hand on exactly the
+   commits the release points to (always by hand, also with the pipeline):
+
+   ```sh
+   git switch main && git pull && git submodule update --init
+   for repo in docs/requirements docs/technical docs/user-guide; do
+       git -C "$repo" tag vX.Y.Z "$(git rev-parse "vX.Y.Z:$repo")"
+       git -C "$repo" push origin vX.Y.Z
+   done
+   ```
+
+   `git rev-parse vX.Y.Z:<path>` prints the commit the release's submodule pointer names, so the tag lands
+   on that commit even if the submodule checkout is elsewhere.
 
 ## 5. Release notes
 

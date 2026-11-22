@@ -4,6 +4,7 @@ description = "Musicus message catalogue (Fluent): typed message functions gener
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 
 [features]

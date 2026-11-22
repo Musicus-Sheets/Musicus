@@ -1,7 +1,7 @@
 //! The user's own account: password and logged-in devices.
 
 use crate::{
-    api, session,
+    Route, api, session,
     ui::{ErrorBox, Loading, format_time},
 };
 use dioxus::prelude::*;
@@ -90,6 +90,7 @@ pub fn Account() -> Element {
                     },
                 }
             }
+            p { class: "muted small about-link", Link { to: Route::About {}, {t::about_link()} } }
         }
     }
 }

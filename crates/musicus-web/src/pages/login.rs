@@ -49,6 +49,7 @@ pub fn Login() -> Element {
                 }
                 button { class: "primary", r#type: "submit", disabled: busy(), {t::login_submit()} }
                 p { class: "muted small", {t::login_no_account()} }
+                p { class: "muted small about-link", Link { to: Route::About {}, {t::about_link()} } }
             }
         }
     }

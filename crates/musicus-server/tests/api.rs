@@ -342,6 +342,20 @@ async fn library(s: &Server) -> Library {
     Library { admin, anna, anna_id, trumpets: group.id, score: score.id, trumpet_part: tp, flute_part: fp }
 }
 
+/// R-OPS-033: the running release, without a session, equal to `--version`.
+#[tokio::test]
+async fn version_is_public_and_matches_the_program() {
+    let s = Server::start().await;
+    let r = s.send(Method::GET, "/api/version", Auth::None, &[], Body::empty()).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(r.headers[header::CACHE_CONTROL], "no-store");
+    assert_eq!(r.json::<Value>(), json!({"version": env!("CARGO_PKG_VERSION")}));
+    assert_eq!(r.json::<musicus_api::VersionInfo>().version, musicus_api::VERSION);
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_musicus-server")).arg("--version").output().unwrap();
+    assert!(out.status.success());
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), format!("musicus-server {}", env!("CARGO_PKG_VERSION")));
+}
+
 #[tokio::test]
 async fn login_sessions_and_csrf() {
     let s = Server::start().await;

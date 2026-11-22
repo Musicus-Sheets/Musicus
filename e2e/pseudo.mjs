@@ -25,7 +25,9 @@ function check(condition, message) {
 
 // Data entered by this script is shown as entered (a-data-as-entered), never marked.
 const DATA = ['admin', 'Trumpet', 'Brass', 'Pseudo March', 'Composer X', 'Trumpets', 'Pseudo concert', 'Trumpet 1',
-  'Pseudo', '𝄞 Musicus', 'Administrator', 'Mozilla/', 'Oboe', 'Ölberg', 'Posaune', 'Woodwind'];
+  'Pseudo', '𝄞 Musicus', 'Administrator', 'Mozilla/', 'Oboe', 'Ölberg', 'Posaune', 'Woodwind',
+  // About page: licence identifier (SPDX) and repository address are names, not UI text.
+  'AGPL-3.0-or-later', 'github.com/Musicus-Sheets/Musicus'];
 
 await page.goto(inviteUrl);
 const pw = page.locator('input[type=password]');
@@ -79,7 +81,7 @@ async function overflowing() {
 
 const pages = [
   ['/', 'library'], ['/programmes', 'programmes'], ['/instruments', 'instruments'], ['/groups', 'groups'],
-  ['/users', 'users'], ['/account', 'account'], ['/import', 'import'], ['/scores/new', 'new piece'],
+  ['/users', 'users'], ['/account', 'account'], ['/about', 'about'], ['/import', 'import'], ['/scores/new', 'new piece'],
   [`/scores/${score.id}/edit`, 'piece editor'], [`/parts/${part.id}/edit`, 'part editor'],
   ['/programmes/new', 'programme editor'], [`/parts/${part.id}`, 'reader without file'], ['/no/such/page', 'not found'],
 ];

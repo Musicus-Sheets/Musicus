@@ -130,6 +130,11 @@ input.search { width: 100%; max-width: 420px; }
 /* Auth */
 .auth { display: grid; place-items: center; min-height: 100vh; padding: 16px; }
 .auth .card { width: 100%; max-width: 380px; display: flex; flex-direction: column; gap: 0.8rem; }
+.auth .card.about { max-width: 460px; }
+.about-facts { display: grid; grid-template-columns: auto 1fr; gap: 0.4rem 1rem; margin: 0; }
+.about-facts dt { color: var(--muted); }
+.about-facts dd { margin: 0; overflow-wrap: anywhere; }
+.about-link { margin: 0; }
 
 /* Library */
 .score-list { display: flex; flex-direction: column; gap: 0.8rem; }

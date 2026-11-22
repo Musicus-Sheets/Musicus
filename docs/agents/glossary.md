@@ -58,6 +58,9 @@ during the review; **draft decision** = chosen by the agent for the draft, marke
 | reader | the full-screen view of a part | Leseansicht | proposed |
 | import (batch) | a mass import of a folder | Import | proposed |
 | invite (link) | link that lets a new user set a password | Einladung(slink) | proposed |
+| About Musicus | page with version, licence and source code | Über Musicus | proposed |
+| version | the release that runs ("0.1.0") | Version | proposed |
+| licence / source code | AGPL-3.0-or-later / the repository | Lizenz / Quellcode | proposed |
 | device (session) | a logged-in browser | Gerät | proposed |
 | pen / highlighter / eraser / stamp / text | reader tools | Stift / Textmarker / Radierer / Stempel / Text | proposed |
 | staff | the five lines of one instrument (import notes: "1 staff per system") | Notensystem | proposed |

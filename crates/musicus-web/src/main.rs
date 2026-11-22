@@ -19,6 +19,7 @@ use dioxus::prelude::*;
 use musicus_api::CurrentUser;
 use musicus_i18n::t;
 use pages::{
+    about::About,
     account::Account,
     groups::Groups,
     import::Imports,
@@ -44,6 +45,8 @@ pub enum Route {
     Login {},
     #[route("/invite/:token")]
     Invite { token: String },
+    #[route("/about")]
+    About {},
     #[route("/parts/:id")]
     Viewer { id: i64 },
     #[route("/programmes/:pid/parts/:id")]

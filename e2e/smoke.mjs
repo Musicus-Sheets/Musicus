@@ -439,6 +439,18 @@ await librarian.close();
 const member = await browser.newContext({ ...EN, viewport: { width: 1024, height: 1366 }, hasTouch: false });
 const m = await member.newPage();
 watch(m);
+// "About Musicus" before the login: public, version from GET /api/version (R-OPS-033, R-OPS-034).
+const version = await (await m.request.get(base + '/api/version')).json();
+check(/^\d+\.\d+\.\d+/.test(version.version), `GET /api/version without login: ${version.version}`);
+await m.goto(base + '/login');
+await m.getByRole('link', { name: 'About Musicus' }).click();
+await m.getByRole('heading', { name: 'About Musicus' }).waitFor();
+await m.locator('#about-version', { hasText: version.version }).waitFor();
+check(await m.getByRole('link', { name: 'GNU Affero General Public License, version 3 or later' }).count() === 1
+  && await m.getByRole('link', { name: 'github.com/Musicus-Sheets/Musicus' }).count() === 1,
+  'About view before login: version, licence and source link');
+await m.getByRole('link', { name: 'Go to login' }).click();
+await m.getByRole('button', { name: 'Log in' }).waitFor();
 await m.goto(invites.anna);
 await m.getByLabel('New password (at least 8 characters)').fill('anna-password-1');
 await m.getByLabel('Repeat password').fill('anna-password-1');
@@ -458,7 +470,13 @@ await mnav.getByRole('link', { name: 'Instruments' }).click();
 await m.locator('.instrument-list .row', { hasText: 'Trumpet' }).waitFor();
 check(await m.getByRole('button', { name: 'Delete' }).count() === 0
   && await m.getByPlaceholder('Instrument, e.g. Trumpet').count() === 0, 'member sees the instruments read-only');
-await mnav.getByRole('link', { name: 'Library' }).click();
+await mnav.getByRole('link', { name: 'Anna' }).click();
+await m.getByRole('link', { name: 'About Musicus' }).click();
+await m.locator('#about-version', { hasText: version.version }).waitFor();
+await shot(m, 'member-about');
+check(true, 'a member opens About Musicus from the account page and sees the running version');
+await m.getByRole('link', { name: 'Back to the library' }).click();
+await m.getByRole('heading', { name: 'Library' }).waitFor();
 
 await m.getByPlaceholder('Search title, composer, tag, number…').fill('fucik');
 await m.waitForTimeout(600);

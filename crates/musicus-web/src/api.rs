@@ -68,6 +68,13 @@ fn session_lost() {
     }
 }
 
+/// `GET /api/version`: the release the server runs (public, R-OPS-033).
+/// Differs from [`musicus_api::VERSION`] when the server was updated after
+/// this client was loaded.
+pub async fn version() -> ApiResult<String> {
+    get::<musicus_api::VersionInfo>("/api/version").await.map(|v| v.version)
+}
+
 pub async fn get<T: DeserializeOwned>(path: &str) -> ApiResult<T> {
     let r = check(builder(Method::GET, path).send().await.map_err(network)?).await?;
     r.json().await.map_err(network)

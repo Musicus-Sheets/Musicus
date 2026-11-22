@@ -33,3 +33,13 @@ account-unknown-device = Unbekanntes Gerät
 account-last-used = Zuletzt verwendet { $time }
 account-this-device = {" · "}dieses Gerät
 account-log-out-device = Abmelden
+
+## About (the "About Musicus" page, reachable with and without a login)
+about-link = Über Musicus
+about-title = Über Musicus
+about-version-label = Version
+about-licence-label = Lizenz
+about-licence-name = GNU Affero General Public License, Version 3 oder neuer
+about-source-label = Quellcode
+about-free-software = Musicus ist freie Software: Du darfst es unter den Bedingungen dieser Lizenz verwenden, untersuchen, weitergeben und verändern.
+about-go-to-login = Zur Anmeldung
