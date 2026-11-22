@@ -78,7 +78,10 @@ release.
    uv run docs/requirements/tools/validate.py
    ```
 7. Release checklist:
-   - [ ] Patch: no preview, no database update, **no new stored values** (read the diff since the last tag).
+   - [ ] Patch: no preview, no database update, **no new stored values** (new enum variants, format
+         versions) — R-OPS-041. Read the diff since the last tag: no new role, system-layout band kind, layout or
+         import state, reader setting, import language, ink format version or kind of mark, error code written
+         into the database, placeholder of a stored import pattern or file type.
    - [ ] 1.0.0 only: `1.0.0.sql` simplified by hand and checked against the appended version (step 5).
    - [ ] Translations complete: `cargo test -p musicus-i18n` passes; new German texts reviewed
          (`scripts/i18n-review.py de`).
