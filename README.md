@@ -43,10 +43,13 @@ are the submodule `docs/requirements`; start with its `index.md`. After
 editing them, run `uv run docs/requirements/tools/validate.py`.
 
 The three documentation submodules track their `main` branch. A change to
-them is merged in its own repository first; afterwards
-`./scripts/update-submodules.sh` moves the pointers to the merge commits.
-The pull-request check `scripts/check-submodules.sh` ensures the main
-repository only references commits on the docs repositories' `main`.
+them is merged in its own repository first; afterwards a comment
+`/update-submodules` on the main pull request lets a bot move the pointers to
+the merge commits and push them (or run `./scripts/update-submodules.sh`,
+commit and push yourself). The pull-request check `scripts/check-submodules.sh`
+ensures the main repository only references commits on the docs
+repositories' `main`. The bot needs a one-time setup of a GitHub App:
+[docs/github-setup.md](docs/github-setup.md).
 
 Coding agents start at `AGENTS.md`, which points to `docs/agents/`. That
 documentation must be updated in the same commit as every code change;

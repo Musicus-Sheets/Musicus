@@ -1,0 +1,311 @@
+name: Update submodules
+# Comment `/update-submodules` on a pull request (people with write access only) to move its
+# docs submodule pointers to the current `main` of each docs repository, i.e. to the merge
+# commits of the merged docs pull requests: what the maintainer otherwise does by hand with
+# ./scripts/update-submodules.sh, commit "Point submodules to merged docs",
+# ./scripts/check-submodules.sh and push (a-submodule-pins, a-update-submodules-bot).
+#
+# Refuses (with a reply, without changes) when a docs repository still has an open pull request
+# from a branch of the same name, for pull requests from forks, and for commenters without write
+# access. Pushes with a GitHub App token, so the new commit runs the pull request's checks
+# (pushes made with GITHUB_TOKEN start no workflows). The app only has Contents: read and write;
+# its token is used for nothing but the checkout and push of the pull request's branch.
+# Reading the pull request and the docs repositories (public), the reactions and the replies use
+# GITHUB_TOKEN (they appear as github-actions[bot]).
+#
+# Security: issue_comment runs use this file and the scripts of the DEFAULT branch, with secrets.
+# Nothing from the pull request is built or executed: the scripts run from a checkout of the
+# default branch ("trusted/") against the pull request's checkout ("pr/"), which only git reads.
+# Consequently a change to this file only takes effect once it is merged into main.
+#
+# Test from the Actions tab: Run workflow, branch main, input `pr` = pull request number.
+# One-time setup (GitHub App, variable MUSICUS_BOT_CLIENT_ID, secret MUSICUS_BOT_PRIVATE_KEY):
+# docs/github-setup.md.
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Number of the pull request whose submodule pointers to update
+        required: true
+        type: number
+permissions:
+  contents: read
+concurrency:
+  group: update-submodules-${{ github.event.issue.number || inputs.pr }}
+  cancel-in-progress: false
+defaults:
+  run:
+    shell: bash
+jobs:
+  # Exact command only (expressions cannot trim, and `==` ignores case). No token, no checkout.
+  command:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.pull_request &&
+       contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) &&
+       contains(github.event.comment.body, '/update-submodules'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        env:
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            echo "run=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          body="${BODY//$'\r'/}"
+          body="${body#"${body%%[![:space:]]*}"}"
+          body="${body%"${body##*[![:space:]]}"}"
+          if [[ "$body" == "/update-submodules" ]]; then
+            echo "run=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "Not the command; nothing to do."
+            echo "run=false" >>"$GITHUB_OUTPUT"
+          fi
+
+  update:
+    needs: command
+    if: needs.command.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # GITHUB_TOKEN: read the pull request, react to the comment and reply. Writing to the
+    # branch is the app token's job.
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    env:
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.issue.number || inputs.pr }}
+      COMMENT_ID: ${{ github.event.comment.id }}
+      ACTOR: ${{ github.event.comment.user.login || github.actor }}
+      DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Acknowledge the comment
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=eyes >/dev/null
+
+      - name: Check commenter and pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          refuse() {
+            printf '%s\n' "$1" >"$RUNNER_TEMP/reply.md"
+            gh api "repos/$REPO/issues/$PR/comments" -F "body=@$RUNNER_TEMP/reply.md" >/dev/null
+            if [[ -n "$COMMENT_ID" ]]; then
+              gh api -X POST "repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=confused >/dev/null
+            fi
+            echo "go=false" >>"$GITHUB_OUTPUT"
+            echo "::notice::$1"
+            exit 0
+          }
+          permission="$(gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq .permission)"
+          case "$permission" in
+            admin | maintain | write) ;;
+            *) refuse "\`/update-submodules\` needs write access to this repository ($ACTOR has \`$permission\`)." ;;
+          esac
+
+          gh api "repos/$REPO/pulls/$PR" >"$RUNNER_TEMP/pr.json"
+          state="$(jq -r .state "$RUNNER_TEMP/pr.json")"
+          head_repo="$(jq -r '.head.repo.full_name // ""' "$RUNNER_TEMP/pr.json")"
+          branch="$(jq -r .head.ref "$RUNNER_TEMP/pr.json")"
+          sha="$(jq -r .head.sha "$RUNNER_TEMP/pr.json")"
+          [[ "$state" == open ]] || refuse "This pull request is $state; nothing was changed."
+          [[ "$head_repo" == "$REPO" ]] ||
+            refuse "The branch of this pull request is in another repository (${head_repo:-deleted}); \`/update-submodules\` only pushes to branches of $REPO. Run \`./scripts/update-submodules.sh\` there yourself."
+          [[ "$branch" != "$DEFAULT_BRANCH" ]] || refuse "The pull request's branch is \`$DEFAULT_BRANCH\`; nothing was changed."
+          {
+            echo "go=true"
+            echo "branch=$branch"
+            echo "sha=$sha"
+          } >>"$GITHUB_OUTPUT"
+
+      # Only now, and only for the checkout and push of the pull request's branch.
+      - name: Create the app token
+        id: app-token
+        if: steps.pr.outputs.go == 'true'
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ vars.MUSICUS_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.MUSICUS_BOT_PRIVATE_KEY }}
+          # Default without owner/repositories: this repository only.
+          permission-contents: write
+
+      # The scripts and the knowledge of what to run come from here, never from the pull request.
+      - name: Check out the default branch (trusted scripts)
+        if: steps.pr.outputs.go == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: trusted
+          submodules: false
+          persist-credentials: false
+
+      # Only read and written by git; its files are never executed.
+      - name: Check out the pull request's branch
+        if: steps.pr.outputs.go == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.sha }}
+          path: pr
+          submodules: false
+          # Kept for the push at the end (app token, this repository only).
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Check the docs pull requests
+        id: docs
+        if: steps.pr.outputs.go == 'true'
+        env:
+          # The docs repositories are public: GITHUB_TOKEN can read them.
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.pr.outputs.branch }}
+        run: |
+          : >"$RUNNER_TEMP/repos.tsv"
+          : >"$RUNNER_TEMP/open.md"
+          while read -r key path; do
+            name="${key#submodule.}"
+            name="${name%.path}"
+            url="$(git -C pr config -f .gitmodules "submodule.$name.url")"
+            slug="$(sed -E 's#^(git@github\.com:|https://github\.com/)##; s#\.git$##' <<<"$url")"
+            if [[ ! "$url" =~ ^(git@github\.com:|https://github\.com/)[^/]+/[^/]+$ ]]; then
+              echo "Submodule $path: $url is not a GitHub repository" >"$RUNNER_TEMP/error.txt"
+              exit 1
+            fi
+            # Follows renames/transfers (e.g. a repository moved to the organisation).
+            full="$(gh api "repos/$slug" --jq .full_name)"
+            printf '%s\t%s\n' "$path" "$full" >>"$RUNNER_TEMP/repos.tsv"
+            gh api -X GET "repos/$full/pulls" -f state=open -f "head=${full%%/*}:$BRANCH" \
+              --jq '.[] | "- \(.html_url) (\(.title))"' >>"$RUNNER_TEMP/open.md"
+          done < <(git -C pr config -f .gitmodules --get-regexp '^submodule\..*\.path$')
+          cat "$RUNNER_TEMP/repos.tsv"
+
+          if [[ -s "$RUNNER_TEMP/open.md" ]]; then
+            {
+              echo "Not updated: these docs pull requests from \`$BRANCH\` are still open. Merge them first, then comment \`/update-submodules\` again."
+              echo
+              cat "$RUNNER_TEMP/open.md"
+            } >"$RUNNER_TEMP/reply.md"
+            gh api "repos/$REPO/issues/$PR/comments" -F "body=@$RUNNER_TEMP/reply.md" >/dev/null
+            if [[ -n "$COMMENT_ID" ]]; then
+              gh api -X POST "repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=confused >/dev/null
+            fi
+            echo "go=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "go=true" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Update the pointers
+        id: update
+        if: steps.docs.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # No SSH key in CI (the docs repositories are public), and no other transports.
+          git config --global url.https://github.com/.insteadOf git@github.com:
+          git config --global protocol.allow never
+          git config --global protocol.https.allow always
+
+          cd pr
+          paths=()
+          while IFS=$'\t' read -r path _; do paths+=("$path"); done <"$RUNNER_TEMP/repos.tsv"
+          git ls-tree HEAD -- "${paths[@]}" | awk '{print $4 "\t" $3}' >"$RUNNER_TEMP/old.tsv"
+
+          if ! ../trusted/scripts/update-submodules.sh >"$RUNNER_TEMP/update.log" 2>&1; then
+            cat "$RUNNER_TEMP/update.log"
+            tail -n 20 "$RUNNER_TEMP/update.log" >"$RUNNER_TEMP/error.txt"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/update.log"
+
+          if git diff --cached --quiet; then
+            echo "Already up to date: every submodule points to the current \`main\` of its docs repository. ([run]($RUN_URL))" >"$RUNNER_TEMP/reply.md"
+            gh api "repos/$REPO/issues/$PR/comments" -F "body=@$RUNNER_TEMP/reply.md" >/dev/null
+            if [[ -n "$COMMENT_ID" ]]; then
+              gh api -X POST "repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=+1 >/dev/null
+            fi
+            echo "changed=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Only submodule pointers (mode 160000) may be committed.
+          if git diff --cached --raw | awk '$2 != "160000"' | grep -q .; then
+            git diff --cached --raw >"$RUNNER_TEMP/error.txt"
+            echo "Staged changes other than submodule pointers:" >&2
+            cat "$RUNNER_TEMP/error.txt" >&2
+            exit 1
+          fi
+          echo "changed=true" >>"$GITHUB_OUTPUT"
+
+      - name: Commit, check and push
+        if: steps.update.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          BRANCH: ${{ steps.pr.outputs.branch }}
+        run: |
+          cd pr
+          user_id="$(gh api "users/${APP_SLUG}%5Bbot%5D" --jq .id)"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
+          git commit --quiet -m "Point submodules to merged docs"
+
+          if ! ../trusted/scripts/check-submodules.sh >"$RUNNER_TEMP/check.log" 2>&1; then
+            cat "$RUNNER_TEMP/check.log"
+            tail -n 20 "$RUNNER_TEMP/check.log" >"$RUNNER_TEMP/error.txt"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/check.log"
+
+          # No force: if the branch moved since the checkout, the push is rejected (comment again).
+          if ! git push origin "HEAD:refs/heads/$BRANCH" >"$RUNNER_TEMP/push.log" 2>&1; then
+            cat "$RUNNER_TEMP/push.log"
+            tail -n 20 "$RUNNER_TEMP/push.log" >"$RUNNER_TEMP/error.txt"
+            exit 1
+          fi
+          new_sha="$(git rev-parse HEAD)"
+
+          {
+            echo "Pointed the submodules to the merged docs in $new_sha ([run]($RUN_URL)):"
+            echo
+            while IFS=$'\t' read -r path full; do
+              old="$(awk -F'\t' -v p="$path" '$1 == p {print $2}' "$RUNNER_TEMP/old.tsv")"
+              new="$(git ls-tree HEAD -- "$path" | awk '{print $3}')"
+              if [[ "$old" == "$new" ]]; then
+                echo "- \`$path\`: \`${new:0:12}\` (unchanged)"
+              else
+                echo "- \`$path\`: \`${old:0:12}\` → \`${new:0:12}\` ([changes](https://github.com/$full/compare/$old...$new))"
+              fi
+            done <"$RUNNER_TEMP/repos.tsv"
+          } >"$RUNNER_TEMP/reply.md"
+          gh api "repos/$REPO/issues/$PR/comments" -F "body=@$RUNNER_TEMP/reply.md" >/dev/null
+          if [[ -n "$COMMENT_ID" ]]; then
+            gh api -X POST "repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=rocket >/dev/null
+          fi
+
+      - name: Report the failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "\`/update-submodules\` failed. [Run]($RUN_URL)"
+            if [[ -s "$RUNNER_TEMP/error.txt" ]]; then
+              echo
+              echo '```'
+              cat "$RUNNER_TEMP/error.txt"
+              echo '```'
+            fi
+          } >"$RUNNER_TEMP/reply.md"
+          gh api "repos/$REPO/issues/$PR/comments" -F "body=@$RUNNER_TEMP/reply.md" >/dev/null
+          if [[ -n "$COMMENT_ID" ]]; then
+            gh api -X POST "repos/$REPO/issues/comments/$COMMENT_ID/reactions" -f content=-1 >/dev/null
+          fi

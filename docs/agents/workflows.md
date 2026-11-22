@@ -63,9 +63,18 @@ Toolchain: Rust ≥ 1.88 (edition 2024, let-chains used), target `wasm32-unknown
 ### Change documentation in a submodule (docs/requirements, docs/technical, docs/user-guide)
 1. In the submodule: `git switch -c <branch>`, commit, push, open a pull request in that repository.
 2. In the main repo: commit the new pointer on your branch (CI check `pinned` stays red for now; that is intended).
-3. After the docs pull requests are merged into their `main`: `./scripts/update-submodules.sh`, commit
-   ("Point submodules to merged docs"), push. `./scripts/check-submodules.sh` must now pass.
+3. After the docs pull requests are merged into their `main`: comment `/update-submodules` on the main pull request
+   (workflow `Update submodules`, a-update-submodules-bot: refuses while a docs PR from a branch of the same name is
+   open, for forks and for commenters without write access; otherwise runs the default branch's
+   `scripts/update-submodules.sh` on the PR branch, commits "Point submodules to merged docs" as the app's bot,
+   runs `scripts/check-submodules.sh`, pushes, replies with old → new pointers). Pull the bot's commit before
+   working on. Fallback by hand: `./scripts/update-submodules.sh`, commit ("Point submodules to merged docs"), push;
+   `./scripts/check-submodules.sh` must now pass.
 4. Merge the main pull request last. (a-submodule-pins)
+5. The bot needs the one-time GitHub App setup in `docs/github-setup.md` (variable `MUSICUS_BOT_CLIENT_ID`, secret
+   `MUSICUS_BOT_PRIVATE_KEY`). Changes to `update-submodules.yml` only take effect after merging into `main`
+   (`issue_comment` runs the default branch's file); test with Actions → `Update submodules` → `Run workflow`,
+   branch `main`, input `pr`.
 
 ### Publish/test the user guide site
 Site: GitHub Pages of the main repository (`https://<owner>.github.io/Musicus/`), workflow `User guide site`
