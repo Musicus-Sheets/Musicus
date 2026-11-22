@@ -1,0 +1,6 @@
+# Released lines (major.minor), oldest first, in release order (a-update-runner).
+# `scripts/release-migrations.py <version>` appends the line of a minor or
+# major release; patch releases change nothing here. The runner counts the
+# downgrade window (three previous lines, R-OPS-014) on this list; a line that
+# is not listed (yet) is the development line after the last one.
+# Nothing is released yet: 1.0 is added by the release of 1.0.0.

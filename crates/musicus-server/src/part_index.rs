@@ -1,4 +1,4 @@
-//! Search index of parts (`part_fts`, migration 0002). The server composes
+//! Search index of parts (`part_fts`, baseline `migrations/1.0.0.sql`). The server composes
 //! no part names (a-client-part-names): it indexes the components (custom
 //! name, instrument names as entered, voices) plus the key code and every
 //! name of the key in the shipped languages (`musicus_i18n::KEY_SPELLINGS`),
@@ -6,7 +6,8 @@
 //! (R-I18N-007). Instrument names live in another table, so SQL triggers
 //! cannot keep the text current; the server re-indexes parts whenever a part
 //! or an instrument changes, and rebuilds the whole index on start when it
-//! does not match the parts table (after migrations that empty it).
+//! does not match the parts table (after an update that empties it) or when
+//! another program used the database last.
 //! Deleting a part removes its row by trigger. (a-part-names, R-LIB-011)
 
 use crate::db::json_ids;
@@ -81,11 +82,13 @@ pub async fn reindex(conn: &mut SqliteConnection, part_ids: Option<&[Id]>) -> sq
     Ok(())
 }
 
-/// Rebuilds the index when its row count differs from the parts table.
-pub async fn rebuild_if_needed(db: &crate::db::Db) -> sqlx::Result<bool> {
-    let stale: bool = sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM parts) != (SELECT COUNT(*) FROM part_fts)")
-        .fetch_one(&db.write)
-        .await?;
+/// Rebuilds the index when `force` (another program used the database last,
+/// d-update-model) or when its row count differs from the parts table.
+pub async fn rebuild_if_needed(db: &crate::db::Db, force: bool) -> sqlx::Result<bool> {
+    let stale: bool = force
+        || sqlx::query_scalar("SELECT (SELECT COUNT(*) FROM parts) != (SELECT COUNT(*) FROM part_fts)")
+            .fetch_one(&db.write)
+            .await?;
     if stale {
         let mut tx = db.write.begin().await?;
         reindex(&mut tx, None).await?;
@@ -119,9 +122,10 @@ mod tests {
     }
 
     /// The spellings the index of existing installations was last rebuilt
-    /// with (migration 0010). When a catalogue changes a key name or a
-    /// language is added, the stored index lacks the new spellings: add a
-    /// migration `DELETE FROM part_fts;` and update this table.
+    /// with (development migration 0010, now part of the 1.0.0 baseline).
+    /// When a catalogue changes a key name or a language is added, the stored
+    /// index lacks the new spellings: add a preview update whose additive part
+    /// is `DELETE FROM part_fts;` and update this table.
     const INDEXED_SPELLINGS: &[(&str, &[&str])] = &[
         ("A", &["A"]),
         ("Ab", &["A♭", "As"]),
@@ -143,6 +147,9 @@ mod tests {
         let mut got: Vec<_> = musicus_i18n::KEY_SPELLINGS.to_vec();
         want.sort();
         got.sort();
-        assert_eq!(got, want, "key spellings changed: add a migration that empties part_fts, then update the table");
+        assert_eq!(
+            got, want,
+            "key spellings changed: add a preview update that empties part_fts, then update the table"
+        );
     }
 }

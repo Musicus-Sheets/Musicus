@@ -40,7 +40,7 @@ Same commit as the code change:
    `grep -rn "<symbol or path>" docs/agents`.
 2. New/removed/renamed source file → update `code-map.md` (checked by `check.py`).
 3. New endpoint/status code → `server.md` endpoint table and `api-and-ink.md`.
-4. Schema change → `data-model.md` + new migration file.
+4. Schema change → `data-model.md` + new preview update `crates/musicus-server/migrations/preview/NNNN-<topic>.sql` (a-preview-migrations).
 5. New non-obvious choice → `decisions.md` entry (`a-<name>`; or `d-<name>` if also added to the Typst
    decision records) listing requirement IDs it serves and what breaks if changed.
 6. Feature done / gap closed / new gap → `status.md`; requirement status in `docs/requirements`.

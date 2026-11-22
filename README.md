@@ -12,7 +12,7 @@ content-addressed file store) that also serves a Dioxus web client.
 ```
 crates/
   musicus-api/     shared types: JSON bodies and the annotation (ink) format
-  musicus-server/  Axum server, SQLite migrations, file store, CLI
+  musicus-server/  Axum server, SQLite database updates, file store, CLI
   musicus-web/     Dioxus 0.7 web client (WebAssembly) with a pdf.js bridge
 e2e/               browser smoke test (Playwright)
 prototypes/        throw-away benchmarks behind the design
