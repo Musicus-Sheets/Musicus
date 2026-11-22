@@ -18,6 +18,8 @@ dx bundle --platform web --package musicus-web --release # release (needs wasm-o
 cargo run -p musicus-server -- serve --data-dir /tmp/m --web-dir target/dx/musicus-web/debug/web/public --insecure-cookies
 node e2e/smoke.mjs <admin-invite-url-from-log> some.pdf /tmp/shots   # fresh data dir required; BROWSER=firefox for Firefox
 python3 scripts/check-ui-literals.py  # no literal UI text in the client (R-I18N-010; CI: workflow `UI literals`)
+./scripts/db-schema.sh [--check]      # regenerate (or compare) crates/musicus-server/schema.sql after a preview change (a-db-check)
+python3 scripts/check-db-changes.py --branch "$(git branch --show-current)" origin/main   # CI database check, git part (R-OPS-038)
 node e2e/pseudo.mjs <admin-invite-url>   # pseudo-locale run (fresh data dir; every UI text marked)
 node e2e/german.mjs <admin-invite-url> [shots]   # German run (fresh data dir; de-DE browser; screenshots + phone-width overflow with a dir)
 python3 scripts/i18n-review.py de > review-de.md   # side-by-side English | German for the maintainer's review (not shipped)
@@ -119,8 +121,14 @@ half of a rename; runs only when no release in the window needs it — never on 
 release merge). Removals never go into the additive part; access restrictions move the item out of what older releases
 read (R-OPS-017). While a removal is pending, code writes old and new structures and must tolerate the old ones being
 gone. Never edit a merged preview (correction = new preview); never add `migrations/X.Y.0.sql` outside a release pull
-request. Update `data-model.md`, queries, tests (`tests/updates.rs` shows how to test a part with test programs). The
-schema snapshot and CI database check (a-db-check) are not built yet. Debug and plain `--release` builds apply previews;
+request. Then run `./scripts/db-schema.sh` and commit the regenerated `crates/musicus-server/schema.sql` with the preview
+(`cargo test` fails while it is out of date). Update `data-model.md`, queries, tests (`tests/updates.rs` shows how to test a
+part with test programs). CI (workflow `Database`, a-db-check): job `db-check` fails when a file is added under
+`migrations/` outside `preview/` (incl. `releases.txt`), when a file of `migrations/` that is on `main` is modified,
+renamed or deleted, when `schema.sql` is out of date or changed without a new preview, or when the new preview's number
+is not higher than every preview on `main` (renumber after another branch merged first); branches `release/X.Y.Z` are
+exempt except for the schema comparison. Job `db-change` labels the pull request `db-change` and comments that the next
+release must be a minor (never fails). Debug and plain `--release` builds apply previews;
 only builds with `MUSICUS_RELEASE_BUILD=1` refuse them. A local demo database in an unclear state (some previews of a
 merged release missing) is refused with a message: move the data directory away.
 
@@ -143,8 +151,8 @@ Keep `RELEASING.md` in step when one of these is built. `RELEASING.md` is for hu
 2. Implement; add tests.
 3. In `docs/requirements` (submodule): set `status` (`implemented`/`verified`), add `implemented_by`/`verified_by`
    (code and tests; never database update files under `crates/musicus-server/migrations/` except `releases.txt` —
-   previews are merged and deleted at a release, `validate.py` rejects them; table-related requirements will reference
-   the schema snapshot `crates/musicus-server/schema.sql` once it exists, a-db-check); new behaviour ⇒ new requirement file (next free number in the area; `refines` a feature); `uv run tools/validate.py`; commit in the submodule, push it, then commit the pointer in the main repo.
+   previews are merged and deleted at a release, `validate.py` rejects them; table-related requirements reference
+   the schema snapshot `crates/musicus-server/schema.sql` instead, a-db-check); new behaviour ⇒ new requirement file (next free number in the area; `refines` a feature); `uv run tools/validate.py`; commit in the submodule, push it, then commit the pointer in the main repo.
 4. Update `docs/agents/*` (this folder) and run `check.py`.
 
 ### Change a design decision

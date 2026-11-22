@@ -14,6 +14,7 @@
 
 pub mod file;
 pub mod runner;
+pub mod schema;
 pub mod window;
 
 pub use runner::{Plan, Report, apply, inspect};

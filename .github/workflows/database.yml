@@ -1,0 +1,171 @@
+name: Database
+# Database checks of pull requests (a-db-check; chapter "Checks in continuous integration" of
+# docs/technical/chapters/14-updates.typ):
+#
+# - db-check (R-OPS-038, blocking; make it a required status check): the database changes only
+#   through a new preview update crates/musicus-server/migrations/preview/NNNN-<topic>.sql.
+#   scripts/check-db-changes.py: nothing added under migrations/ outside preview/, no update file
+#   of the base branch modified, renamed or deleted, schema.sql not changed without a new preview
+#   (unless the pull request changes its generator), a new preview numbered after those on the
+#   base. scripts/db-schema.sh --check: schema.sql equals the structure the updates create. Pull requests from release/X.Y.Z are exempt from the first
+#   script (the release check, R-OPS-040, covers them), not from the schema comparison.
+# - db-change (R-OPS-039, informational, never fails): a pull request that adds a preview gets the
+#   label `db-change` and one comment (kept up to date, found by a hidden marker); both go away
+#   again when the pull request no longer adds a preview. Pull requests from forks get a read-only
+#   GITHUB_TOKEN: there the note is only written to the job summary.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+permissions:
+  contents: read
+concurrency:
+  group: database-${{ github.ref }}
+  cancel-in-progress: true
+defaults:
+  run:
+    shell: bash
+env:
+  # Same toolchain as rust.yml and the Docker build.
+  RUST_TOOLCHAIN: "1.97"
+  CARGO_TERM_COLOR: always
+jobs:
+  db-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Merge queue: the head branch of the queued pull request (release/X.Y.Z or not).
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The pull request's merge result (merge queue: the group's commit) and the base branch.
+          fetch-depth: 0
+          submodules: false
+
+      - name: Which pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_BRANCH: ${{ github.head_ref }}
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+          QUEUE_REF: ${{ github.event.merge_group.head_ref }}
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" == merge_group ]]; then
+            # refs/heads/gh-readonly-queue/<base>/pr-<number>-<sha>: the last pull request of the group.
+            number="$(sed -nE 's#^refs/heads/gh-readonly-queue/.+/pr-([0-9]+)-[0-9a-f]+$#\1#p' <<<"$QUEUE_REF")"
+            if [[ -z "$number" ]]; then
+              echo "::error::Unexpected merge queue ref $QUEUE_REF"
+              exit 1
+            fi
+            branch="$(gh api "repos/$REPO/pulls/$number" --jq .head.ref)"
+            base="$QUEUE_BASE"
+          else
+            branch="$PR_BRANCH"
+            base="$PR_BASE"
+          fi
+          echo "Base $base, head branch $branch"
+          {
+            echo "base=$base"
+            echo "branch=$branch"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Database updates change only through a new preview
+        env:
+          BASE: ${{ steps.pr.outputs.base }}
+          BRANCH: ${{ steps.pr.outputs.branch }}
+        run: python3 scripts/check-db-changes.py --branch "$BRANCH" "$BASE" HEAD
+
+      - uses: dtolnay/rust-toolchain@master
+        if: success() || failure()
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+        if: success() || failure()
+
+      - name: schema.sql is up to date
+        if: success() || failure()
+        run: ./scripts/db-schema.sh --check
+
+  db-change:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # Label and comment on the pull request (issues API).
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: New preview updates
+        id: previews
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          python3 scripts/check-db-changes.py --list-new-previews "$BASE" HEAD >"$RUNNER_TEMP/previews.txt"
+          cat "$RUNNER_TEMP/previews.txt"
+          if [[ -s "$RUNNER_TEMP/previews.txt" ]]; then
+            echo "found=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "found=false" >>"$GITHUB_OUTPUT"
+          fi
+          {
+            echo '<!-- musicus-db-change -->'
+            echo 'This PR changes the database; the next release must be a minor release (x.Y.0), not a patch.'
+            echo
+            echo 'New preview database updates:'
+            echo
+            # shellcheck disable=SC2016 # Markdown code spans, not shell
+            sed 's/.*/- `&`/' "$RUNNER_TEMP/previews.txt"
+          } >"$RUNNER_TEMP/note.md"
+          if [[ -s "$RUNNER_TEMP/previews.txt" ]]; then
+            tail -n +2 "$RUNNER_TEMP/note.md" >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo 'This PR adds no preview database update.' >>"$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Informational only: a failure here (e.g. a read-only token) must not fail the pull request.
+      - name: Label and comment
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          FOUND: ${{ steps.previews.outputs.found }}
+        run: |
+          marker='<!-- musicus-db-change -->'
+          mapfile -t ids < <(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$marker\"))) | .id")
+          if [[ "$FOUND" == true ]]; then
+            if ! gh api "repos/$REPO/labels/db-change" --silent 2>/dev/null; then
+              gh api "repos/$REPO/labels" -f name=db-change -f color=d93f0b \
+                -f description="Adds a preview database update: the next release must be a minor (x.Y.0)" --silent
+            fi
+            gh api "repos/$REPO/issues/$PR/labels" -f "labels[]=db-change" --silent
+            if [[ ${#ids[@]} -eq 0 ]]; then
+              gh api "repos/$REPO/issues/$PR/comments" -F "body=@$RUNNER_TEMP/note.md" --silent
+            else
+              old="$(gh api "repos/$REPO/issues/comments/${ids[0]}" --jq .body)"
+              if [[ "$old" != "$(cat "$RUNNER_TEMP/note.md")" ]]; then
+                gh api -X PATCH "repos/$REPO/issues/comments/${ids[0]}" -F "body=@$RUNNER_TEMP/note.md" --silent
+              fi
+            fi
+          elif [[ ${#ids[@]} -gt 0 ]]; then
+            # The pull request no longer adds a preview: take back what this job added.
+            for id in "${ids[@]}"; do
+              gh api -X DELETE "repos/$REPO/issues/comments/$id" --silent
+            done
+            gh api -X DELETE "repos/$REPO/issues/$PR/labels/db-change" --silent 2>/dev/null || true
+          fi
+
+      - name: Pull request from a fork
+        if: github.event.pull_request.head.repo.full_name != github.repository && steps.previews.outputs.found == 'true'
+        run: echo "::notice::This PR changes the database; the next release must be a minor release (x.Y.0), not a patch. (Pull request from a fork; no label or comment, see the job summary.)"
