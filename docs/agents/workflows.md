@@ -117,7 +117,7 @@ branch, version bump, `scripts/release-migrations.py`, checklist incl. "patch: n
 R-OPS-036, tag + GitHub release, release notes, troubleshooting). Not automated yet (marked "planned" there): release
 workflow building with `MUSICUS_RELEASE_BUILD=1`, multi-arch images and program archives (R-OPS-028, R-OPS-029), release
 and database checks (R-OPS-038…040, a-db-check), version on the title pages from the release version (R-OPS-035).
-Keep `RELEASING.md` in step when one of these is built.
+Keep `RELEASING.md` in step when one of these is built. `RELEASING.md` is for humans: it never refers to `AGENTS.md` or `docs/agents`; its step 6 repeats the commands of `AGENTS.md` § Commands — change both together.
 
 ### Add/modify a requirement-driven feature
 1. Read the requirement + its links (`refines`, `depends_on`, `constrains`, `conflicts_with`) in `docs/requirements`.
