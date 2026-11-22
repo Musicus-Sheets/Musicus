@@ -2,7 +2,8 @@
 # compose.yaml. Copy to /etc/nginx/sites-available/musicus (or conf.d/),
 # replace the domain, then `nginx -t && systemctl reload nginx`.
 # Start Musicus with MUSICUS_TRUST_PROXY=true and, if nginx runs on the same
-# machine, MUSICUS_LISTEN=127.0.0.1:8080 (Docker: MUSICUS_BIND=127.0.0.1).
+# machine, MUSICUS_LISTEN=127.0.0.1:8080 (Docker: MUSICUS_BIND=127.0.0.1,
+# which publishes the port on 127.0.0.1 and [::1]).
 server {
 	server_name sheets.example.org;
 
@@ -23,11 +24,12 @@ server {
 	gzip_types application/json text/css application/javascript;
 
 	location / {
-		# An IP address, not `localhost`: nginx resolves `localhost` to
-		# 127.0.0.1 and ::1 and uses both; a server that listens on IPv4
-		# only (older Musicus builds with the default 0.0.0.0:8080,
-		# MUSICUS_LISTEN=127.0.0.1:…, a Docker port published on 0.0.0.0
-		# or 127.0.0.1) then fails about every other request with 502.
+		# An IP address rather than `localhost`: nginx resolves `localhost`
+		# to 127.0.0.1 and ::1 and uses both. Musicus answers on both by
+		# default (MUSICUS_LISTEN=[::]:8080; Docker: MUSICUS_BIND empty or
+		# 127.0.0.1), but a server that listens on IPv4 only (older Musicus
+		# builds and compose files, MUSICUS_LISTEN=127.0.0.1:…) fails part
+		# of the requests with 502.
 		proxy_pass http://127.0.0.1:8080;
 		proxy_http_version 1.1;
 

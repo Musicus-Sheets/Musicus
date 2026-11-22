@@ -183,10 +183,10 @@ Columns: path | purpose | key symbols | requirements implemented | decisions.
 | `e2e/.gitignore` | Ignores node_modules | — | — | — |
 | `Dockerfile` | Stages dx → build (pdf.js, clean `target/dx/musicus-web/release`, dx bundle, `cargo build --features embed-web`) → distroless nonroot runtime with only the program (client built in, no `/app/web`, no `MUSICUS_WEB_DIR`; `MUSICUS_DATA_DIR=/data`, `MUSICUS_LISTEN=[::]:8080`); HEALTHCHECK via subcommand | `RUST_IMAGE`, `RUNTIME_IMAGE`, `DX_VERSION` args | R-OPS-003, R-SEC-007 | d-distroless |
 | `.dockerignore` | Excludes target, data, prototypes, e2e, docs vendor | — | — | — |
-| `compose.yaml` | Service `musicus` (volume `musicus-data`), profile `https` with Caddy | — | R-OPS-003, R-OPS-006 | — |
+| `compose.yaml` | Service `musicus` (volume `musicus-data`; ports `${MUSICUS_BIND:+${MUSICUS_BIND}:}${MUSICUS_PORT:-8080}:8080` and `${MUSICUS_BIND:+[::1]:}${MUSICUS_PORT:-8080}:8080`: `MUSICUS_BIND` empty ⇒ both lines equal, compose keeps one ⇒ published on `0.0.0.0` and `[::]`; set ⇒ that address + `[::1]`), profile `https` with Caddy | — | R-OPS-003, R-OPS-006 | a-dual-stack-listen |
 | `deploy/Caddyfile` | TLS + compression → `musicus:8080` | — | R-OPS-006 | — |
 | `deploy/nginx.conf.example` | Existing nginx in front of Musicus (user guide): `proxy_pass http://127.0.0.1:8080` (not `localhost`), `client_max_body_size 200m` (= `MUSICUS_MAX_UPLOAD_MB` default), HTTP/1.1, `X-Forwarded-For $remote_addr` (overwrite, `ClientIp` takes the first entry), read/send timeouts 300 s, optional gzip; TLS left to certbot | — | R-OPS-006 | a-dual-stack-listen |
-| `.env.example` | Compose settings template | — | R-OPS-002 | — |
+| `.env.example` | Compose settings template (`MUSICUS_BIND=` empty: IPv4 + IPv6 on every interface) | — | R-OPS-002 | a-dual-stack-listen |
 | `AGENTS.md` | Mandatory agent instructions (entry point) | — | — | — |
 | `CLAUDE.md` | Imports `AGENTS.md` for Claude Code | — | — | — |
 | `RELEASING.md` | Maintainer guide for a release (kinds, branch, version, `scripts/release-migrations.py`, checklist, tags, release notes, troubleshooting); planned steps marked | — | R-OPS-018, R-OPS-023, R-OPS-036, R-OPS-041 | a-preview-migrations, a-patch-no-db-changes, a-update-runner |

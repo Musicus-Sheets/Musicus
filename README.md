@@ -106,7 +106,10 @@ docker compose up -d --build
 docker compose logs musicus           # the one-time admin setup link
 ```
 
-The web client is then on http://localhost:8080. Tablets and phones on the
+The web client is then on http://localhost:8080; the port is published on
+every interface over IPv4 and IPv6 (`MUSICUS_BIND` empty). `MUSICUS_BIND=127.0.0.1`
+publishes it on `127.0.0.1` and `[::1]` only, for a proxy on the same machine
+(either address, or `localhost`, works). Tablets and phones on the
 network need HTTPS (see below). With a domain that points to the machine,
 set `MUSICUS_DOMAIN`, `MUSICUS_PUBLIC_URL`, `MUSICUS_BIND=127.0.0.1` and
 `MUSICUS_TRUST_PROXY=true` in `.env`, then start with Caddy in front. Caddy
