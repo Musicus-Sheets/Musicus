@@ -96,8 +96,17 @@ release.
 
 1. Docs changes go to their own pull requests in `docs/requirements`, `docs/technical` and `docs/user-guide`
    and are merged first.
-2. Point the submodules at the merge commits: `./scripts/update-submodules.sh`, commit on the release branch.
-   The tags of the docs repositories are created only after the release was published (§ 4, step 5).
+2. Point the submodules at the merge commits: comment `/update-submodules` on the release pull request
+   (the bot commits "Point submodules to merged docs" on the release branch and pushes it; it refuses while a
+   docs pull request from a branch of the same name is still open). Without the bot (not set up, see
+   [docs/github-setup.md](docs/github-setup.md), or the pull request is not open yet):
+
+   ```sh
+   ./scripts/update-submodules.sh && git commit -m "Point submodules to merged docs" && ./scripts/check-submodules.sh && git push
+   ```
+
+   If the bot committed, pull its commit (`git pull`) before you continue locally. The tags of the docs
+   repositories are created only after the release was published (§ 4, step 5).
 
 ## 4. Pull request, merge, publish
 

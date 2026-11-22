@@ -58,7 +58,8 @@ Optional git hook that runs the doc check before every commit: `git config core.
 
 Docs changes go to a branch in the submodule repository and get their own pull request there.
 The main repository's pull request is merged LAST: after the docs pull requests are merged into
-their `main`, run `./scripts/update-submodules.sh`, commit, and push, so that the pointers name the
+their `main`, run `./scripts/update-submodules.sh`, commit, and push (or comment `/update-submodules` on the
+pull request: workflow `Update submodules` does the same), so that the pointers name the
 merge commits on the docs `main` (never the feature-branch commits). The required check
 `scripts/check-submodules.sh` (workflow `Submodules`) fails otherwise. Details: `docs/agents/workflows.md`.
 
