@@ -1,8 +1,8 @@
 # Releasing Musicus
 
-How the maintainer makes a release, step by step. Background: `docs/technical/chapters/14-updates.typ`
-(updates, downgrade window, CI checks) and the decisions `d-update-model`, `a-preview-migrations`,
-`a-update-runner`, `a-patch-no-db-changes`, `a-db-check` in `docs/agents/decisions.md`.
+How the maintainer makes a release, step by step. Background: chapter "Updates, downgrades and
+platforms" of the technical documentation (`docs/technical/chapters/14-updates.typ`): versions, the
+downgrade window, database updates and the checks in continuous integration.
 
 Steps marked **(planned)** are not automated yet; do what the step says under "until then".
 
@@ -64,8 +64,17 @@ release.
      (add `--fixture <db>` when a database with test data exists) must print
      `same schema, rows and sections`; `cargo test` must pass.
    From 1.1 on this step is not needed: the automatic simplification is enough, the update stays as written.
-6. Run every check of `AGENTS.md` § Commands, plus `cargo test` (it also tests the merge script and the
-   update runner).
+6. Run all checks; every command must succeed without warnings:
+   ```sh
+   cargo test                                                   # also tests the update runner and the merge script (needs python3)
+   cargo test -p musicus-web
+   cargo clippy --all-targets && cargo fmt --check
+   cargo clippy -p musicus-web --target wasm32-unknown-unknown
+   ./scripts/fetch-pdfjs.sh && dx build --platform web --package musicus-web
+   python3 scripts/check-ui-literals.py
+   python3 docs/agents/check.py
+   uv run docs/requirements/tools/validate.py
+   ```
 7. Release checklist:
    - [ ] Patch: no preview, no database update, **no new stored values** (read the diff since the last tag).
    - [ ] 1.0.0 only: `1.0.0.sql` simplified by hand and checked against the appended version (step 5).
