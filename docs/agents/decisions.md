@@ -463,7 +463,7 @@ plan's roadmap must ship in 1.0.0. Each entry has a **State** line.
 - Decision: the version is visible to everyone: public `GET /api/version` (no login), an "About" view for every role, `--version`; the user guide and the technical documentation show it on the title page and the guide site on every page; the requirements repository gets a git tag `vX.Y.Z` per release (no version in its files).
 - Why: the user's decision; the version is needed to pick the guide, read release notes and know the downgrade targets. Fingerprinting risk accepted (only the number is revealed).
 - Serves: R-OPS-033, R-OPS-034, R-OPS-035, R-OPS-036.
-- State: planned (phase 0). Today: `--version` only; title pages carry a hand-written "0.1"; the guide site's version bar shows the tag (a-guide-site).
+- State: applied (phase 0): `GET /api/version` (`routes::version`, only `{"version"}`, no commit or build data), "About Musicus" at `/about` outside `Shell` (linked from the login card and the account page), `--version`, title pages from the build (a-version-source), guide site version bar (a-guide-site). Missing: requirements tag per release (R-OPS-036), release check on title-page versions (R-OPS-035).
 - If you change it: hiding the version needs a requirement change.
 
 ### a-unencrypted-export
@@ -479,3 +479,10 @@ plan's roadmap must ship in 1.0.0. Each entry has a **State** line.
 - Serves: F-OPS-006, R-OPS-026, R-OPS-042, R-OPS-027, R-OPS-029, R-OPS-030, R-OPS-031, R-OPS-032, R-OPS-028, F-TECH-002, R-TECH-004, R-TECH-005, R-TECH-006, R-TECH-007.
 - State: planned. Known blocker: `blobs.rs::sync_dir` opens the blob directory with `File::open(dir)?.sync_all()`, which fails on Windows (every upload would fail); other findings in `status.md` and the plan.
 - If you change it: dropping a platform or 32-bit support needs the user's consent; keep platform-specific code behind `cfg` with a working fallback.
+
+### a-version-source
+- Decision: the release version is written in one place, `[workspace.package] version` of the root `Cargo.toml`. `musicus_api::VERSION` (`env!("CARGO_PKG_VERSION")`, plus `LICENSE` and `SOURCE_URL` from `license`/`repository`) is what `--version` (clap `version = musicus_api::VERSION`), `GET /api/version` and the web client use; the client is built from the same workspace, so `api::version()` ≠ `musicus_api::VERSION` means the server was updated after the page loaded (for R-OPS-048). `/api/version` is `Cache-Control: no-store`. The docs' title pages read `sys.inputs.version`: `build.sh [version]`, else `$MUSICUS_VERSION`, else the workspace version of the surrounding Musicus checkout (`../../Cargo.toml`), else "dev" ("a development version of Musicus"); `scripts/build-guide-site.sh` passes the workspace version at each built commit and warns when a release tag (without "v") differs. No git commit or build date in the endpoint.
+- Why: one number cannot disagree with itself; the git tag is not available in every build (Docker context without `.git`, source archives), the manifest always is; the docs submodules have no Cargo version of their own and still build standalone. Build details would reveal more than a-version-public accepts.
+- Serves: R-OPS-033, R-OPS-034, R-OPS-035, R-OPS-048.
+- State: applied (phase 0).
+- If you change it: a release must raise the workspace version before tagging; deriving the version from git instead needs a fallback for builds without `.git` and the same number in server, client and docs.

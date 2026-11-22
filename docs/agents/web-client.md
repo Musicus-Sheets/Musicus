@@ -44,6 +44,7 @@ default and `LIMIT 1000` (library) a cap.
 | --- | --- | --- | --- |
 | `/login` | `pages::login::Login` | none | redirects to `/` once `Session.user` set |
 | `/invite/:token` | `pages::login::Invite` | none | GET info, POST password; sets `Session.user` |
+| `/about` | `pages::about::About` | none | public "About Musicus" (R-OPS-034): version from `api::version()` (`GET /api/version`) in `#about-version`, licence link (`musicus_api::LICENSE`), source link (`SOURCE_URL`); back link to `/` when logged in, else to `/login`; linked from the login card and the end of `/account` (`.about-link`) |
 | `/parts/:id` | `pages::viewer::Viewer` | none (full screen) | reader without programme |
 | `/programmes/:pid/parts/:id` | `pages::viewer::ProgrammeViewer` | none | reader with prev/next piece |
 | `/` | `pages::library::Library` | `ui::Shell` | librarian/admin: `+ Add piece`, `Edit` per piece and part |

@@ -30,13 +30,21 @@ async fn health(axum::extract::State(app): axum::extract::State<AppState>) -> cr
     Ok("ok")
 }
 
+/// The release that runs (R-OPS-033). Needs no login (a-version-public);
+/// never cached, so an open client notices an update at once.
+async fn version() -> impl axum::response::IntoResponse {
+    ([(header::CACHE_CONTROL, "no-store")], axum::Json(musicus_api::VersionInfo::current()))
+}
+
 /// Body limit of an import file list (20 000 paths with hashes).
 const IMPORT_LIST_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn api() -> Router<AppState> {
     Router::new()
-        // Authentication and the user's own account
+        // Public: liveness and the running release
         .route("/health", get(health))
+        .route("/version", get(version))
+        // Authentication and the user's own account
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
         .route("/auth/me", get(auth::me))

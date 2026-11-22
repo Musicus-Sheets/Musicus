@@ -16,6 +16,32 @@ pub const CSRF_HEADER: &str = "x-musicus-csrf";
 /// Name of the session cookie set by the web login.
 pub const SESSION_COOKIE: &str = "musicus_session";
 
+/// Release version of this build: the workspace `version` of the root
+/// `Cargo.toml`, the one source of the version (a-version-source). Server and
+/// web client are built from the same workspace, so a client compares it with
+/// `GET /api/version` to notice that the server was updated.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Licence of Musicus as an SPDX expression (workspace `license`).
+pub const LICENSE: &str = env!("CARGO_PKG_LICENSE");
+
+/// Where the source code of Musicus is published (workspace `repository`).
+pub const SOURCE_URL: &str = env!("CARGO_PKG_REPOSITORY");
+
+/// `GET /api/version`, public (no login, a-version-public): the release that
+/// runs. Only the version number, no build details.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct VersionInfo {
+    pub version: String,
+}
+
+impl VersionInfo {
+    /// The version of this build.
+    pub fn current() -> Self {
+        Self { version: VERSION.to_owned() }
+    }
+}
+
 /// Global role of a user. Access to sheets is granted to groups, not roles;
 /// roles only decide who may manage what.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
@@ -677,6 +703,15 @@ mod tests {
         assert_eq!(s.archive_number, None);
         let s: ScoreInput = serde_json::from_str(r#"{"title":"x"}"#).unwrap();
         assert_eq!(s.archive_number, None);
+    }
+
+    #[test]
+    fn version_constants_come_from_the_workspace() {
+        let parts: Vec<&str> = VERSION.split(['.', '-', '+']).collect();
+        assert!(parts.len() >= 3 && parts[..3].iter().all(|p| p.parse::<u64>().is_ok()), "{VERSION}");
+        assert_eq!(LICENSE, "AGPL-3.0-or-later");
+        assert!(SOURCE_URL.starts_with("https://"), "{SOURCE_URL}");
+        assert_eq!(serde_json::to_string(&VersionInfo::current()).unwrap(), format!(r#"{{"version":"{VERSION}"}}"#));
     }
 
     #[test]

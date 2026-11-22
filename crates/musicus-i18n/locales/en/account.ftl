@@ -37,3 +37,16 @@ account-unknown-device = Unknown device
 account-last-used = Last used { $time }
 account-this-device = {" · "}this device
 account-log-out-device = Log out
+
+## About (the "About Musicus" page, reachable with and without a login)
+# Link on the login page and at the end of the account page.
+about-link = About Musicus
+about-title = About Musicus
+# Label of the release version, e.g. "0.1.0".
+about-version-label = Version
+about-licence-label = Licence
+# Name of the licence; links to its text. The short name "AGPL-3.0-or-later" follows in brackets.
+about-licence-name = GNU Affero General Public License, version 3 or later
+about-source-label = Source code
+about-free-software = Musicus is free software: you may use, study, share and change it under the terms of this licence.
+about-go-to-login = Go to login

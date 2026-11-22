@@ -18,7 +18,7 @@ Crate `crates/musicus-api`: deps serde + postcard only, no I/O, compiles for nat
 - `Part {label: Option (custom name), instrument_ids (sorted), instruments: Vec<NamedRef {id, name}> (names as entered, by id), voices: Vec<String> (stored order, maybe empty), transposition: Option<String> (key code or legacy text)}` — no composed name (a-client-part-names, R-I18N-006). `PartInput.label`/`transposition`: blank ⇒ None (`blank_is_none`); `voices` (missing/null ⇒ `[]`) is a list whose entries may be JSON strings or numbers, cleaned by `naming::clean_voices` during deserialisation (`voice_list`; test `part_input_accepts_blank_label_and_numeric_voices`). The old single `voice` field is gone (clean switch, nothing released; serde ignores it like any unknown field, a-part-voices).
 - `AnnotationSet.name: Option<String>` / `NewAnnotationSet.name: Option<String>` (blank ⇒ None): None = the unnamed set (one per user and part, else 409); the client shows it as "My annotations" in its language.
 - `AnnotationSet.file_sha256/file_version` = the version the set is bound to (compare with `Part.file.version` to detect outdated sets); `pages` = saved pages with revisions.
-- Constants: `CSRF_HEADER = "x-musicus-csrf"`, `SESSION_COOKIE = "musicus_session"`.
+- Constants: `CSRF_HEADER = "x-musicus-csrf"`, `SESSION_COOKIE = "musicus_session"`; `VERSION`, `LICENSE`, `SOURCE_URL` from the workspace manifest (a-version-source); `VersionInfo {version}` = body of public `GET /api/version`.
 
 - `CurrentUser.reader: layout::ReaderSettings` (`#[serde(default)]`); system layout types, reading sequence and view
   planner live in `layout.rs` (described in `layout.md`).

@@ -12,7 +12,11 @@
 #                    as a test build at /test-<REF>/, labelled as such.
 #
 # Every version is built from the user-guide commit that the Musicus commit's
-# submodule pointer `docs/user-guide` names, with that commit's own build.sh.
+# submodule pointer `docs/user-guide` names, with that commit's own build.sh,
+# which gets the Musicus commit's workspace version (root Cargo.toml) as
+# MUSICUS_VERSION for the title page (a-version-source; guides older than that
+# ignore it). A release tag whose name (without "v") differs from that version
+# is reported with a warning.
 # Releases whose commit has no `docs/user-guide` or whose build fails are
 # skipped with a warning; the site is still built. Exits non-zero (nothing to
 # deploy) if the --preview build fails or if no release with a user guide
@@ -81,11 +85,18 @@ guide_source() {
     echo "$GUIDE_GIT"
 }
 
+# Prints the workspace version (`[workspace.package] version` of the root
+# Cargo.toml) of Musicus commit $1, or nothing.
+version_at() {
+    git -C "$ROOT" show "$1:Cargo.toml" 2>/dev/null |
+        sed -n '/^\[workspace\.package\]/,/^\[/s/^version *= *"\(.*\)"/\1/p' | head -n 1
+}
+
 # build_version <musicus-commit> <dir name> <kind: release|test> <label> <date>
 # Returns 0 if built, 2 if the commit has no user guide, 1 if the build failed.
 build_version() {
     local commit="$1" name="$2" kind="$3" label="$4" date="$5"
-    local sha url src dir
+    local sha url src dir version
     sha="$(git -C "$ROOT" ls-tree "$commit" "$SUB" | awk '$2 == "commit" {print $3}')"
     if [[ -z "$sha" ]]; then
         warn "$label: no $SUB at ${commit:0:12} (older than the user guide), skipped"
@@ -100,7 +111,11 @@ build_version() {
     dir="$WORK/src-$name"
     mkdir -p "$dir"
     git -C "$src" archive --format=tar "$sha" | tar -x -C "$dir"
-    if ! (cd "$dir" && sh ./build.sh) >"$dir.log" 2>&1; then
+    version="$(version_at "$commit")"
+    if [[ "$kind" == release && -n "$version" && "${label#v}" != "$version" ]]; then
+        warn "$label: the workspace version at the tag is $version, not ${label#v}"
+    fi
+    if ! (cd "$dir" && MUSICUS_VERSION="$version" sh ./build.sh) >"$dir.log" 2>&1; then
         sed 's/^/    /' "$dir.log" >&2
         warn "$label: build of user-guide ${sha:0:12} failed, skipped"
         return 1

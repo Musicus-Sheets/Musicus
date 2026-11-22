@@ -4,7 +4,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::{net::SocketAddr, path::PathBuf};
 
 #[derive(Parser, Debug)]
-#[command(name = "musicus-server", version, about = "Sheet music library with private annotations")]
+#[command(name = "musicus-server", version = musicus_api::VERSION, about = "Sheet music library with private annotations")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,

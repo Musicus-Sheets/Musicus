@@ -4,6 +4,7 @@ description = "Musicus web client (Dioxus, WebAssembly)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 publish = false
 

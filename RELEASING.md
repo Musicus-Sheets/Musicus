@@ -24,7 +24,9 @@ release.
 1. Branch from `main`: `git switch -c release/X.Y.Z`. Only a branch named `release/<version>` may delete
    previews and add the merged database update.
 2. Raise the version in the workspace `Cargo.toml` (`[workspace.package] version = "X.Y.Z"`), then
-   `cargo build` so `Cargo.lock` follows.
+   `cargo build` so `Cargo.lock` follows. This is the only place where the version is written:
+   `musicus-server --version`, `GET /api/version`, the "About Musicus" page and the title pages of the user
+   guide and of the technical documentation all take it from there (R-OPS-033…035).
 3. Merge the database updates (minor/major; for a patch it only checks that there are none):
 
    ```sh
@@ -82,9 +84,11 @@ release.
          (`scripts/i18n-review.py de`).
    - [ ] User guide (`docs/user-guide`) and technical documentation (`docs/technical`) describe the release;
          screenshots regenerated if the UI changed.
-   - [ ] The title pages show the version: `version:` in `docs/user-guide/main.typ` and
-         `docs/technical/main.typ` (R-OPS-035). **(planned:** taken from the release version
-         automatically; until then edit both by hand.)
+   - [ ] The version is right everywhere (R-OPS-033…035): `cargo run -p musicus-server -- --version` prints
+         `musicus-server X.Y.Z`; `docs/user-guide/build.sh` and `docs/technical/build.sh` (no argument: they
+         read the workspace version) print "written (version X.Y.Z)" and the title pages say
+         "Musicus X.Y.Z". The guide site builds each release with the version of its tagged commit and
+         warns if the tag `vX.Y.Z` differs from it (check the workflow log of § 4.4).
    - [ ] Requirement statuses in `docs/requirements` are current; `uv run docs/requirements/tools/validate.py`.
    - [ ] Release notes drafted (§ 5).
 

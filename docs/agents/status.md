@@ -27,7 +27,7 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | F-OPS-005, R-OPS-010, R-OPS-012, R-OPS-018…022, R-OPS-025, R-OPS-038…041 | updates and downgrades (d-update-model, a-preview-migrations, a-patch-no-db-changes, a-db-check) | plan and roadmap in `docs/technical/chapters/14-updates.typ`; done: own update runner (a-update-runner; R-OPS-011, 013–017 mechanism, 023, 024). Still for 1.0.0: snapshot + automatic restore, `backup` without updating, `restore`, enum fallbacks, CI checks, release workflow; see § Updates below |
 | F-OPS-008, R-OPS-043…048 | open clients during shutdown, start and update (a-client-outage) | listener before updates with 503 `server_starting`, shutdown drain with 503 `server_shutting_down` (new `ErrorCode`s), banners, polling, unsaved markings kept in memory and re-sent, `beforeunload` warning, reload at a safe moment after a version change |
 | F-OPS-006, R-OPS-026…032, R-OPS-042 | platforms (a-platforms) | multi-arch images + version tags (phase 0); Windows blocker and other findings in § Updates below; program archives + `SHA256SUMS` (unsigned; guide text for SmartScreen/Gatekeeper), embedded web client, OS data folder, platform-dependent CI (tests, build, smoke) on all systems, the rest Linux-only (phase 1) |
-| F-OPS-007, R-OPS-033…036 | version visible (a-version-public) | `/api/version`, About view, title pages from the release version, requirements tag per release |
+| F-OPS-007, R-OPS-036 | version visible (a-version-public) | done: `/api/version`, About view, title pages from the build's version (R-OPS-033…035); missing: requirements tag per release (R-OPS-036) and the release check that fails on a title-page version other than the release (R-OPS-035, release workflow) |
 | R-OPS-037 | backups/exports unencrypted, with guidance (a-unencrypted-export) | user guide backup section must say that backups need the same care as the data directory |
 | F-TECH-002, R-TECH-004…007 | prepared replaceability | storage modules per data area (no SQL in `routes/`), file store without `path()`, PDF engine module, conformance suites; no second backend |
 
@@ -66,7 +66,7 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 
 ## Known debt / quirks
 
-- i18n: English and German are shipped (`locales/en`, `locales/de`). **German is an agent draft that needs the maintainer's review** (terminology, tone, "du"; open choices in `glossary.md` § Open choices; review aid `scripts/i18n-review.py de`). The user guide and its screenshots are English only (phase 7; `screenshots.mjs` and `smoke.mjs` force `locale: en-US`). The German run (`e2e/german.mjs`) checks a selection of pages, not every text (completeness is checked by `tests/catalogue.rs`). The pseudo-locale run (`e2e/pseudo.mjs`) covers 13 pages without the reader with a file, the import review and the system editor (those are covered only by the lint). Button overflow with long translations is only reported, not failed.
+- i18n: English and German are shipped (`locales/en`, `locales/de`). **German is an agent draft that needs the maintainer's review** (terminology, tone, "du"; open choices in `glossary.md` § Open choices; review aid `scripts/i18n-review.py de`). The user guide and its screenshots are English only (phase 7; `screenshots.mjs` and `smoke.mjs` force `locale: en-US`). The German run (`e2e/german.mjs`) checks a selection of pages, not every text (completeness is checked by `tests/catalogue.rs`). The pseudo-locale run (`e2e/pseudo.mjs`) covers 14 pages without the reader with a file, the import review and the system editor (those are covered only by the lint). Button overflow with long translations is only reported, not failed.
 
 - `annotation_sets` name uniqueness is case-sensitive (SQLite UNIQUE without NOCASE) while users/groups/instruments are case-insensitive.
 - `LoginLimiter` is in-memory: resets on restart, per process.
@@ -101,7 +101,11 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
   (`tests/updates.rs`); the upgrade/downgrade matrix with real release binaries comes with the second release.
 - `backup` applies pending updates before copying (`main.rs` → `open_state` → `Db::open`), contrary to R-OPS-021;
   `Db::open` has the slot for the snapshot between `inspect` and `apply`.
-- No automatic snapshot, no `restore` command (manual copy in the user guide), no `/api/version`, no About view.
+- No automatic snapshot, no `restore` command (manual copy in the user guide).
+- Version display (phase 0) is done: `GET /api/version` (public, `no-store`), "About Musicus" (`/about`), docs title
+  pages from `build.sh` (`--input version`; fallback workspace version, else "dev"). The client does not yet compare
+  `api::version()` with its own `musicus_api::VERSION` (reload after an update, R-OPS-048). No release check fails on a
+  title page whose version differs from the release (R-OPS-035); the guide site only warns on a tag ≠ workspace version.
 - `compose.yaml` builds locally (`build: .`, `musicus:latest`); no published image (R-OPS-010, R-OPS-028).
 - Requirements referencing the schema snapshot once PR E adds it (`schema.sql`): table-related requirements
   (R-LIB-002/003/004/015/016, R-PERF-005, R-I18N-006) then get it in `implemented_by`; update files may not be referenced
