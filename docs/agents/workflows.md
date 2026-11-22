@@ -111,23 +111,13 @@ schema snapshot and CI database check (a-db-check) are not built yet. Debug and 
 only builds with `MUSICUS_RELEASE_BUILD=1` refuse them. A local demo database in an unclear state (some previews of a
 merged release missing) is refused with a message: move the data directory away.
 
-### Release (planned; only the merge script and the release-build flag exist)
-Plan and roadmap: `docs/technical/chapters/14-updates.typ`. Phase 0 must be done before 1.0.0. In short:
-0. Open a release pull request from a branch `release/<version>` (e.g. `release/1.3.0`); only such a branch may
-   delete previews and add the merged update (a-db-check). A normal pull request that changes the database adds a
-   preview plus the regenerated schema snapshot (`scripts/db-schema.sh` → `crates/musicus-server/schema.sql`) and
-   gets the label `db-change` (the next release must then be a minor).
-1. Minor/major: `scripts/release-migrations.py X.Y.0` (merges all previews into `migrations/X.Y.0.sql`, deletes them, appends `X.Y` to
-   `migrations/releases.txt`; for 1.0.0 it appends into the unreleased baseline). Build the release with `MUSICUS_RELEASE_BUILD=1`. Patch release:
-   no database update and no new kinds of stored values ("patch: no new stored values"; a-patch-no-db-changes).
-2. Set the version (workspace `Cargo.toml`, title pages of `docs/user-guide` and `docs/technical`).
-3. Tag `vX.Y.Z` in `docs/requirements` on the pinned commit (R-OPS-036); merge docs first (a-submodule-pins).
-4. Tag the main repository; the release workflow builds and publishes the linux/amd64 + linux/arm64 image with
-   version tags (R-OPS-028) and the program archives per platform with `SHA256SUMS` (R-OPS-029); the release check (R-OPS-040) fails on previews, a database update in a patch, a merged
-   update that does not list exactly the removed previews, or a wrong version on a title page. Publishing the GitHub release rebuilds the guide site (a-guide-site).
-5. Release notes: removed features with their data; new access restrictions (after a downgrade the restricted
-   items give no access and must be granted again by hand, R-OPS-017); downgrade targets (R-OPS-014, counted in
-   release order); platforms that failed their non-blocking check (macOS Intel, R-OPS-042).
+### Release
+Step by step for the maintainer: `RELEASING.md` (repository root; kinds and what they may contain, `release/<version>`
+branch, version bump, `scripts/release-migrations.py`, checklist incl. "patch: no new stored values", requirements tag
+R-OPS-036, tag + GitHub release, release notes, troubleshooting). Not automated yet (marked "planned" there): release
+workflow building with `MUSICUS_RELEASE_BUILD=1`, multi-arch images and program archives (R-OPS-028, R-OPS-029), release
+and database checks (R-OPS-038…040, a-db-check), version on the title pages from the release version (R-OPS-035).
+Keep `RELEASING.md` in step when one of these is built.
 
 ### Add/modify a requirement-driven feature
 1. Read the requirement + its links (`refines`, `depends_on`, `constrains`, `conflicts_with`) in `docs/requirements`.

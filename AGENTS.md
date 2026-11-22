@@ -43,7 +43,7 @@ comment typo), set `AGENT_DOCS_UNCHANGED="<reason>"` for that run and say so in 
 ## Commands
 
 ```sh
-cargo test                                                   # api + server unit + API integration tests
+cargo test                                                   # api + server unit + API + update-runner tests (needs python3)
 cargo clippy --all-targets && cargo fmt --check
 cargo clippy -p musicus-web --target wasm32-unknown-unknown  # client only builds for wasm32
 ./scripts/fetch-pdfjs.sh && dx build --platform web --package musicus-web
@@ -71,7 +71,7 @@ merge commits on the docs `main` (never the feature-branch commits). The require
 - Annotation objects are immutable (edit = remove + add) — the merge depends on it (R-ANN-012).
 - Writes go through `app.db.write` (single connection), reads through `app.db.read` (R-PERF-006).
 - The web client must not persist data on the device (R-SEC-001).
-- New migrations: new numbered file in `crates/musicus-server/migrations/`; never edit applied ones.
+- Schema changes: a new preview `crates/musicus-server/migrations/preview/NNNN-<topic>.sql` (additive/rebuild/removal sections); never edit a merged preview or a released update.
 - Store and show user data exactly as entered; never translate or reformat it (a-data-as-entered, R-I18N-006).
   UI terms and their German translations: `docs/agents/glossary.md`.
 - Every text the web client shows comes from the catalogue `crates/musicus-i18n/locales/en/*.ftl` via
