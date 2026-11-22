@@ -28,8 +28,10 @@ commands in [RELEASING.md](../RELEASING.md) § 3 still work.
      pushes the commit. Reading the pull request, the reactions and the replies use the workflow's
      own token, so they appear as `github-actions[bot]`.
    - **Where can this GitHub App be installed?**: *Only on this account*.
-2. On the app's page: note the **Client ID** (starts with `Iv`), then **Generate a private key**
-   (a `.pem` file is downloaded).
+2. On the app's settings page (**Edit** next to the app): note the **Client ID** (starts with `Iv`)
+   under **About**. Then, in the left sidebar, **Credentials** → **Key pairs** → **New key**
+   (a `.pem` file is downloaded). Keys do not expire; to replace a key, create the new one first,
+   then delete the old one.
 3. **Install App** → Musicus-Sheets → **Only select repositories** → `Musicus` (not the docs
    repositories; they are public and only read).
 4. In the repository `Musicus` → **Settings** → **Secrets and variables** → **Actions**:
