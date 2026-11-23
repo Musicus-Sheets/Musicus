@@ -285,4 +285,113 @@ mod tests {
         let Command::Backup { data, .. } = cli.command else { panic!() };
         assert_eq!(data.data_dir, Some(PathBuf::from("/x")));
     }
+
+    use clap::CommandFactory;
+
+    /// Per-call inputs of one-off commands, not settings of the program:
+    /// they name what this one call works on, so an environment variable
+    /// would only make a forgotten value apply to the next call as well.
+    /// (`--help` and `--version` are clap's own and are skipped by id.)
+    const NOT_SETTINGS: &[(&str, &str)] =
+        &[("create-admin", "username"), ("create-admin", "display_name"), ("backup", "to"), ("restore", "from")];
+
+    /// R-OPS-002: every option of every subcommand has a `MUSICUS_*` variable,
+    /// so a new option without one fails here.
+    #[test]
+    fn every_setting_has_a_musicus_environment_variable() {
+        let cli = Cli::command();
+        let mut missing = Vec::new();
+        let mut exempt_seen = Vec::new();
+        let mut checked = Vec::new();
+        for sub in cli.get_subcommands() {
+            for arg in sub.get_arguments() {
+                let id = arg.get_id().as_str();
+                if matches!(id, "help" | "version") {
+                    continue;
+                }
+                if NOT_SETTINGS.contains(&(sub.get_name(), id)) {
+                    exempt_seen.push((sub.get_name(), id));
+                    continue;
+                }
+                checked.push((sub.get_name(), id));
+                match arg.get_env().and_then(|e| e.to_str()) {
+                    Some(env) if env.starts_with("MUSICUS_") => {}
+                    other => missing.push(format!("{} --{id}: {other:?}", sub.get_name())),
+                }
+            }
+        }
+        assert!(missing.is_empty(), "options without a MUSICUS_* variable: {missing:?}");
+        assert_eq!(exempt_seen.len(), NOT_SETTINGS.len(), "stale NOT_SETTINGS entry: {exempt_seen:?}");
+        assert!(cli.get_arguments().all(|a| matches!(a.get_id().as_str(), "help" | "version")));
+        // The walk reaches the options of every command, including flattened ones.
+        for expected in [
+            ("serve", "listen"),
+            ("serve", "data_dir"),
+            ("serve", "web_dir"),
+            ("serve", "trust_proxy"),
+            ("create-admin", "public_url"),
+            ("backup", "data_dir"),
+            ("restore", "data_dir"),
+            ("retry-update", "data_dir"),
+            ("healthcheck", "listen"),
+        ] {
+            assert!(checked.contains(&expected), "{expected:?} not walked: {checked:?}");
+        }
+    }
+
+    /// The child half of `listen_is_read_from_the_environment`: runs only in
+    /// the child process that has the variable set (no `set_var` in this
+    /// multi-threaded test process).
+    #[test]
+    #[ignore = "run by listen_is_read_from_the_environment"]
+    fn listen_from_environment_child() {
+        if std::env::var_os("MUSICUS_TEST_CHILD").is_none() {
+            return; // `--include-ignored` in the normal run: nothing to check here
+        }
+        assert_eq!(std::env::var("MUSICUS_LISTEN").as_deref(), Ok("0.0.0.0:9000"));
+        let Command::Serve(args) = Cli::try_parse_from(["musicus-server", "serve"]).unwrap().command else {
+            unreachable!()
+        };
+        assert_eq!(args.listen, "0.0.0.0:9000".parse::<SocketAddr>().unwrap());
+        assert_eq!(args.listen.port(), 9000);
+        let Command::Healthcheck { listen } = Cli::try_parse_from(["musicus-server", "healthcheck"]).unwrap().command
+        else {
+            unreachable!()
+        };
+        assert_eq!(listen.port(), 9000);
+        // An option given on the command line wins over the variable.
+        let Command::Serve(args) =
+            Cli::try_parse_from(["musicus-server", "serve", "--listen", "127.0.0.1:9100"]).unwrap().command
+        else {
+            unreachable!()
+        };
+        assert_eq!(args.listen.port(), 9100);
+    }
+
+    /// R-OPS-002 acceptance: `MUSICUS_LISTEN=0.0.0.0:9000` makes the server
+    /// listen on port 9000. Parsed in a child process of this test binary
+    /// with the variable set there only.
+    #[test]
+    fn listen_is_read_from_the_environment() {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        child.args(["config::tests::listen_from_environment_child", "--exact", "--ignored", "--test-threads=1"]);
+        for (key, _) in std::env::vars_os() {
+            if key.to_string_lossy().starts_with("MUSICUS_") {
+                child.env_remove(key);
+            }
+        }
+        let out = child.env("MUSICUS_LISTEN", "0.0.0.0:9000").env("MUSICUS_TEST_CHILD", "1").output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{stdout}\n{}", String::from_utf8_lossy(&out.stderr));
+        assert!(stdout.contains("1 passed"), "child test did not run: {stdout}");
+    }
+
+    /// Without the variable the default is the dual-stack `[::]:8080`.
+    #[test]
+    fn listen_default_is_dual_stack() {
+        let cmd = Cli::command();
+        let serve = cmd.find_subcommand("serve").unwrap();
+        let listen = serve.get_arguments().find(|a| a.get_id() == "listen").unwrap();
+        assert_eq!(listen.get_default_values(), ["[::]:8080"]);
+    }
 }

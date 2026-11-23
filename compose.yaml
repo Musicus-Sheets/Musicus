@@ -32,14 +32,15 @@ services:
       MUSICUS_TRUST_PROXY: ${MUSICUS_TRUST_PROXY:-false}
       RUST_LOG: ${RUST_LOG:-info}
     ports:
-      # MUSICUS_BIND empty (default): published on every interface, IPv4
-      # and IPv6 (both lines are then the same and count once).
-      # MUSICUS_BIND=127.0.0.1 (behind the https profile or a proxy on this
-      # machine, so nobody bypasses it): 127.0.0.1 and [::1] only, so a proxy
-      # may connect to "localhost". Another IPv4 address: that address plus
-      # [::1].
-      - "${MUSICUS_BIND:+${MUSICUS_BIND}:}${MUSICUS_PORT:-8080}:8080"
-      - "${MUSICUS_BIND:+[::1]:}${MUSICUS_PORT:-8080}:8080"
+      # MUSICUS_LOCAL_ONLY empty (default): published on every address,
+      # IPv4 and IPv6 (both lines are then the same and count once).
+      # MUSICUS_LOCAL_ONLY=true (any non-empty value): only 127.0.0.1 and
+      # [::1], for the https profile or a proxy on this machine, so nobody
+      # bypasses it; the proxy may connect to "localhost".
+      # Other addresses: compose.override.yaml with `ports: !override`
+      # (see the user guide).
+      - "${MUSICUS_LOCAL_ONLY:+127.0.0.1:}${MUSICUS_PORT:-8080}:8080"
+      - "${MUSICUS_LOCAL_ONLY:+[::1]:}${MUSICUS_PORT:-8080}:8080"
     volumes:
       - musicus-data:/data
     # The server finishes running requests on SIGTERM.
