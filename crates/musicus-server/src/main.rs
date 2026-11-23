@@ -115,11 +115,19 @@ fn data_dir(args: &DataArgs) -> Result<PathBuf> {
 fn healthcheck(listen: SocketAddr) -> Result<()> {
     use std::io::{Read, Write};
     use std::time::Duration;
-    let mut target = listen;
-    if target.ip().is_unspecified() {
-        target.set_ip(std::net::Ipv4Addr::LOCALHOST.into());
+    // `[::]` → `[::1]`, then `127.0.0.1` (the server may have fallen back to IPv4).
+    let mut stream = None;
+    let mut failure = None;
+    for target in musicus_server::listen::local_targets(listen) {
+        match std::net::TcpStream::connect_timeout(&target, Duration::from_secs(3)) {
+            Ok(s) => {
+                stream = Some(s);
+                break;
+            }
+            Err(e) => failure = Some(e),
+        }
     }
-    let mut stream = std::net::TcpStream::connect_timeout(&target, Duration::from_secs(3))?;
+    let Some(mut stream) = stream else { return Err(failure.expect("at least one target").into()) };
     stream.set_read_timeout(Some(Duration::from_secs(3)))?;
     stream.write_all(b"GET /api/health HTTP/1.0\r\nHost: localhost\r\n\r\n")?;
     let mut head = [0u8; 12];
@@ -170,12 +178,14 @@ async fn serve(args: ServeArgs) -> Result<()> {
                 shutdown_signal().await;
                 shutdown.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
             });
-            tracing::info!("listening on https://{}", args.listen);
-            axum_server::bind_rustls(args.listen, config).handle(handle).serve(app).await?;
+            let (listener, stack) = musicus_server::listen::bind(args.listen)?;
+            tracing::info!("listening on https://{} ({})", listener.local_addr()?, stack.describe());
+            axum_server::from_tcp_rustls(listener, config)?.handle(handle).serve(app).await?;
         }
         _ => {
-            let listener = tokio::net::TcpListener::bind(args.listen).await?;
-            tracing::info!("listening on http://{}", args.listen);
+            let (listener, stack) = musicus_server::listen::bind(args.listen)?;
+            let listener = tokio::net::TcpListener::from_std(listener)?;
+            tracing::info!("listening on http://{} ({})", listener.local_addr()?, stack.describe());
             axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;
         }
     }

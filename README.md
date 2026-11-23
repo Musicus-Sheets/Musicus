@@ -106,9 +106,13 @@ docker compose up -d --build
 docker compose logs musicus           # the one-time admin setup link
 ```
 
-The web client is then on http://localhost:8080. Tablets and phones on the
+The web client is then on http://localhost:8080; the port is published on
+every address over IPv4 and IPv6 (`MUSICUS_LOCAL_ONLY` empty). `MUSICUS_LOCAL_ONLY=true`
+publishes it on `127.0.0.1` and `[::1]` only, for a proxy on the same machine
+(either address, or `localhost`, works). Other addresses: a
+`compose.override.yaml` with `ports: !override` (user guide). Tablets and phones on the
 network need HTTPS (see below). With a domain that points to the machine,
-set `MUSICUS_DOMAIN`, `MUSICUS_PUBLIC_URL`, `MUSICUS_BIND=127.0.0.1` and
+set `MUSICUS_DOMAIN`, `MUSICUS_PUBLIC_URL`, `MUSICUS_LOCAL_ONLY=true` and
 `MUSICUS_TRUST_PROXY=true` in `.env`, then start with Caddy in front. Caddy
 fetches and renews the Let's Encrypt certificate itself:
 
@@ -137,7 +141,7 @@ All options can be passed as flags or environment variables
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `MUSICUS_DATA_DIR` | usual folder of the system (see above); `/data` in Docker | Holds `musicus.sqlite`, `blobs/` and `tmp/` |
-| `MUSICUS_LISTEN` | `0.0.0.0:8080` | Address and port |
+| `MUSICUS_LISTEN` | `[::]:8080` | Address and port; `[::]` accepts IPv6 and IPv4 (falls back to `0.0.0.0` without IPv6), any other address is used as given |
 | `MUSICUS_WEB_DIR` | none | Folder of a built web client, used instead of the one built into the program |
 | `MUSICUS_PUBLIC_URL` | `http://localhost:8080` | Used in printed setup links |
 | `MUSICUS_TLS_CERT`, `MUSICUS_TLS_KEY` | none | PEM files: serve HTTPS directly (rustls) |

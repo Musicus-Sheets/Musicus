@@ -43,7 +43,7 @@ COPY --from=build /out/musicus-server /usr/local/bin/musicus-server
 # inherits that ownership.
 COPY --from=build --chown=65532:65532 /out/data /data
 ENV MUSICUS_DATA_DIR=/data \
-    MUSICUS_LISTEN=0.0.0.0:8080
+    MUSICUS_LISTEN=[::]:8080
 USER 65532:65532
 VOLUME ["/data"]
 EXPOSE 8080

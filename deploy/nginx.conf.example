@@ -1,0 +1,46 @@
+# Musicus behind an existing nginx, instead of the Caddy profile of
+# compose.yaml. Copy to /etc/nginx/sites-available/musicus (or conf.d/),
+# replace the domain, then `nginx -t && systemctl reload nginx`.
+# Start Musicus with MUSICUS_TRUST_PROXY=true and, if nginx runs on the same
+# machine, MUSICUS_LISTEN=127.0.0.1:8080 (Docker: MUSICUS_LOCAL_ONLY=true,
+# which publishes the port on 127.0.0.1 and [::1]).
+server {
+	server_name sheets.example.org;
+
+	# TLS: keep your usual setup. `certbot --nginx -d sheets.example.org`
+	# adds the `listen 443 ssl` and certificate lines and the redirect from
+	# port 80.
+	listen 80;
+	listen [::]:80;
+
+	# Largest upload; keep it equal to MUSICUS_MAX_UPLOAD_MB (default 200).
+	# nginx refuses bodies over 1 MB otherwise (413).
+	client_max_body_size 200m;
+
+	# Optional: compress API answers (the web client files are compressed
+	# already).
+	gzip on;
+	gzip_proxied any;
+	gzip_types application/json text/css application/javascript;
+
+	location / {
+		# An IP address rather than `localhost`: nginx resolves `localhost`
+		# to 127.0.0.1 and ::1 and uses both. Musicus answers on both by
+		# default (MUSICUS_LISTEN=[::]:8080; Docker: MUSICUS_LOCAL_ONLY empty
+		# or true), but a server that listens on IPv4 only (older Musicus
+		# builds and compose files, MUSICUS_LISTEN=127.0.0.1:…) fails part
+		# of the requests with 502.
+		proxy_pass http://127.0.0.1:8080;
+		proxy_http_version 1.1;
+
+		# With MUSICUS_TRUST_PROXY=true, Musicus limits failed logins per
+		# client address and takes the FIRST address of X-Forwarded-For.
+		# Set it to the real client; appending
+		# ($proxy_add_x_forwarded_for) would let a client choose it.
+		proxy_set_header X-Forwarded-For $remote_addr;
+
+		# Large uploads: Musicus checks the PDF after the last byte arrived.
+		proxy_read_timeout 300s;
+		proxy_send_timeout 300s;
+	}
+}

@@ -209,7 +209,8 @@ impl FromRequestParts<AppState> for ClientIp {
         let ip = parts
             .extensions
             .get::<ConnectInfo<SocketAddr>>()
-            .map(|c| c.0.ip().to_string())
+            // IPv4 clients of the dual-stack listener arrive as `::ffff:a.b.c.d`.
+            .map(|c| c.0.ip().to_canonical().to_string())
             .unwrap_or_else(|| "unknown".into());
         Ok(ClientIp(ip))
     }
