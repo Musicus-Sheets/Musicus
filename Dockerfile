@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1.7
 #
-# Musicus in one image: the server binary plus the built web client.
+# Musicus in one image: the server program, with the web client built into it
+# (feature embed-web), the same single file as the plain program.
 #
 #   docker build -t musicus .
 #   docker compose up -d                  # see compose.yaml
@@ -24,24 +25,24 @@ WORKDIR /src
 COPY . .
 # pdf.js is pinned and checksum-verified by the script.
 RUN ./scripts/fetch-pdfjs.sh
-# `dx` downloads wasm-bindgen, wasm-opt and esbuild on first use.
+# `dx` downloads wasm-bindgen, wasm-opt and esbuild on first use. The client
+# folder is emptied first, so no file of an earlier build (cache mount) is
+# built into the program.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    dx bundle --platform web --package musicus-web --release \
-    && cargo build --release --locked -p musicus-server \
+    rm -rf target/dx/musicus-web/release \
+    && dx bundle --platform web --package musicus-web --release \
+    && cargo build --release --locked -p musicus-server --features embed-web \
     && mkdir -p /out/data \
-    && cp target/release/musicus-server /out/ \
-    && cp -r target/dx/musicus-web/release/web/public /out/web
+    && cp target/release/musicus-server /out/
 
 # --- Runtime: no shell, no package manager, not root -----------------------
 FROM ${RUNTIME_IMAGE}
 COPY --from=build /out/musicus-server /usr/local/bin/musicus-server
-COPY --from=build /out/web /app/web
 # An empty data directory owned by the runtime user, so a fresh volume
 # inherits that ownership.
 COPY --from=build --chown=65532:65532 /out/data /data
 ENV MUSICUS_DATA_DIR=/data \
-    MUSICUS_WEB_DIR=/app/web \
     MUSICUS_LISTEN=0.0.0.0:8080
 USER 65532:65532
 VOLUME ["/data"]

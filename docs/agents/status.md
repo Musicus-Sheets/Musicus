@@ -26,7 +26,7 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | R-OPS-009 | continuous replication (Litestream) | |
 | F-OPS-005, R-OPS-010, R-OPS-012, R-OPS-018, R-OPS-025, R-OPS-040, R-OPS-041 | updates and downgrades (d-update-model, a-preview-migrations, a-patch-no-db-changes, a-db-check) | plan and roadmap in `docs/technical/chapters/14-updates.typ`; done: own update runner (a-update-runner; R-OPS-011, 013–017 mechanism, 023, 024), handling of unknown stored values where they are read (a-stored-fallbacks), schema snapshot + CI database check + `db-change` notice (a-db-check; R-OPS-038, R-OPS-039), snapshot + automatic restore + restart guard, `backup` without updating, `restore` (R-OPS-019…022, a-snapshots). Still for 1.0.0: release check, release pipeline (R-OPS-049, PR G); see § Updates below |
 | F-OPS-008, R-OPS-043…048 | open clients during shutdown, start and update (a-client-outage) | listener before updates with 503 `server_starting`, shutdown drain with 503 `server_shutting_down` (new `ErrorCode`s), banners, polling, unsaved markings kept in memory and re-sent, `beforeunload` warning, reload at a safe moment after a version change |
-| F-OPS-006, R-OPS-026…032, R-OPS-042 | platforms (a-platforms) | multi-arch images + version tags (phase 0); Windows blocker and other findings in § Updates below; program archives + `SHA256SUMS` (unsigned; guide text for SmartScreen/Gatekeeper), embedded web client, OS data folder, platform-dependent CI (tests, build, smoke) on all systems, the rest Linux-only (phase 1) |
+| F-OPS-006, R-OPS-026…032, R-OPS-042 | platforms (a-platforms) | multi-arch images + version tags (phase 0); Windows blocker and other findings in § Updates below; program archives + `SHA256SUMS` (unsigned; guide text for SmartScreen/Gatekeeper), platform-dependent CI (tests, build, smoke) on all systems, the rest Linux-only (phase 1) |
 | F-OPS-007, R-OPS-036 | version visible (a-version-public) | done: `/api/version`, About view, title pages from the build's version (R-OPS-033…035); missing: the title-page check in stage 1 of the release pipeline (R-OPS-035, PR G); docs tags `vX.Y.Z` in requirements, technical docs and user guide by hand after each release (R-OPS-036, RELEASING.md § 4) |
 | R-OPS-049 | release pipeline (a-release-pipeline) | PR G: dry run on the `release/<version>` pull request, real run on its merge; stage 1 builds and checks everything into expiring artifacts, stage 2 (only if all green) pushes images → tag → GitHub release with archives + `SHA256SUMS` → guide site, each step idempotent; `user-guide-pages.yml` becomes the last step (manual test build stays) |
 | F-TECH-002, R-TECH-004…007 | prepared replaceability | storage modules per data area (no SQL in `routes/`), file store without `path()`, PDF engine module, conformance suites; no second backend |
@@ -133,8 +133,11 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
      commit" is therefore not forced on Windows — accepted). Compile-checked for `x86_64-pc-windows-gnu`; never run
      on Windows (no Windows CI yet, R-OPS-032).
   2. SIGTERM handling is `#[cfg(unix)]` (`main.rs::shutdown_signal`); Ctrl+C works everywhere — fine.
-  3. The plain program needs `--web-dir` with the client files (embedding accepted, R-OPS-030).
-  4. Default data dir `data` is relative to the working directory (OS-usual folders accepted, R-OPS-031).
+  3. Fixed: the release program contains the web client (feature `embed-web`, `web.rs`, a-embedded-web; `--web-dir`
+     overrides); the Docker image uses the built-in client too. Not compressed (dx 0.7 writes no `.br`/`.gz`).
+  4. Fixed: without `--data-dir` the OS-usual folder is used (`config::default_data_dir`, a-data-dir-default); a
+     legacy `./data` holding a database is still used, with a warning — remove that fallback before 1.0.
+     Never run on Windows or macOS (unit tests with injected environment only).
   5. CI only on Linux x86_64; Docker images only for the host architecture.
   6. Fixed: blob commit = "exists? else rename" (`blobs.rs::place`); a failed rename whose target exists meanwhile
      (concurrent upload of the same new file, or on Windows a rename onto an open blob) counts as stored (unit test

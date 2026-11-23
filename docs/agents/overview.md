@@ -32,7 +32,7 @@ musicus-api (lib) compiled into both: JSON DTOs + binary ink format
 ## Request lifecycle (server)
 
 1. Axum router (`routes::app`) → middleware: security headers (R-SEC-005), TraceLayer, body limits.
-2. `/api/*` → handler; anything else → `ServeDir(web_dir)` with fallback `index.html` (client routes).
+2. `/api/*` → handler; anything else → the web client (`web::WebClient`: `ServeDir(--web-dir)` or the copy built into the program, feature `embed-web`) with fallback `index.html` (client routes).
 3. Handler extracts `State<AppState>` (`Arc<App>`), `AuthUser` (auth + CSRF + session lookup), path/body.
 4. Role check (`require_librarian`/`require_admin`) and/or ACL via `part_visible!()` SQL fragment.
 5. SQL via sqlx: reads on `app.db.read` pool, writes (in a tx when >1 statement) on `app.db.write` (1 connection).

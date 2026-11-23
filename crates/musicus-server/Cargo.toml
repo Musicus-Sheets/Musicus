@@ -7,6 +7,12 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+# Builds the web client into the program, so it is one file (R-OPS-030).
+# Needs the built client: `dx bundle --platform web --package musicus-web --release`
+# (or MUSICUS_WEB_DIST=<folder>, relative to the repository root).
+embed-web = []
+
 [dependencies]
 argon2 = "0.6"
 axum = { version = "0.8", features = ["macros"] }
@@ -18,6 +24,7 @@ futures-util = "0.3"
 getrandom = "0.3"
 hayro = "0.8"
 hex = "0.4"
+mime_guess = "2"
 musicus-api.workspace = true
 musicus-i18n.workspace = true
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }

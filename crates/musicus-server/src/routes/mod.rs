@@ -1,4 +1,4 @@
-//! The HTTP API under `/api`, plus the static web client.
+//! The HTTP API under `/api`, plus the web client (`crate::web`).
 
 pub mod annotations;
 pub mod auth;
@@ -9,19 +9,14 @@ pub mod library;
 pub mod programmes;
 pub mod users;
 
-use crate::{error::AppError, state::AppState};
+use crate::{error::AppError, state::AppState, web::WebClient};
 use axum::{
     Router,
     extract::DefaultBodyLimit,
     http::{HeaderName, HeaderValue, header},
     routing::{get, post, put},
 };
-use std::path::Path;
-use tower_http::{
-    services::{ServeDir, ServeFile},
-    set_header::SetResponseHeaderLayer,
-    trace::TraceLayer,
-};
+use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 
 /// Liveness for load balancers and container health checks: the process
 /// answers and the database is readable. Needs no login.
@@ -108,17 +103,9 @@ pub fn api() -> Router<AppState> {
         .fallback(|| async { AppError::NotFound })
 }
 
-/// The whole application: API, optional web client, common headers.
-pub fn app(state: AppState, web_dir: Option<&Path>) -> Router {
-    let mut router = Router::new().nest("/api", api());
-    if let Some(dir) = web_dir {
-        // Unknown paths are client-side routes of the single-page app.
-        // `dx bundle --release` writes .br/.gz copies next to the assets.
-        let spa =
-            ServeDir::new(dir).precompressed_br().precompressed_gzip().fallback(ServeFile::new(dir.join("index.html")));
-        router = router.fallback_service(spa);
-    }
-    router
+/// The whole application: API, web client (if any, `web`), common headers.
+pub fn app(state: AppState, web: WebClient) -> Router {
+    web.mount(Router::new().nest("/api", api()))
         .layer(SetResponseHeaderLayer::overriding(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
         .layer(SetResponseHeaderLayer::overriding(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")))
         .layer(SetResponseHeaderLayer::overriding(header::REFERRER_POLICY, HeaderValue::from_static("same-origin")))
