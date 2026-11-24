@@ -1,0 +1,40 @@
+# Example for your own compose.override.yaml (user guide, "Installing Musicus").
+#
+#   cp compose.override.example.yaml compose.override.yaml
+#
+# then remove the "# " in front of the lines you need: always the first two
+# (services: / musicus:), plus one or both blocks below. Docker Compose reads
+# compose.override.yaml automatically, on top of compose.yaml. Like .env, it is
+# your own file: git pull and updates never change it.
+#
+# Check the result: docker compose config
+
+# services:
+#   musicus:
+
+    # --- Only reachable on certain addresses ---------------------------------
+    # Instead of every address (or only this computer with MUSICUS_LOCAL_ONLY).
+    # Write the addresses of this computer, IPv6 in square brackets, and leave
+    # MUSICUS_LOCAL_ONLY empty. "!override" (Compose 2.24 or newer) replaces
+    # the ports of compose.yaml; without it Compose would add these lines and
+    # Musicus would still be reachable on every address.
+    # ports: !override
+    #   - "192.168.1.20:8080:8080"
+    #   - "[2001:db8::20]:8080:8080"
+
+    # --- Data in a folder of your own instead of the Docker volume -----------
+    # Musicus then runs as your user, and the files in ./data belong to you.
+    # "1000:1000" = the output of `id -u` and `id -g`; never 0 (root).
+    # Create the folder before the first start (mkdir data). Without it the
+    # start stops with "bind source path does not exist" (create_host_path:
+    # false), instead of Docker creating a folder for root that Musicus
+    # cannot write to.
+    # Choose the user once: after a change, give the folder to the new user
+    # first (sudo chown -R <user>:<group> data).
+    # user: "1000:1000"
+    # volumes:
+    #   - type: bind
+    #     source: ./data
+    #     target: /data
+    #     bind:
+    #       create_host_path: false
