@@ -4,10 +4,21 @@
 //! every request also carries the CSRF header the server requires for
 //! cookie-authenticated writes.
 
-use crate::errors;
+//! Every answer (or its absence) is reported to [`connection`]; while the
+//! server has announced that it is away, requests are refused here without
+//! being sent (a-client-outage), except the annotation saves of the reader,
+//! which flush what is pending ([`get_page`], [`put_page`]).
+
+use crate::{
+    bridge,
+    connection::{self, Input},
+    errors,
+};
+use dioxus::prelude::ReadableExt;
 use gloo_net::http::{Method, Request, RequestBuilder, Response};
-use musicus_api::{ApiError, CSRF_HEADER, ErrorCode};
+use musicus_api::{ApiError, CSRF_HEADER, ErrorCode, ServerPhase};
 use serde::{Serialize, de::DeserializeOwned};
+use std::cell::Cell;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ApiErr {
@@ -31,17 +42,79 @@ fn network(e: impl std::fmt::Display) -> ApiErr {
     ApiErr { status: 0, code: None, message: errors::network_text(&e.to_string()) }
 }
 
+/// The request got no answer: the server is not reachable (or going).
+fn lost(e: gloo_net::Error) -> ApiErr {
+    connection::report(Input::Lost);
+    network(e)
+}
+
+thread_local! {
+    static RUNNING: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Counts a request (or an upload of the bridge) as running while it lives;
+/// the reload after an update waits for none to run.
+pub struct Running(());
+
+pub fn start_running() -> Running {
+    RUNNING.with(|r| r.set(r.get() + 1));
+    Running(())
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        RUNNING.with(|r| r.set(r.get().saturating_sub(1)));
+    }
+}
+
+/// Requests running now.
+pub fn running() -> usize {
+    RUNNING.with(Cell::get)
+}
+
+/// Refuses a request while the server announced that it is away: nothing
+/// new may start (R-OPS-044), the banner says why.
+fn gate() -> ApiResult<()> {
+    let code = match connection::CONN.peek().server {
+        connection::Server::ShuttingDown => ErrorCode::ServerShuttingDown,
+        connection::Server::Starting => ErrorCode::ServerStarting,
+        _ => return Ok(()),
+    };
+    Err(ApiErr { status: 503, message: errors::code_text(&code), code: Some(code) })
+}
+
 fn builder(method: Method, path: &str) -> RequestBuilder {
     RequestBuilder::new(path).method(method).header(CSRF_HEADER, "1")
 }
 
+/// Sends a request (no gate), counted as running, reporting a missing answer.
+async fn fetch(request: Request) -> ApiResult<Response> {
+    let _running = start_running();
+    let write = !matches!(request.method(), Method::GET | Method::HEAD);
+    let r = request.send().await.map_err(lost)?;
+    if write && r.ok() {
+        // What was typed has been saved (the reload rule of R-OPS-048).
+        bridge::clear_unsaved_input();
+    }
+    Ok(r)
+}
+
 async fn check(response: Response) -> ApiResult<Response> {
+    let status = response.status();
     if response.ok() {
+        connection::report(Input::Answered);
         return Ok(response);
     }
-    let status = response.status();
     let body = response.text().await.unwrap_or_default();
-    let (code, message) = match serde_json::from_str::<ApiError>(&body) {
+    let parsed = serde_json::from_str::<ApiError>(&body);
+    match parsed.as_ref().map(|e| &e.code) {
+        Ok(ErrorCode::ServerStarting) => connection::report(Input::Refused(ServerPhase::Starting)),
+        Ok(ErrorCode::ServerShuttingDown) => connection::report(Input::Refused(ServerPhase::ShuttingDown)),
+        // A proxy answering for a server that is away (no Musicus error body).
+        Err(_) if matches!(status, 502..=504) => connection::report(Input::Lost),
+        _ => connection::report(Input::Answered),
+    }
+    let (code, message) = match parsed {
         Ok(e) => (Some(e.code.clone()), errors::api_error_text(&e)),
         // A code this build does not know, with arguments: the English message.
         Err(_) => match serde_json::from_str::<serde_json::Value>(&body) {
@@ -72,17 +145,38 @@ fn session_lost() {
 /// Differs from [`musicus_api::VERSION`] when the server was updated after
 /// this client was loaded.
 pub async fn version() -> ApiResult<String> {
-    get::<musicus_api::VersionInfo>("/api/version").await.map(|v| v.version)
+    let r = builder(Method::GET, "/api/version").send().await.map_err(network)?;
+    if !r.ok() {
+        return Err(ApiErr { status: r.status(), code: None, message: errors::http_failed_text(r.status()) });
+    }
+    r.json::<musicus_api::VersionInfo>().await.map(|v| v.version).map_err(network)
+}
+
+/// `GET /api/health` for the polling while the server is away (not gated,
+/// reports nothing itself): `None` = ready, `Some(phase)` = starting or
+/// shutting down, `Err` = no answer from Musicus.
+pub async fn health() -> Result<Option<ServerPhase>, ()> {
+    let r = builder(Method::GET, "/api/health").send().await.map_err(|_| ())?;
+    if r.ok() {
+        return Ok(None);
+    }
+    match r.json::<ApiError>().await.map(|e| e.code) {
+        Ok(ErrorCode::ServerStarting) => Ok(Some(ServerPhase::Starting)),
+        Ok(ErrorCode::ServerShuttingDown) => Ok(Some(ServerPhase::ShuttingDown)),
+        _ => Err(()),
+    }
 }
 
 pub async fn get<T: DeserializeOwned>(path: &str) -> ApiResult<T> {
-    let r = check(builder(Method::GET, path).send().await.map_err(network)?).await?;
+    gate()?;
+    let r = check(fetch(builder(Method::GET, path).build().map_err(network)?).await?).await?;
     r.json().await.map_err(network)
 }
 
 pub async fn send<B: Serialize, T: DeserializeOwned>(method: Method, path: &str, body: &B) -> ApiResult<T> {
+    gate()?;
     let request: Request = builder(method, path).json(body).map_err(network)?;
-    let r = check(request.send().await.map_err(network)?).await?;
+    let r = check(fetch(request).await?).await?;
     r.json().await.map_err(network)
 }
 
@@ -100,20 +194,23 @@ pub async fn patch<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> A
 
 /// A request without a JSON answer (204).
 pub async fn call(method: Method, path: &str) -> ApiResult<()> {
-    check(builder(method, path).send().await.map_err(network)?).await.map(|_| ())
+    gate()?;
+    check(fetch(builder(method, path).build().map_err(network)?).await?).await.map(|_| ())
 }
 
 /// A JSON request without a JSON answer (204).
 pub async fn call_json<B: Serialize>(method: Method, path: &str, body: &B) -> ApiResult<()> {
+    gate()?;
     let request: Request = builder(method, path).json(body).map_err(network)?;
-    check(request.send().await.map_err(network)?).await.map(|_| ())
+    check(fetch(request).await?).await.map(|_| ())
 }
 
 /// Uploads raw bytes (a sheet file).
 pub async fn upload<T: DeserializeOwned>(path: &str, bytes: &[u8], content_type: &str) -> ApiResult<T> {
+    gate()?;
     let body = js_sys::Uint8Array::from(bytes);
     let request = builder(Method::PUT, path).header("content-type", content_type).body(body).map_err(network)?;
-    let r = check(request.send().await.map_err(network)?).await?;
+    let r = check(fetch(request).await?).await?;
     r.json().await.map_err(network)
 }
 
@@ -123,10 +220,14 @@ pub enum PageBytes {
     Missing,
 }
 
+/// Not gated: also part of a flush (merge after a conflict); the reader
+/// does not load new pages while the server is announced away.
 pub async fn get_page(set_id: i64, page: i64) -> ApiResult<PageBytes> {
-    let r =
-        builder(Method::GET, &format!("/api/annotation-sets/{set_id}/pages/{page}")).send().await.map_err(network)?;
+    let request =
+        builder(Method::GET, &format!("/api/annotation-sets/{set_id}/pages/{page}")).build().map_err(network)?;
+    let r = fetch(request).await?;
     if r.status() == 204 {
+        connection::report(Input::Answered);
         return Ok(PageBytes::Missing);
     }
     let r = check(r).await?;
@@ -141,6 +242,7 @@ pub enum SaveOutcome {
     Conflict,
 }
 
+/// Not gated: the flush of pending pages runs while the server shuts down.
 pub async fn put_page(set_id: i64, page: i64, expected_revision: i64, bytes: &[u8]) -> ApiResult<SaveOutcome> {
     let body = js_sys::Uint8Array::from(bytes);
     let request = builder(Method::PUT, &format!("/api/annotation-sets/{set_id}/pages/{page}"))
@@ -148,8 +250,9 @@ pub async fn put_page(set_id: i64, page: i64, expected_revision: i64, bytes: &[u
         .header("if-match", &format!("\"{expected_revision}\""))
         .body(body)
         .map_err(network)?;
-    let r = request.send().await.map_err(network)?;
+    let r = fetch(request).await?;
     if r.status() == 409 {
+        connection::report(Input::Answered);
         return Ok(SaveOutcome::Conflict);
     }
     let saved: musicus_api::SavedPage = check(r).await?.json().await.map_err(network)?;

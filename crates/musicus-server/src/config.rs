@@ -215,7 +215,18 @@ pub struct ServeArgs {
     /// reverse proxy that sets it).
     #[arg(long, env = "MUSICUS_TRUST_PROXY")]
     pub trust_proxy: bool,
+
+    /// Seconds the server keeps serving after the stop signal, so open
+    /// clients can send what they have not saved yet (a-client-outage,
+    /// R-OPS-043). Skipped when no client is connected; 0 to 30.
+    #[arg(long, env = "MUSICUS_SHUTDOWN_GRACE_SECS", default_value_t = 3,
+          value_parser = clap::value_parser!(u64).range(0..=MAX_SHUTDOWN_GRACE_SECS))]
+    pub shutdown_grace_secs: u64,
 }
+
+/// Upper bound of `--shutdown-grace-secs`: with the drain limit it stays
+/// inside the stop timeout of `compose.yaml` (`stop_grace_period`).
+pub const MAX_SHUTDOWN_GRACE_SECS: u64 = 30;
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClientCache {
@@ -387,6 +398,17 @@ mod tests {
     }
 
     /// Without the variable the default is the dual-stack `[::]:8080`.
+    #[test]
+    fn shutdown_grace_is_bounded() {
+        let parse = |v: &str| Cli::try_parse_from(["musicus-server", "serve", "--shutdown-grace-secs", v]);
+        let Command::Serve(args) = Cli::try_parse_from(["musicus-server", "serve"]).unwrap().command else {
+            unreachable!()
+        };
+        assert_eq!(args.shutdown_grace_secs, 3);
+        assert!(parse("0").is_ok() && parse("30").is_ok());
+        assert!(parse("31").is_err() && parse("-1").is_err());
+    }
+
     #[test]
     fn listen_default_is_dual_stack() {
         let cmd = Cli::command();

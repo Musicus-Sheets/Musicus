@@ -16,11 +16,19 @@
 //! Layers are saved per page 1.5 s after the last change and when turning
 //! the page or leaving; a conflict with another device is merged by object
 //! id (see `musicus_api::ink::merge`).
+//!
+//! While the server is away (a-client-outage, `connection`): announced
+//! (shutting down, starting) ⇒ no new drawing, pending pages are sent at
+//! once (a stroke already begun is finished and sent too); not reachable ⇒
+//! drawing goes on in memory. When it is back, every page not saved is loaded
+//! (if needed) and sent again; a page the server refuses stays in memory with
+//! a banner.
 
 use crate::{
     Route,
     api::{self, PageBytes, SaveOutcome},
     bridge::{self, Crop},
+    connection::{CONN, EFFECT, Server, Then},
     ink::{self, PageBox},
     layouts,
     pages::library::part_route,
@@ -171,6 +179,9 @@ struct PageState {
     generation: u64,
     saved_generation: u64,
     saving: bool,
+    /// The server refused the last save for good (e.g. `invalid_ink` from a
+    /// server updated meanwhile): its reason. The layer stays in memory.
+    refused: Option<String>,
     undo: Vec<Action>,
     redo: Vec<Action>,
 }
@@ -244,8 +255,14 @@ async fn save_page(store: SharedStore, key: Key) -> Result<(), String> {
         let outcome = match outcome {
             Ok(o) => o,
             Err(e) => {
+                // A client error other than a session or rate problem: sending it
+                // again would not help (kept in memory, banner).
+                let refused = (400..500).contains(&e.status) && !matches!(e.status, 401 | 408 | 429);
                 if let Some(st) = store.borrow_mut().pages.get_mut(&key) {
                     st.saving = false;
+                    if refused {
+                        st.refused = Some(e.message.clone());
+                    }
                 }
                 return Err(e.message);
             }
@@ -255,6 +272,7 @@ async fn save_page(store: SharedStore, key: Key) -> Result<(), String> {
                 let mut s = store.borrow_mut();
                 let st = s.pages.get_mut(&key).expect("page exists");
                 st.saving = false;
+                st.refused = None;
                 st.revision = new_revision;
                 st.base_ids = ids(&layer);
                 st.saved_generation = generation;
@@ -302,6 +320,11 @@ fn sync_pending(store: &SharedStore, key: Key) {
 
 fn dirty_keys(store: &SharedStore) -> Vec<Key> {
     store.borrow().pages.iter().filter(|(_, s)| s.generation != s.saved_generation).map(|(k, _)| *k).collect()
+}
+
+/// The reason of a page the server refused, if any is still unsaved.
+fn refused(store: &SharedStore) -> Option<String> {
+    store.borrow().pages.values().filter(|s| s.generation != s.saved_generation).find_map(|s| s.refused.clone())
 }
 
 /// The set to show first: the one linked to the programme, else the default.
@@ -609,6 +632,11 @@ fn Reader(data: Loaded) -> Element {
         let store = store.clone();
         move || {
             let Some(set) = active() else { return };
+            // Nothing new is asked for while the server is announced away;
+            // loaded again when it is back.
+            if CONN.read().announced() {
+                return;
+            }
             let mut pages: Vec<u32> = crops().iter().map(|(p, _, _)| *p).collect();
             if pages.is_empty() {
                 pages.push(page());
@@ -656,6 +684,8 @@ fn Reader(data: Loaded) -> Element {
         move |key: Key, delay: bool| {
             let store = store.clone();
             let generation = store.borrow().pages.get(&key).map(|s| s.generation);
+            // Shutting down: no debounce, the grace is short.
+            let delay = delay && CONN.peek().server != Server::ShuttingDown;
             status.set(SaveStatus::Pending);
             spawn(async move {
                 if delay {
@@ -670,10 +700,40 @@ fn Reader(data: Loaded) -> Element {
                     Ok(()) => status.set(SaveStatus::Saved),
                     Err(e) => status.set(SaveStatus::Failed(e)),
                 }
+                bridge::set_unload_warning("refused", refused(&store).is_some());
                 version += 1;
             });
         }
     };
+
+    // The server announced its stop: send every pending page now (drawing is
+    // already blocked). It is back: load what failed to load, send again.
+    use_effect({
+        let store = store.clone();
+        let mut save = save.clone();
+        let seen = use_hook(|| Rc::new(Cell::new(EFFECT.peek().0)));
+        move || {
+            let (n, effect) = EFFECT();
+            if n == seen.get() {
+                return;
+            }
+            seen.set(n);
+            for key in dirty_keys(&store) {
+                match effect {
+                    Then::Flush => save(key, false),
+                    Then::Resend => {
+                        let store = store.clone();
+                        let mut save = save.clone();
+                        spawn(async move {
+                            let _ = load_page(store, key).await;
+                            save(key, false);
+                        });
+                    }
+                    Then::None => {}
+                }
+            }
+        }
+    });
 
     // Applies a change to the current page and schedules its save.
     let change = {
@@ -774,6 +834,9 @@ fn Reader(data: Loaded) -> Element {
         let store = store.clone();
         let mut save = save.clone();
         move |redo: bool| {
+            if !CONN.peek().may_draw() {
+                return;
+            }
             let Some(set) = active() else { return };
             let key = (set, if systems_on() { edit_page() } else { page() });
             {
@@ -903,6 +966,10 @@ fn Reader(data: Loaded) -> Element {
         let mut add_object = add_object.clone();
         let mut erase_at = erase_at.clone();
         move |t: Target, e: PointerEvent| {
+            // Announced away: nothing new; a stroke begun before is finished.
+            if !CONN.peek().may_draw() {
+                return;
+            }
             let kind = e.pointer_type();
             let mut l = live.borrow_mut();
             if kind == "pen" {
@@ -1144,7 +1211,13 @@ fn Reader(data: Loaded) -> Element {
         SaveStatus::Failed(e) => t::reader_save_failed(e),
     };
     let drawing = mode() == Mode::Draw;
-    let ink_class = if drawing { "ink active" } else { "ink" };
+    let conn = CONN.read().clone();
+    let paused = !conn.may_draw();
+    let ink_class = if drawing && !paused { "ink active" } else { "ink" };
+    // Pages not saved yet while the server is away, and pages it refused.
+    let _ = version();
+    let unsaved_kept = conn.away() && !dirty_keys(&store).is_empty();
+    let refused_reason = refused(&store);
 
     rsx! {
         div { class: "reader",
@@ -1233,7 +1306,7 @@ fn Reader(data: Loaded) -> Element {
                     span { class: "sep" }
                     button { class: "icon", title: t::reader_undo(), onclick: { let mut u = undo_redo.clone(); move |_| u(false) }, "↶" }
                     button { class: "icon", title: t::reader_redo(), onclick: { let mut u = undo_redo.clone(); move |_| u(true) }, "↷" }
-                    span { class: "save-status", "{status_text}" }
+                    span { class: "save-status", if paused { {t::reader_draw_paused()} } else { "{status_text}" } }
                 }
             }
             if menu() {
@@ -1292,6 +1365,11 @@ fn Reader(data: Loaded) -> Element {
             }
             if let Some(note) = layout_note {
                 div { class: "banner info", "{note}" }
+            }
+            if let Some(reason) = refused_reason {
+                div { class: "banner error", role: "alert", {t::reader_annotations_refused(reason)} }
+            } else if unsaved_kept {
+                div { class: "banner", role: "status", {t::reader_annotations_kept()} }
             }
             if let Some(e) = error() {
                 div { class: "banner error", "{e} " button { class: "link", onclick: move |_| error.set(None), {t::reader_dismiss()} } }

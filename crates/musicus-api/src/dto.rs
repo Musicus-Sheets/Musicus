@@ -42,6 +42,43 @@ impl VersionInfo {
     }
 }
 
+/// Path of the server's event stream (`text/event-stream`, a-client-outage).
+pub const EVENTS_PATH: &str = "/api/events";
+
+/// Name of the event that carries a [`ServerState`] on [`EVENTS_PATH`].
+pub const STATE_EVENT: &str = "state";
+
+/// What the server is doing, as an open client needs to know it (F-OPS-008).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerPhase {
+    /// Listening, but snapshot, database updates or start-up checks still run:
+    /// every other request is answered with `server_starting` (R-OPS-045).
+    Starting,
+    /// Normal service.
+    Ready,
+    /// The stop signal arrived: clients start nothing new and send what is
+    /// pending; the server serves it during a short grace, then answers
+    /// `server_shutting_down` and exits (R-OPS-043).
+    ShuttingDown,
+}
+
+/// Data of the event [`STATE_EVENT`]: the phase and the release that runs
+/// (the same number as `GET /api/version`). Sent when a stream opens and on
+/// every change.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ServerState {
+    pub state: ServerPhase,
+    pub version: String,
+}
+
+impl ServerState {
+    /// The state of this build in `phase`.
+    pub fn current(phase: ServerPhase) -> Self {
+        Self { state: phase, version: VERSION.to_owned() }
+    }
+}
+
 /// Global role of a user. Access to sheets is granted to groups, not roles;
 /// roles only decide who may manage what.
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
@@ -717,6 +754,14 @@ mod tests {
         assert_eq!(LICENSE, "AGPL-3.0-or-later");
         assert!(SOURCE_URL.starts_with("https://"), "{SOURCE_URL}");
         assert_eq!(serde_json::to_string(&VersionInfo::current()).unwrap(), format!(r#"{{"version":"{VERSION}"}}"#));
+    }
+
+    #[test]
+    fn server_state_wire_format() {
+        let s = ServerState::current(ServerPhase::ShuttingDown);
+        assert_eq!(serde_json::to_string(&s).unwrap(), format!(r#"{{"state":"shutting_down","version":"{VERSION}"}}"#));
+        let back: ServerState = serde_json::from_str(r#"{"state":"starting","version":"9.0.0"}"#).unwrap();
+        assert_eq!(back, ServerState { state: ServerPhase::Starting, version: "9.0.0".into() });
     }
 
     #[test]

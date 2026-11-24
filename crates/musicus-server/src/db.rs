@@ -55,6 +55,17 @@ impl Db {
         SqlitePoolOptions::new().max_connections(readers.max(1)).connect_with(Self::options(path).read_only(true)).await
     }
 
+    /// Closes the database cleanly at the end of `serve` (R-OPS-043): the
+    /// readers first, then a checkpoint that empties the `-wal` file, then
+    /// the writer (SQLite removes the `-wal` file with the last connection).
+    pub async fn close(&self) {
+        self.read.close().await;
+        if let Err(e) = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)").execute(&self.write).await {
+            tracing::warn!("checkpoint before closing the database: {e}");
+        }
+        self.write.close().await;
+    }
+
     /// One read-only connection that changes nothing in the file: no journal
     /// mode, no updates, no new file (`backup`, `restore`; R-OPS-021).
     pub async fn read_only(path: &Path) -> Result<SqlitePool, sqlx::Error> {

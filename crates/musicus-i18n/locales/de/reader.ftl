@@ -10,6 +10,9 @@ reader-layout-failed = Die Zeilenansicht ist für dieses Notenblatt nicht verfü
 reader-layout-pending = Die Notenzeilen dieses Notenblatts werden noch erkannt; vorerst werden ganze Seiten angezeigt.
 reader-save-pending = Nicht gespeichert
 reader-save-failed = Nicht gespeichert: { $error }
+reader-annotations-kept = Noch nicht gespeicherte Anmerkungen bleiben in diesem Tab und werden gespeichert, sobald der Server wieder da ist. Lass diesen Tab offen.
+reader-annotations-refused = Diese Anmerkungen konnten nicht gespeichert werden: { $error }. Sie bleiben in diesem Tab, bis du ihn schließt.
+reader-draw-paused = Zeichnen angehalten
 reader-dismiss = Ausblenden
 reader-next-piece = Nächstes Stück ›
 

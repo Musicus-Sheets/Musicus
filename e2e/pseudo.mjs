@@ -16,6 +16,20 @@ const base = new URL(inviteUrl).origin;
 const browser = await chromium.launch();
 const context = await browser.newContext({ locale: 'en-XA', viewport: { width: 1280, height: 900 } });
 const page = await context.newPage();
+
+// "networkidle" never comes while the server's event stream (/api/events) is
+// open, so wait until no other request has run for 500 ms.
+const running = new Set();
+const ended = (r) => running.delete(r);
+page.on('request', (r) => { if (!r.url().endsWith('/api/events')) running.add(r); });
+page.on('requestfinished', ended);
+page.on('requestfailed', ended);
+async function idle() {
+  for (let quiet = 0; quiet < 5;) {
+    await page.waitForTimeout(100);
+    quiet = running.size === 0 ? quiet + 1 : 0;
+  }
+}
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
 function check(condition, message) {
@@ -88,7 +102,8 @@ const pages = [
 let failed = 0;
 for (const [path, name] of pages) {
   await page.goto(`${base}${path}`);
-  await page.waitForLoadState('networkidle');
+  await page.waitForLoadState('load');
+  await idle();
   await page.waitForTimeout(300);
   const bad = await unmarked();
   if (bad.length) {
@@ -102,12 +117,14 @@ for (const [path, name] of pages) {
 }
 // Sorting in the browser (R-I18N-008): umlauts by the language's rules, numbers by value.
 await page.goto(`${base}/instruments`);
-await page.waitForLoadState('networkidle');
+await page.waitForLoadState('load');
+await idle();
 const woodwinds = await page.evaluate(() => [...document.querySelectorAll('li, tr')].map((e) => e.textContent)
   .flatMap((t) => ['Oboe', 'Ölberg', 'Posaune'].filter((n) => t.includes(n) && !['Oboe', 'Ölberg', 'Posaune'].some((m) => m !== n && t.includes(m)))));
 check(JSON.stringify(woodwinds) === '["Oboe","Ölberg","Posaune"]', `instruments sorted with the collator (${woodwinds})`);
 await page.goto(`${base}/`);
-await page.waitForLoadState('networkidle');
+await page.waitForLoadState('load');
+await idle();
 const tiles = await page.locator('.part-label').allInnerTexts();
 const voices = tiles.map((t) => t.match(/(\d+)\s*$/)?.[1]).filter(Boolean);
 check(JSON.stringify(voices) === '["1","2","10"]', `parts sorted by name, numbers by value (${tiles.join(' | ')})`);

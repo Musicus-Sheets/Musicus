@@ -97,6 +97,11 @@ pub enum ErrorCode {
         field: Field,
         max: u32,
     },
+    /// 503: the server is starting (snapshot, database updates, checks); try
+    /// again shortly (R-OPS-045).
+    ServerStarting,
+    /// 503: the server is shutting down and accepts no new work (R-OPS-043).
+    ServerShuttingDown,
     // --- accounts ----------------------------------------------------------
     WrongPassword,
     PasswordTooShort {
@@ -227,6 +232,8 @@ impl fmt::Display for ErrorCode {
             InUseOrUnknown => f.write_str("the entry is still in use or refers to something that does not exist"),
             FieldEmpty { field } => write!(f, "{} must not be empty", field.as_str()),
             FieldTooLong { field, max } => write!(f, "{} is longer than {max} characters", field.as_str()),
+            ServerStarting => f.write_str("the server is starting, try again in a moment"),
+            ServerShuttingDown => f.write_str("the server is shutting down, try again in a moment"),
             WrongPassword => f.write_str("the current password is wrong"),
             PasswordTooShort { min } => write!(f, "the password needs at least {min} characters"),
             PasswordTooLong { max } => write!(f, "the password may have at most {max} characters"),
@@ -304,6 +311,8 @@ pub fn examples() -> Vec<ErrorCode> {
         InUseOrUnknown,
         FieldEmpty { field: Field::Title },
         FieldTooLong { field: Field::DisplayName, max: 100 },
+        ServerStarting,
+        ServerShuttingDown,
         WrongPassword,
         PasswordTooShort { min: 8 },
         PasswordTooLong { max: 256 },
@@ -424,9 +433,11 @@ mod tests {
             DuplicateInBatch { .. } => 56,
             ImportBlocked { .. } => 57,
             Unknown => 58,
+            ServerStarting => 59,
+            ServerShuttingDown => 60,
         }
     }
-    const CODES: usize = 59;
+    const CODES: usize = 61;
 
     #[test]
     fn examples_cover_every_code() {

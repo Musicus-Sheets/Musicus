@@ -25,6 +25,7 @@ python3 scripts/check-ui-literals.py  # no literal UI text in the client (R-I18N
 python3 scripts/check-db-changes.py --branch "$(git branch --show-current)" origin/main   # CI database check, git part (R-OPS-038)
 node e2e/pseudo.mjs <admin-invite-url>   # pseudo-locale run (fresh data dir; every UI text marked)
 node e2e/german.mjs <admin-invite-url> [shots]   # German run (fresh data dir; de-DE browser; screenshots + phone-width overflow with a dir)
+node e2e/outage.mjs target/debug/musicus-server <web dir> 8191 [shots]   # stop/start/update with an open reader; starts its own server (port and port+1)
 python3 scripts/i18n-review.py de > review-de.md   # side-by-side English | German for the maintainer's review (not shipped)
 python3 docs/agents/check.py [--since <ref>]
 uv run docs/requirements/tools/validate.py
@@ -45,6 +46,7 @@ Toolchain: Rust ≥ 1.88 (edition 2024, let-chains used), target `wasm32-unknown
   fractional CSS sizes always look resampled there; use a real factor (`chromium.launch({args:
   ['--force-device-scale-factor=2']})` + `viewport: null`) and compare `devicePixelContentBoxSize` with the canvas size
   (a-device-pixels). Screenshot comparisons: crop the full device-pixel screenshot, a fractional `clip` resamples.
+- Playwright: `waitForLoadState('networkidle')` never resolves while the event stream `/api/events` is open (every logged-in page); wait for the element you need or use an `idle()` helper that ignores that URL (`e2e/german.mjs`).
 - Playwright: the npm package version must match the installed browser revisions (`~/.cache/ms-playwright`).
 - Changing detection results: raise `layout::ALGORITHM_VERSION`; regression-check with `examples/layout_report.rs`
   on local scores (never commit copyrighted scores or images derived from them; `/example_scores/` is ignored).

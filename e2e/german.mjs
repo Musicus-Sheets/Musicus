@@ -21,6 +21,20 @@ const base = new URL(inviteUrl).origin;
 const browser = await chromium.launch();
 const context = await browser.newContext({ locale: 'de-DE', viewport: { width: 1280, height: 900 } });
 const page = await context.newPage();
+
+// "networkidle" never comes while the server's event stream (/api/events) is
+// open, so wait until no other request has run for 500 ms.
+const running = new Set();
+const ended = (r) => running.delete(r);
+page.on('request', (r) => { if (!r.url().endsWith('/api/events')) running.add(r); });
+page.on('requestfinished', ended);
+page.on('requestfailed', ended);
+async function idle() {
+  for (let quiet = 0; quiet < 5;) {
+    await page.waitForTimeout(100);
+    quiet = running.size === 0 ? quiet + 1 : 0;
+  }
+}
 const errors = [];
 page.on('pageerror', (e) => errors.push(e.message));
 page.on('dialog', (d) => d.accept());
@@ -36,7 +50,8 @@ async function overflowing() {
 async function visit(path, heading) {
   await page.goto(`${base}${path}`);
   if (heading) await page.getByRole('heading', { name: heading, exact: true }).first().waitFor();
-  await page.waitForLoadState('networkidle');
+  await page.waitForLoadState('load');
+  await idle();
   const over = await overflowing();
   if (over.length) console.log(`note - ${path}: German text wider than its box: ${over.join(' | ')}`);
   if (outDir) {
@@ -95,12 +110,14 @@ const order = ['Abendlied', 'Ärger-Polka', 'Zwiefacher'].map((t) => titles.find
 check(order.every((i, k) => i >= 0 && (k === 0 || i > order[k - 1])), `pieces sorted Abendlied, Ärger-Polka, Zwiefacher (${titles.join(' | ')})`);
 await page.getByPlaceholder('Titel, Komponist, Schlagwort, Nummer suchen …').fill('Horn Es');
 await page.waitForTimeout(600);
-await page.waitForLoadState('networkidle');
+await page.waitForLoadState('load');
+await idle();
 const found = await page.locator('.score-title').allInnerTexts();
 check(found.length === 1 && found[0].includes('Ärger-Polka'), `search "Horn Es" finds the horn part in E♭ (${found.join(' | ')})`);
 await page.getByPlaceholder('Titel, Komponist, Schlagwort, Nummer suchen …').fill('Klarinette in B 2');
 await page.waitForTimeout(600);
-await page.waitForLoadState('networkidle');
+await page.waitForLoadState('load');
+await idle();
 const found2 = await page.locator('.score-title').allInnerTexts();
 check(found2.length === 1 && found2[0].includes('Zwiefacher'), 'search "Klarinette in B 2" finds the clarinet part');
 

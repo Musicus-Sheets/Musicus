@@ -51,6 +51,8 @@ pub fn code_text(code: &ErrorCode) -> String {
         InUseOrUnknown => t::error_in_use_or_unknown(),
         FieldEmpty { field } => t::error_field_empty(field_name(*field)),
         FieldTooLong { field, max } => t::error_field_too_long(field_name(*field), *max),
+        ServerStarting => t::error_server_starting(),
+        ServerShuttingDown => t::error_server_shutting_down(),
         WrongPassword => t::error_wrong_password(),
         PasswordTooShort { min } => t::error_password_too_short(*min),
         PasswordTooLong { max } => t::error_password_too_long(*max),

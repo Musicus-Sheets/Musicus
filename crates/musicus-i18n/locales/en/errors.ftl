@@ -27,6 +27,9 @@ error-in-use-or-unknown = The entry is still in use or refers to something that 
 # $field: a field name below (error-field-*).
 error-field-empty = { $field } must not be empty
 error-field-too-long = { $field } is longer than { $max } characters
+# 503 while the server starts (snapshot, database updates) or after its stop signal.
+error-server-starting = The server is starting. Try again in a moment
+error-server-shutting-down = The server is shutting down. Try again when it is back
 error-wrong-password = The current password is wrong
 error-password-too-short = The password needs at least { $min } characters
 error-password-too-long = The password may have at most { $max } characters

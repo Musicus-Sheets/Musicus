@@ -66,3 +66,14 @@ common-role-unknown = Unknown role (newer version, cannot log in)
 ## Search fields of pickers
 common-search-instruments = Search instrument or family…
 common-search-pieces = Search title or composer…
+
+## Connection to the server (banner at the bottom of every page, a-client-outage)
+# The server announced its stop (an update or a restart).
+common-connection-shutting-down = Server is shutting down. You can keep reading; drawing and changes are paused until it is back.
+# The server announced that it is starting (database updates may take a while).
+common-connection-starting = Server is starting. You can keep reading; drawing and changes are paused until it is ready.
+# No answer without an announcement (network loss).
+common-connection-unreachable = Server not reachable. You can keep reading and drawing; your annotations are saved when the connection is back.
+# The server runs a newer version than the open page.
+common-connection-updated = Musicus has been updated. The page reloads by itself when you are not reading or editing.
+common-connection-reload = Reload now

@@ -71,6 +71,28 @@ pub fn Shell() -> Element {
     }
 }
 
+/// The server's state at the bottom of every page (a-client-outage): shutting
+/// down, starting, not reachable, or updated (with "Reload now").
+#[component]
+pub fn ConnectionBanner() -> Element {
+    use crate::connection::{Banner, CONN, reload};
+    let Some(banner) = CONN.read().banner() else { return rsx! {} };
+    let (class, text) = match banner {
+        Banner::ShuttingDown => ("conn-banner away", t::common_connection_shutting_down()),
+        Banner::Starting => ("conn-banner away", t::common_connection_starting()),
+        Banner::Unreachable => ("conn-banner lost", t::common_connection_unreachable()),
+        Banner::Updated => ("conn-banner updated", t::common_connection_updated()),
+    };
+    rsx! {
+        div { class, role: "status", "aria-live": "polite",
+            span { "{text}" }
+            if banner == Banner::Updated {
+                button { onclick: |_| reload(), {t::common_connection_reload()} }
+            }
+        }
+    }
+}
+
 #[component]
 pub fn ErrorBox(message: String) -> Element {
     rsx! { div { class: "error", role: "alert", "{message}" } }

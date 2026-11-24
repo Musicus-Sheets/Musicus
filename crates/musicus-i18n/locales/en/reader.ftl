@@ -11,6 +11,12 @@ reader-layout-failed = The system view is not available for this sheet; showing 
 reader-layout-pending = The systems of this sheet are still being detected; showing whole pages for now.
 reader-save-pending = Unsaved
 reader-save-failed = Not saved: { $error }
+# Annotations drawn while the server is away or could not be saved yet (a-client-outage).
+reader-annotations-kept = Annotations not saved yet are kept in this tab and saved when the server is back. Keep this tab open.
+# The server refused to store annotations (e.g. it was updated meanwhile); $error: its reason.
+reader-annotations-refused = These annotations couldn't be saved: { $error }. They are kept in this tab until you close it.
+# In the tool bar while the server announced that it is away.
+reader-draw-paused = Drawing paused
 reader-dismiss = Dismiss
 reader-next-piece = Next piece ›
 

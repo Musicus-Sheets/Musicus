@@ -38,9 +38,17 @@ pub enum AppError {
     /// Minutes to wait.
     #[error("too many attempts, try again in {0} minutes")]
     TooManyRequests(u64),
+    /// 503 with `Retry-After`: `server_starting` or `server_shutting_down`
+    /// (a-client-outage, R-OPS-043, R-OPS-045).
+    #[error("{0}")]
+    Unavailable(ErrorCode),
     #[error("internal error: {0}")]
     Internal(String),
 }
+
+/// Seconds a client should wait before it asks again while the server starts
+/// or shuts down (`Retry-After`).
+pub const RETRY_AFTER_SECS: u64 = 5;
 
 impl AppError {
     pub fn internal(e: impl std::fmt::Display) -> Self {
@@ -57,7 +65,8 @@ impl AppError {
             | AppError::Conflict(c)
             | AppError::Unprocessable(c)
             | AppError::UnsupportedMediaType(c)
-            | AppError::PreconditionRequired(c) => c.clone(),
+            | AppError::PreconditionRequired(c)
+            | AppError::Unavailable(c) => c.clone(),
             AppError::ConflictWith(_) => ErrorCode::Unknown,
             AppError::PayloadTooLarge(max_bytes) => ErrorCode::PayloadTooLarge { max_bytes: *max_bytes },
             AppError::TooManyRequests(minutes) => ErrorCode::TooManyAttempts { minutes: *minutes },
@@ -77,6 +86,7 @@ impl AppError {
             AppError::UnsupportedMediaType(_) => (StatusCode::UNSUPPORTED_MEDIA_TYPE, "unsupported_media_type"),
             AppError::PreconditionRequired(_) => (StatusCode::PRECONDITION_REQUIRED, "precondition_required"),
             AppError::TooManyRequests(_) => (StatusCode::TOO_MANY_REQUESTS, "too_many_requests"),
+            AppError::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "service_unavailable"),
             AppError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
         }
     }
@@ -94,6 +104,9 @@ impl IntoResponse for AppError {
         };
         if status == StatusCode::UNAUTHORIZED {
             response.headers_mut().insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+        }
+        if status == StatusCode::SERVICE_UNAVAILABLE {
+            response.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(RETRY_AFTER_SECS));
         }
         response
     }
