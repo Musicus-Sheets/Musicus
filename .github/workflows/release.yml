@@ -4,7 +4,10 @@ name: Release
 # succeeded.
 #
 # When it runs:
-#   dry run   a pull request from release/X.Y.Z into main: stage 1, nothing is published.
+#   dry run   a push to a branch release/X.Y.Z: stage 1, nothing is published. Its checks show on the
+#             release pull request (they belong to its head commit); it needs that pull request open
+#             (the release notes are in its description), else it fails: open it, then "Re-run all
+#             jobs". Not on pull_request: that would start on every pull request (all jobs skipped).
 #   real run  the push to main that merges such a pull request (merge commit, squash or rebase;
 #             found through the API): stage 1, then stage 2. Every other push to main ends after
 #             the job `plan` (nothing else runs).
@@ -28,11 +31,8 @@ name: Release
 # One-time setup (Pages environment, package visibility, Release Builder app, environment `release`,
 # tag ruleset): docs/github-setup.md.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    branches: [main]
   push:
-    branches: [main]
+    branches: [main, "release/**"]
   workflow_dispatch:
     inputs:
       version:
@@ -52,8 +52,9 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: release-${{ github.event_name }}-${{ github.head_ref || inputs.version || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  # Dry runs per release branch (a newer push cancels the older run); real runs never cancelled.
+  group: release-${{ github.event_name }}-${{ startsWith(github.ref, 'refs/heads/release/') && github.ref_name || inputs.version || github.sha }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/heads/release/') }}
 defaults:
   run:
     shell: bash
@@ -68,8 +69,6 @@ env:
   RETENTION_DAYS: 7
 jobs:
   plan:
-    # Pull requests from other branches: nothing to do (the run shows only skipped jobs).
-    if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'release/')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -99,10 +98,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           EVENT: ${{ github.event_name }}
-          PR_BRANCH: ${{ github.head_ref }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          DELETED: ${{ github.event.deleted }}
           INPUT_VERSION: ${{ inputs.version }}
           INPUT_REF: ${{ inputs.ref }}
           INPUT_PUBLISH: ${{ inputs.publish }}
@@ -129,14 +125,30 @@ jobs:
             fail "cannot find the start of pull request #$2 on main"
           }
 
-          case "$EVENT" in
-            pull_request)
-              [[ "$PR_BRANCH" =~ $release_re ]] ||
-                fail "release branches are named release/X.Y.Z (for example release/1.3.0), not $PR_BRANCH"
-              [[ "$PR_HEAD_REPO" == "$REPO" ]] || fail "release pull requests come from a branch of $REPO"
-              branch="$PR_BRANCH" pr="$PR_NUMBER" sha="$GITHUB_SHA" base="$PR_BASE" publish=false
+          # dry = push to release/X.Y.Z; merge = push to main; again = workflow_dispatch.
+          case "$EVENT:$GITHUB_REF" in
+            push:refs/heads/release/*) mode=dry ;;
+            push:refs/heads/main) mode=merge ;;
+            workflow_dispatch:*) mode=again ;;
+            *) fail "unexpected event $EVENT ($GITHUB_REF)" ;;
+          esac
+          [[ "$DELETED" != true ]] || nothing "A branch was deleted: nothing to do."
+
+          case "$mode" in
+            dry)
+              # Dry run: a push to release/X.Y.Z; the open pull request from it into main.
+              branch="${GITHUB_REF#refs/heads/}"
+              [[ "$branch" =~ $release_re ]] ||
+                fail "release branches are named release/X.Y.Z (for example release/1.3.0), not $branch"
+              pr="$(gh api -X GET "repos/$REPO/pulls" -f state=open -f base=main \
+                -f "head=${REPO%%/*}:$branch" --jq 'first | .number // empty')"
+              [[ -n "$pr" ]] ||
+                fail "no open pull request from $branch into main: open it (with the section '## Release notes'), then Re-run all jobs"
+              sha="$GITHUB_SHA"
+              base="$(git merge-base origin/main "$sha")" || fail "$branch has no common commit with main"
+              publish=false
               ;;
-            push)
+            merge)
               pr_json="$(gh api "repos/$REPO/commits/$GITHUB_SHA/pulls" --jq "[.[] | select(.merged_at != null
                 and .base.ref == \"main\" and .merge_commit_sha == \"$GITHUB_SHA\")] | first // empty")"
               [[ -n "$pr_json" ]] || nothing "No pull request was merged by this push: nothing to release."
@@ -149,7 +161,7 @@ jobs:
               base="$(base_of "$sha" "$pr")"
               publish=true
               ;;
-            workflow_dispatch)
+            again)
               [[ "$GITHUB_REF" == refs/heads/main ]] || fail "run the release workflow from the branch main"
               branch="release/$INPUT_VERSION"
               [[ "$branch" =~ $release_re ]] || fail "input version: X.Y.Z expected, not $INPUT_VERSION"
@@ -166,7 +178,6 @@ jobs:
               base="$(base_of "$merge" "$pr")"
               publish="$INPUT_PUBLISH"
               ;;
-            *) fail "unexpected event $EVENT" ;;
           esac
 
           version="${branch#release/}"
