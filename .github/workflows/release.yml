@@ -25,7 +25,8 @@ name: Release
 #   secrets.IMAGE_REGISTRY_USERNAME / IMAGE_REGISTRY_PASSWORD (default for ghcr.io: the workflow's
 #   GITHUB_TOKEN with packages: write); a second registry: vars.DOCKERHUB_IMAGE (e.g. musicus/musicus)
 #   with secrets.DOCKERHUB_USERNAME / DOCKERHUB_TOKEN. Tags: X.Y.Z and X.Y (R-OPS-028).
-# One-time setup (Pages environment, package visibility, tag rules): docs/github-setup.md.
+# One-time setup (Pages environment, package visibility, Release Builder app, environment `release`,
+# tag ruleset): docs/github-setup.md.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -689,12 +690,23 @@ jobs:
     concurrency:
       group: release-publish
       cancel-in-progress: false
+    environment: release
     permissions:
-      contents: write
+      contents: read
     steps:
+      # The Release Builder app (docs/github-setup.md): only it passes the v* tag ruleset (GITHUB_TOKEN
+      # cannot be put on a bypass list). Its key lives only in the environment `release` (main only).
+      - name: Create the app token
+        id: app-token
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          # Default without owner/repositories: this repository only.
+          permission-contents: write
       - name: Tag the release commit
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           TAG: ${{ needs.plan.outputs.tag }}
           SHA: ${{ needs.plan.outputs.sha }}
