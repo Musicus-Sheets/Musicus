@@ -58,3 +58,10 @@ common-role-unknown = Unbekannte Rolle (neuere Version, keine Anmeldung möglich
 ## Search fields of pickers
 common-search-instruments = Instrument oder Register suchen …
 common-search-pieces = Titel oder Komponist suchen …
+
+## Verbindung zum Server
+common-connection-shutting-down = Der Server wird beendet. Du kannst weiterlesen; Zeichnen und Änderungen sind angehalten, bis er wieder da ist.
+common-connection-starting = Der Server startet. Du kannst weiterlesen; Zeichnen und Änderungen sind angehalten, bis er bereit ist.
+common-connection-unreachable = Server nicht erreichbar. Du kannst weiterlesen und zeichnen; deine Anmerkungen werden gespeichert, sobald die Verbindung wieder steht.
+common-connection-updated = Musicus wurde aktualisiert. Die Seite lädt sich neu, sobald du nicht liest oder bearbeitest.
+common-connection-reload = Jetzt neu laden

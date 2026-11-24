@@ -4,11 +4,16 @@ use musicus_server::{
     backup::{self, DataLock},
     bootstrap_admin,
     config::{Cli, Command, DataArgs, DataDirSource, ServeArgs},
+    lifecycle::{DRAIN_LIMIT, Lifecycle},
     open_state, routes,
-    state::Settings,
+    state::{AppState, Settings},
     web::WebClient,
 };
-use std::{net::SocketAddr, path::PathBuf};
+use std::{
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -135,6 +140,11 @@ fn healthcheck(listen: SocketAddr) -> Result<()> {
     if head.ends_with(b" 200") { Ok(()) } else { Err(format!("unhealthy: {}", String::from_utf8_lossy(&head)).into()) }
 }
 
+/// Start-up sequence (a-client-outage, R-OPS-045): listen first and answer
+/// `server_starting`, then open the data (snapshot, updates, checks; a failed
+/// update still ends the process with an error after the restore), then
+/// serve. On the stop signal: the orderly drain of `Lifecycle::shut_down`,
+/// then the listener stops and the database is closed (R-OPS-043).
 async fn serve(args: ServeArgs) -> Result<()> {
     let settings = Settings {
         cookie_secure: !args.insecure_cookies,
@@ -147,13 +157,6 @@ async fn serve(args: ServeArgs) -> Result<()> {
     let data_dir = data_dir(&args.data)?;
     // Held while the server runs: `restore` refuses meanwhile (R-OPS-022).
     let _lock = DataLock::shared(&data_dir).map_err(plain)?;
-    let state = open_state(&data_dir, args.ram_cache_mb * 1024 * 1024, settings).await?;
-    if let Some(token) = bootstrap_admin(&state).await? {
-        tracing::warn!("No users yet. Created 'admin'; set its password at:");
-        tracing::warn!("{}/invite/{token}", args.public_url.trim_end_matches('/'));
-    }
-    // Detects the music systems of new (and not yet analysed) files in the background.
-    musicus_server::layout::worker::spawn(state.clone());
     let web = WebClient::choose(args.web_dir.clone());
     match &web {
         WebClient::Dir(dir) if !dir.join("index.html").exists() => {
@@ -166,30 +169,92 @@ async fn serve(args: ServeArgs) -> Result<()> {
              pass --web-dir with the folder of a built client"
         ),
     }
-    let app = routes::app(state, web).into_make_service_with_connect_info::<SocketAddr>();
 
-    match (&args.tls_cert, &args.tls_key) {
+    let lc = Lifecycle::new();
+    let app = routes::service(lc.clone(), web).into_make_service_with_connect_info::<SocketAddr>();
+    let (listener, stack) = musicus_server::listen::bind(args.listen)?;
+    let local = listener.local_addr()?;
+    let mut server = match (&args.tls_cert, &args.tls_key) {
         (Some(cert), Some(key)) => {
             let _ = rustls::crypto::ring::default_provider().install_default();
             let config = axum_server::tls_rustls::RustlsConfig::from_pem_file(cert, key).await?;
             let handle = axum_server::Handle::new();
-            let shutdown = handle.clone();
+            let stop = handle.clone();
+            let stopped = lc.clone();
             tokio::spawn(async move {
-                shutdown_signal().await;
-                shutdown.graceful_shutdown(Some(std::time::Duration::from_secs(10)));
+                stopped.stopped().await;
+                stop.graceful_shutdown(Some(DRAIN_LIMIT));
             });
-            let (listener, stack) = musicus_server::listen::bind(args.listen)?;
-            tracing::info!("listening on https://{} ({})", listener.local_addr()?, stack.describe());
-            axum_server::from_tcp_rustls(listener, config)?.handle(handle).serve(app).await?;
+            tracing::info!("listening on https://{local} ({})", stack.describe());
+            let server = axum_server::from_tcp_rustls(listener, config)?.handle(handle);
+            tokio::spawn(async move { server.serve(app).await.map_err(|e| e.to_string()) })
         }
         _ => {
-            let (listener, stack) = musicus_server::listen::bind(args.listen)?;
             let listener = tokio::net::TcpListener::from_std(listener)?;
-            tracing::info!("listening on http://{} ({})", listener.local_addr()?, stack.describe());
-            axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;
+            tracing::info!("listening on http://{local} ({})", stack.describe());
+            let stopped = lc.clone();
+            tokio::spawn(async move {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(async move { stopped.stopped().await })
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+        }
+    };
+
+    // The stop signal may come at any time; a running start is not cut short.
+    let grace = Duration::from_secs(args.shutdown_grace_secs);
+    let mut signal = {
+        let lc = lc.clone();
+        tokio::spawn(async move {
+            shutdown_signal().await;
+            lc.shut_down(grace, DRAIN_LIMIT).await;
+        })
+    };
+
+    let state = match start(&data_dir, &args, settings).await {
+        Ok(state) => state,
+        Err(e) => {
+            lc.abort();
+            signal.abort();
+            let _ = tokio::time::timeout(DRAIN_LIMIT, &mut server).await;
+            return Err(e);
+        }
+    };
+    // Detects the music systems of new (and not yet analysed) files in the background.
+    let worker = musicus_server::layout::worker::spawn(state.clone());
+    lc.ready(state.clone());
+    tracing::info!("ready");
+
+    tokio::select! {
+        _ = lc.stopped() => {}
+        // The stop task ended without finishing the stop, e.g. a panic of
+        // the log writer (stdout/stderr closed): stop anyway.
+        _ = &mut signal => lc.abort(),
+    }
+    match tokio::time::timeout(DRAIN_LIMIT, &mut server).await {
+        Ok(Ok(Err(e))) => tracing::warn!("server: {e}"),
+        Ok(_) => {}
+        Err(_) => {
+            tracing::warn!("connections still open; closing them");
+            server.abort();
         }
     }
+    worker.abort();
+    state.db.close().await;
+    tracing::info!("stopped");
     Ok(())
+}
+
+/// Opens the data directory (snapshot, updates, checks) and creates the
+/// first admin if there is none.
+async fn start(data_dir: &Path, args: &ServeArgs, settings: Settings) -> Result<AppState> {
+    let state = open_state(data_dir, args.ram_cache_mb * 1024 * 1024, settings).await?;
+    if let Some(token) = bootstrap_admin(&state).await? {
+        tracing::warn!("No users yet. Created 'admin'; set its password at:");
+        tracing::warn!("{}/invite/{token}", args.public_url.trim_end_matches('/'));
+    }
+    Ok(state)
 }
 
 async fn shutdown_signal() {
@@ -206,5 +271,5 @@ async fn shutdown_signal() {
         _ = ctrl_c => {},
         _ = terminate => {},
     }
-    tracing::info!("shutting down");
+    tracing::info!("stop signal received: shutting down");
 }

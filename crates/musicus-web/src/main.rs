@@ -4,6 +4,7 @@
 
 mod api;
 mod bridge;
+mod connection;
 mod errors;
 mod ink;
 mod layouts;
@@ -111,11 +112,30 @@ fn App() -> Element {
     let mut user = use_signal(|| None::<CurrentUser>);
     let mut checked = use_signal(|| false);
     use_context_provider(|| Session { user, checked });
+    // Server state for every page: event stream, polling, reload after an update.
+    use_future(connection::run);
     use_future(move || async move {
-        if let Ok(me) = api::get::<CurrentUser>("/api/auth/me").await {
-            user.set(Some(me));
+        // While the server starts or is away, ask again instead of treating
+        // the visitor as logged out.
+        loop {
+            match api::get::<CurrentUser>("/api/auth/me").await {
+                Ok(me) => {
+                    user.set(Some(me));
+                    break;
+                }
+                Err(e) if e.status != 0 && !(502..=504).contains(&e.status) => break,
+                Err(_) => gloo_timers::future::TimeoutFuture::new(3000).await,
+            }
         }
         checked.set(true);
+    });
+    // One event stream per tab while logged in (it needs the session).
+    use_effect(move || {
+        if user.read().is_some() {
+            bridge::open_events(musicus_api::EVENTS_PATH);
+        } else {
+            bridge::close_events();
+        }
     });
     rsx! {
         document::Title { "Musicus" }
@@ -123,6 +143,7 @@ fn App() -> Element {
         document::Meta { name: "theme-color", content: "#1d2433" }
         document::Stylesheet { href: CSS }
         Router::<Route> {}
+        ui::ConnectionBanner {}
     }
 }
 

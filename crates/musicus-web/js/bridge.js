@@ -325,6 +325,102 @@ export function clearPending(key) {
   pendingPages.delete(key);
 }
 
+export function hasPending() {
+  return pendingPages.size > 0;
+}
+
+/**
+ * Reasons to warn when the tab closes with unsaved annotation pages: the
+ * keepalive flush below cannot reach a server that is away ("away"), and
+ * pages the server refused stay only here ("refused"). Nothing is stored on
+ * the device (R-SEC-001), so the browser asks the user (R-OPS-047).
+ */
+const warnReasons = new Set();
+
+export function setUnloadWarning(reason, on) {
+  if (on) warnReasons.add(reason);
+  else warnReasons.delete(reason);
+}
+
+window.addEventListener('beforeunload', (e) => {
+  if (pendingPages.size > 0 && warnReasons.size > 0) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
+
+/**
+ * The server's event stream (a-client-outage): messages for Rust in a queue
+ * read with `nextServerEvent`: the data of each `state` event, "lost" when
+ * the stream broke and no state came for 2 s (the browser reconnects by
+ * itself), "closed" when the browser gave up (an error answer, e.g. 502 from
+ * a proxy or 401); Rust then opens it again.
+ */
+let events = null;
+const eventQueue = [];
+let eventWaiter = null;
+
+function pushEvent(message) {
+  if (eventWaiter) {
+    const w = eventWaiter;
+    eventWaiter = null;
+    w(message);
+  } else {
+    eventQueue.push(message);
+  }
+}
+
+export function nextServerEvent() {
+  if (eventQueue.length > 0) return Promise.resolve(eventQueue.shift());
+  return new Promise((resolve) => { eventWaiter = resolve; });
+}
+
+export function openEvents(url) {
+  if (events && events.readyState !== EventSource.CLOSED) return;
+  let lostTimer = null;
+  const es = new EventSource(url, { withCredentials: true });
+  events = es;
+  es.addEventListener('state', (e) => {
+    clearTimeout(lostTimer);
+    lostTimer = null;
+    pushEvent(e.data);
+  });
+  es.onerror = () => {
+    if (es.readyState === EventSource.CLOSED) {
+      clearTimeout(lostTimer);
+      lostTimer = null;
+      if (events === es) pushEvent('closed');
+    } else if (!lostTimer) {
+      lostTimer = setTimeout(() => { lostTimer = null; pushEvent('lost'); }, 2000);
+    }
+  };
+}
+
+export function closeEvents() {
+  if (events) {
+    const es = events;
+    events = null;
+    es.close();
+  }
+}
+
+/**
+ * Whether something was typed or chosen in a form since the last save or
+ * page change (the reload after an update waits for it, R-OPS-048).
+ */
+let typed = false;
+for (const kind of ['input', 'change']) {
+  document.addEventListener(kind, () => { typed = true; }, true);
+}
+
+export function unsavedInput() {
+  return typed;
+}
+
+export function clearUnsavedInput() {
+  typed = false;
+}
+
 window.addEventListener('pagehide', () => {
   for (const { url, revision, bytes } of pendingPages.values()) {
     fetch(url, {

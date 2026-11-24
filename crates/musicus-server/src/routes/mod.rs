@@ -2,6 +2,7 @@
 
 pub mod annotations;
 pub mod auth;
+pub mod events;
 pub mod files;
 pub mod groups;
 pub mod import;
@@ -9,20 +10,51 @@ pub mod library;
 pub mod programmes;
 pub mod users;
 
-use crate::{error::AppError, state::AppState, web::WebClient};
+use crate::{
+    error::AppError,
+    lifecycle::{Lifecycle, Phase},
+    state::AppState,
+    web::WebClient,
+};
 use axum::{
     Router,
-    extract::DefaultBodyLimit,
+    extract::{DefaultBodyLimit, Request, State},
     http::{HeaderName, HeaderValue, header},
-    routing::{get, post, put},
+    response::{IntoResponse, Response},
+    routing::{any, get, post, put},
 };
+use std::sync::Arc;
+use tower::ServiceExt;
 use tower_http::{set_header::SetResponseHeaderLayer, trace::TraceLayer};
 
-/// Liveness for load balancers and container health checks: the process
-/// answers and the database is readable. Needs no login.
-async fn health(axum::extract::State(app): axum::extract::State<AppState>) -> crate::error::ApiResult<&'static str> {
+/// Health for load balancers and container health checks (R-OPS-007): 200
+/// `ok` only when the server is ready and the database readable; 503
+/// `server_starting` during the start, `server_shutting_down` from the stop
+/// signal on. Needs no login.
+async fn health(State(lc): State<Arc<Lifecycle>>) -> crate::error::ApiResult<&'static str> {
+    let phase = lc.phase();
+    if phase == Phase::Draining {
+        return Err(AppError::Unavailable(musicus_api::ErrorCode::ServerShuttingDown));
+    }
+    let _running = lc.enter()?;
+    let app = lc.app().ok_or(AppError::Unavailable(musicus_api::ErrorCode::ServerStarting))?;
     sqlx::query("SELECT 1").execute(&app.db.read).await?;
     Ok("ok")
+}
+
+/// Every other API request: refused while starting and after the grace
+/// (a-client-outage), else counted as running and passed to the API.
+async fn forward(State(lc): State<Arc<Lifecycle>>, request: Request) -> Response {
+    let running = match lc.enter() {
+        Ok(r) => r,
+        Err(e) => return e.into_response(),
+    };
+    let Some(api) = lc.api() else {
+        return AppError::Unavailable(musicus_api::ErrorCode::ServerStarting).into_response();
+    };
+    let response = api.clone().oneshot(request).await.into_response();
+    drop(running);
+    response
 }
 
 /// The release that runs (R-OPS-033). Needs no login (a-version-public);
@@ -36,9 +68,7 @@ const IMPORT_LIST_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn api() -> Router<AppState> {
     Router::new()
-        // Public: liveness and the running release
-        .route("/health", get(health))
-        .route("/version", get(version))
+        // Health, version and events: `service` (they answer while starting).
         // Authentication and the user's own account
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
@@ -103,9 +133,24 @@ pub fn api() -> Router<AppState> {
         .fallback(|| async { AppError::NotFound })
 }
 
-/// The whole application: API, web client (if any, `web`), common headers.
+/// The whole application, ready at once (tests): see [`service`].
 pub fn app(state: AppState, web: WebClient) -> Router {
-    web.mount(Router::new().nest("/api", api()))
+    service(Lifecycle::serving(state), web)
+}
+
+/// The whole application through the phases of `lc`: health, version and
+/// the event stream answer in every phase, the rest of the API once the
+/// start is done ([`forward`]), the web client (if any, `web`) always;
+/// common headers.
+pub fn service(lc: Arc<Lifecycle>, web: WebClient) -> Router {
+    let outer = Router::new()
+        .route("/api/health", get(health))
+        .route("/api/version", get(version))
+        .route("/api/events", get(events::stream))
+        // Strips `/api` (the API routes are relative to it) and adds no path parameters.
+        .nest_service("/api", any(forward).with_state(lc.clone()))
+        .with_state(lc);
+    web.mount(outer)
         .layer(SetResponseHeaderLayer::overriding(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
         .layer(SetResponseHeaderLayer::overriding(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")))
         .layer(SetResponseHeaderLayer::overriding(header::REFERRER_POLICY, HeaderValue::from_static("same-origin")))
@@ -114,5 +159,4 @@ pub fn app(state: AppState, web: WebClient) -> Router {
             HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
         ))
         .layer(TraceLayer::new_for_http())
-        .with_state(state)
 }

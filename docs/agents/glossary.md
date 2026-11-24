@@ -73,6 +73,8 @@ during the review; **draft decision** = chosen by the agent for the draft, marke
 | unnamed part / "Part 2" | derived names without instrument | Unbenannte Stimme / Stimme 2 | proposed |
 | default set name "My annotations" | shown for the set stored without name | Meine Anmerkungen | proposed |
 | upload | | hochladen / Hochladen | proposed |
+| server shutting down / starting / not reachable (banner) | the server's state for an open page (a-client-outage) | Der Server wird beendet / Der Server startet / Server nicht erreichbar | proposed |
+| Musicus has been updated / Reload now | another version runs on the server | Musicus wurde aktualisiert / Jetzt neu laden | proposed |
 
 ## Key names
 

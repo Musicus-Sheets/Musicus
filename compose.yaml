@@ -28,6 +28,7 @@ services:
       MUSICUS_RAM_CACHE_MB: ${MUSICUS_RAM_CACHE_MB:-128}
       MUSICUS_MAX_UPLOAD_MB: ${MUSICUS_MAX_UPLOAD_MB:-200}
       MUSICUS_SESSION_DAYS: ${MUSICUS_SESSION_DAYS:-60}
+      MUSICUS_SHUTDOWN_GRACE_SECS: ${MUSICUS_SHUTDOWN_GRACE_SECS:-3}
       MUSICUS_INSECURE_COOKIES: ${MUSICUS_INSECURE_COOKIES:-false}
       MUSICUS_TRUST_PROXY: ${MUSICUS_TRUST_PROXY:-false}
       RUST_LOG: ${RUST_LOG:-info}
@@ -43,7 +44,9 @@ services:
       - "${MUSICUS_LOCAL_ONLY:+[::1]:}${MUSICUS_PORT:-8080}:8080"
     volumes:
       - musicus-data:/data
-    # The server finishes running requests on SIGTERM.
+    # On SIGTERM the server announces the stop to open browsers, serves them
+    # for MUSICUS_SHUTDOWN_GRACE_SECS, then lets running requests finish (at
+    # most 5 s more): keep the sum below this.
     stop_grace_period: 15s
 
   # Optional TLS termination with automatic Let's Encrypt certificates.

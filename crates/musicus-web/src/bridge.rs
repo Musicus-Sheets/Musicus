@@ -52,6 +52,20 @@ extern "C" {
     fn js_set_pending(key: &str, url: &str, revision: f64, bytes: &[u8]);
     #[wasm_bindgen(js_name = clearPending)]
     fn js_clear_pending(key: &str);
+    #[wasm_bindgen(js_name = hasPending)]
+    pub fn has_pending() -> bool;
+    #[wasm_bindgen(js_name = setUnloadWarning)]
+    pub fn set_unload_warning(reason: &str, on: bool);
+    #[wasm_bindgen(js_name = openEvents)]
+    pub fn open_events(url: &str);
+    #[wasm_bindgen(js_name = closeEvents)]
+    pub fn close_events();
+    #[wasm_bindgen(js_name = nextServerEvent)]
+    fn js_next_server_event() -> js_sys::Promise;
+    #[wasm_bindgen(js_name = unsavedInput)]
+    pub fn unsaved_input() -> bool;
+    #[wasm_bindgen(js_name = clearUnsavedInput)]
+    pub fn clear_unsaved_input();
     #[wasm_bindgen(js_name = pickFolder)]
     fn js_pick_folder(input_id: &str) -> js_sys::Array;
     #[wasm_bindgen(js_name = dropFolder)]
@@ -127,6 +141,13 @@ pub fn set_pending(set: i64, page: u32, revision: i64, bytes: &[u8]) {
 
 pub fn clear_pending(set: i64, page: u32) {
     js_clear_pending(&format!("{set}/{page}"));
+}
+
+/// The next message of the event stream (`openEvents`): the JSON of a
+/// `ServerState`, `"lost"` (no state for a while, the browser reconnects) or
+/// `"closed"` (the browser gave up; open it again).
+pub async fn next_server_event() -> String {
+    JsFuture::from(js_next_server_event()).await.ok().and_then(|v| v.as_string()).unwrap_or_default()
 }
 
 fn message(e: JsValue) -> String {

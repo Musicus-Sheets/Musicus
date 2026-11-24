@@ -73,11 +73,42 @@ Server serves `index.html` for any non-`/api` path, so deep links work.
 
 ## Session (`main.rs`)
 
-`Session {user: Signal<Option<CurrentUser>>, checked: Signal<bool>}` context. Role helpers (not hooks, usable anywhere in a component): `ui::current_role()`, `ui::can_manage()` (librarian/admin), `ui::is_admin()`. `App` calls `GET /api/auth/me` once. `ui::Shell` redirects to `/login` when `checked && user.is_none()`. Logout = `POST /api/auth/logout` then `user = None`. Any 401 elsewhere ⇒ `api::session_lost` ⇒ `location.href = "/login"` (a-unauthorized-reload).
+`Session {user: Signal<Option<CurrentUser>>, checked: Signal<bool>}` context. Role helpers (not hooks, usable anywhere in a component): `ui::current_role()`, `ui::can_manage()` (librarian/admin), `ui::is_admin()`. `App` calls `GET /api/auth/me` once (again every 3 s while the answer is a network error, 502–504 or the server starts / shuts down, so a reload during an outage does not count as logged out; `checked` stays false meanwhile). `ui::Shell` redirects to `/login` when `checked && user.is_none()`. Logout = `POST /api/auth/logout` then `user = None`. Any 401 elsewhere ⇒ `api::session_lost` ⇒ `location.href = "/login"` (a-unauthorized-reload).
 
 ## HTTP (`api.rs`)
 
-`builder()` always adds `x-musicus-csrf: 1` (INV-12). Helpers: `get`, `send/post/put/patch` (JSON), `call` (no body, expects 2xx), `call_json`, `upload` (raw bytes + content type). Errors → `ApiErr {status, code: Option<ErrorCode>, message}`; `message` comes from `errors.rs` (`api_error_text`: the client's text for the code; for `unknown` or an unparseable body the server's English `message`; status 0 = network, `network_text`). The server sends no prose (a-error-codes); import notes (`note_text`), pattern errors (`pattern_error_text`), ink errors (`ink_error_text`), staged-file problems and commit errors (`code_text`) are rendered there too. English only for now; the later catalogue replaces the arms of these matches. Ink: `get_page(set, page)` → `PageBytes::Found{bytes, revision from ETag}` | `Missing` (204); `put_page(set, page, expected_rev, bytes)` → `SaveOutcome::Saved(rev)` | `Conflict` (409). URLs: `file_url(sha)`, `thumbnail_url(sha)`.
+`builder()` always adds `x-musicus-csrf: 1` (INV-12). Helpers: `get`, `send/post/put/patch` (JSON), `call` (no body, expects 2xx), `call_json`, `upload` (raw bytes + content type). Every answer is reported to `connection` (see above); `gate()` refuses `get/send/call/call_json/upload` locally while the server announced it is away (`ApiErr {status: 503, code}`); `get_page`/`put_page` are not gated (the reader's flush); `Running` guard counts requests; a successful write clears the unsaved-input flag. Errors → `ApiErr {status, code: Option<ErrorCode>, message}`; `message` comes from `errors.rs` (`api_error_text`: the client's text for the code; for `unknown` or an unparseable body the server's English `message`; status 0 = network, `network_text`). The server sends no prose (a-error-codes); import notes (`note_text`), pattern errors (`pattern_error_text`), ink errors (`ink_error_text`), staged-file problems and commit errors (`code_text`) are rendered there too. English only for now; the later catalogue replaces the arms of these matches. Ink: `get_page(set, page)` → `PageBytes::Found{bytes, revision from ETag}` | `Missing` (204); `put_page(set, page, expected_rev, bytes)` → `SaveOutcome::Saved(rev)` | `Conflict` (409). URLs: `file_url(sha)`, `thumbnail_url(sha)`.
+
+## Server outage and updates (`connection.rs`; a-client-outage, F-OPS-008)
+
+State machine (pure, host tests): `Conn {server, update}`, `server` ∈ `Ready`, `Starting` (announced), `ShuttingDown`
+(announced), `Unreachable` (no answer, not announced). Inputs: `State(ServerState)` (event stream or polling;
+`ready` with a version ≠ `musicus_api::VERSION` sets `update`), `Answered` (any Musicus answer; ends `Unreachable`
+only), `Refused(phase)` (503 `server_starting`/`server_shutting_down`), `Lost` (network error, 502–504 without a
+Musicus body, stream silent for 2 s; `ShuttingDown` stays, everything else ⇒ `Unreachable`). `apply` returns
+`Then::Flush` on entering `ShuttingDown` (the state is already blocking: **block first, then flush**) and
+`Then::Resend` on entering `Ready`. Rules: `announced()` ⇒ every server action blocked (api `gate` answers locally
+with the code's text; drawing blocked, `may_draw` false); `Unreachable` ⇒ requests are tried, drawing goes on.
+
+Sources: `bridge::open_events(EVENTS_PATH)` while logged in (closed on logout); `connection::run` (from `App`): reads
+`bridge::next_server_event` (`state` JSON, `lost`, `closed` ⇒ after 3 s, once not announced, `GET /api/auth/me`;
+OK ⇒ reopen, 401 ⇒ login page); polls `api::health()` + `api::version()` every 3 s while `server != Ready`
+(R-OPS-046); every `api.rs` answer is reported. `CONN` (state) and `EFFECT` (counter + last `Then`) are
+`GlobalSignal`s, memory only.
+
+Banner: `ui::ConnectionBanner` (fixed at the bottom, `.conn-banner`, `role=status`): "Server is shutting down …",
+"Server is starting …", "Server not reachable …", "Musicus has been updated …" + button "Reload now" (`reload()`;
+pending pages go out with the `pagehide` keepalive flush).
+
+Reload after an update (R-OPS-048, `may_reload`, checked every 1 s while `update` is set): server `Ready`, not on a
+reader path (`/parts/:id`, `/programmes/:pid/parts/:id`; so never while reading or drawing, also not when turning to
+the next piece of a programme — it reloads once the user goes to another page), no pending annotation page
+(`bridge::has_pending`), no running request (`api::running`, includes import uploads), no unsaved input (bridge flag
+set by any `input`/`change` event, cleared by a path change and by every successful write). Otherwise the banner
+stays and the old client keeps working.
+
+Unload warning: `bridge::set_unload_warning("away", conn.away())` and `("refused", …)` from the reader; `beforeunload`
+warns while pending pages exist and a reason is set (R-OPS-047). Nothing is stored on the device (R-SEC-001).
 
 ## Bridge (`bridge.rs` ↔ `js/bridge.js`)
 
@@ -92,7 +123,10 @@ Server serves `index.html` for any non-`/api` path, so deep links work.
 | `render_crop(url, canvas_id, Crop) -> Option<(css_w, css_h)>` | `renderCrop` | system view: renders only the crop (pdf.js viewport `offsetX/Y`, scale = `Crop.size.width` / crop width in pt) into exactly `Crop.size` device pixels in a cached off-screen canvas (key url\|page\|crop\|width\|height; ≤ 24 bitmaps and ≤ 3 × `MAX_CANVAS_PIXELS` pixels, oldest evicted and freed with `width = 0` unless a canvas still wants it), copies it 1:1, CSS size = pixels / ratio; newest request per canvas wins (else null) |
 | `prerender_crop(url, Crop)` | `prerenderCrop` | fills the crop cache (next view, same pixel sizes) |
 | `retain_only(urls)` | `retainOnly` | drops other bytes/docs (destroys docs) and their crops |
-| `set_pending(set, page, rev, bytes)` / `clear_pending` | `setPending`/`clearPending` | `pendingPages` Map; copies bytes (a-wasm-view-copy); on `pagehide` sends each with `fetch(PUT, keepalive, If-Match, x-musicus-csrf)` |
+| `set_pending(set, page, rev, bytes)` / `clear_pending` / `has_pending` | `setPending`/`clearPending`/`hasPending` | `pendingPages` Map; copies bytes (a-wasm-view-copy); on `pagehide` sends each with `fetch(PUT, keepalive, If-Match, x-musicus-csrf)` |
+| `set_unload_warning(reason, on)` | `setUnloadWarning` | reasons Set; `beforeunload` prevents the unload (browser asks) while `pendingPages` is not empty and a reason is set |
+| `open_events(url)` / `close_events()` / `next_server_event()` | `openEvents`/`closeEvents`/`nextServerEvent` | one `EventSource` (`withCredentials`); queue of messages: `state` data, `lost` (error while reconnecting and no state within 2 s), `closed` (browser gave up, e.g. 502/401) |
+| `unsaved_input()` / `clear_unsaved_input()` | `unsavedInput`/`clearUnsavedInput` | flag set by capturing `input`/`change` listeners on `document` |
 | `keep_awake(on)` | `keepAwake` | screen wake lock; `document.body.dataset.keepAwake` drives re-acquire on `visibilitychange` |
 | `toggle_fullscreen()`, `copy_text()` | | |
 
@@ -174,6 +208,8 @@ Effects: url → `page_count`; (url, stage, page, ratio) → `render_page` into 
 `load_page(store, key)`: GET page; decode (fails, e.g. a newer ink format ⇒ `unreadable = true`, layer/undo/redo emptied, pending copy cleared, error banner "Could not load annotations: …"; `change` then refuses every edit of that page with `reader-annotations-page-locked`, so nothing overwrites the stored layer, R-OPS-041); if local objects were drawn before load finished ⇒ `merge(∅, local, server)`; set `revision`, `base_ids`, `loaded`.
 
 `save_page(store, key)` (≤5 iterations, touches no signals): skip if clean/saving/not loaded; PUT with `revision`; Saved ⇒ `revision`, `base_ids = ids(sent layer)`, `saved_generation = generation_sent`, `sync_pending`, stop if no newer changes; Conflict ⇒ GET server, `layer = merge(base_ids, layer, server)`, `base_ids = ids(server)`, `revision = server rev`, `generation += 1`, `sync_pending`, retry.
+
+Server away (a-client-outage): pointer-down, undo/redo refused while `!CONN.may_draw()` (ink canvas not `active`, tool bar "Drawing paused"); a stroke begun before is finished and saved; `save(key, delay)` saves at once while `ShuttingDown`; effect on `EFFECT`: `Flush` ⇒ `save(key, false)` for every dirty page, `Resend` ⇒ `load_page` (if not loaded) then save; the layer-load effect skips while announced and re-runs when not. `save_page` failing with a 4xx other than 401/408/429 sets `PageState.refused` (e.g. `invalid_ink` from a server updated meanwhile; cleared by the next successful save): banner `reader-annotations-refused`, unload warning `refused`, the layer stays in memory, never dropped. While `away` with dirty pages: banner `reader-annotations-kept`. No ink conversion exists; never remove an old ink decoder (cheap safety net for clients older than the server).
 
 `change(key, f)`: apply f to PageState → push undo action, clear redo, `generation += 1`, `sync_pending`, bump `version`, schedule `save(key, delay=true)` (1500 ms; skipped if generation changed meanwhile). `add_object`: if no active set ⇒ POST new set (name = programme title, else none = the unnamed set shown as "My annotations"; linked programme) then add. `erase_at` removes all hit ids (one `Action::Remove`). `undo_redo` inverts `Add`/`Remove` actions.
 

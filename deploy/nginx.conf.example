@@ -39,6 +39,11 @@ server {
 		# ($proxy_add_x_forwarded_for) would let a client choose it.
 		proxy_set_header X-Forwarded-For $remote_addr;
 
+		# The event stream (/api/events) that tells open browsers about a
+		# restart or update needs nothing more: Musicus sends
+		# `X-Accel-Buffering: no` (nginx then passes it unbuffered) and a
+		# keep-alive line every 15 s (below proxy_read_timeout).
+
 		# Large uploads: Musicus checks the PDF after the last byte arrived.
 		proxy_read_timeout 300s;
 		proxy_send_timeout 300s;

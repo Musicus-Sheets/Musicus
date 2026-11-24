@@ -25,7 +25,6 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | R-SEC-009, R-SEC-010 | watermark, download audit log | watermark must not create blobs (conflict with R-FILE-004) |
 | R-OPS-009 | continuous replication (Litestream) | |
 | F-OPS-005, R-OPS-010, R-OPS-012, R-OPS-018, R-OPS-025, R-OPS-040, R-OPS-041 | updates and downgrades (d-update-model, a-preview-migrations, a-patch-no-db-changes, a-db-check) | plan and roadmap in `docs/technical/chapters/14-updates.typ`; done: own update runner (a-update-runner; R-OPS-011, 013–017 mechanism, 023, 024), handling of unknown stored values where they are read (a-stored-fallbacks), schema snapshot + CI database check + `db-change` notice (a-db-check; R-OPS-038, R-OPS-039), snapshot + automatic restore + restart guard, `backup` without updating, `restore` (R-OPS-019…022, a-snapshots). Still for 1.0.0: release check, release pipeline (R-OPS-049, PR G); see § Updates below |
-| F-OPS-008, R-OPS-043…048 | open clients during shutdown, start and update (a-client-outage) | listener before updates with 503 `server_starting`, shutdown drain with 503 `server_shutting_down` (new `ErrorCode`s), banners, polling, unsaved markings kept in memory and re-sent, `beforeunload` warning, reload at a safe moment after a version change |
 | F-OPS-006, R-OPS-026…032, R-OPS-042 | platforms (a-platforms) | multi-arch images + version tags (phase 0); Windows blocker and other findings in § Updates below; program archives + `SHA256SUMS` (unsigned; guide text for SmartScreen/Gatekeeper), platform-dependent CI (tests, build, smoke) on all systems, the rest Linux-only (phase 1) |
 | F-OPS-007, R-OPS-036 | version visible (a-version-public) | done: `/api/version`, About view, title pages from the build's version (R-OPS-033…035); missing: the title-page check in stage 1 of the release pipeline (R-OPS-035, PR G); docs tags `vX.Y.Z` in requirements, technical docs and user guide by hand after each release (R-OPS-036, RELEASING.md § 4) |
 | R-OPS-049 | release pipeline (a-release-pipeline) | PR G: dry run on the `release/<version>` pull request, real run on its merge; stage 1 builds and checks everything into expiring artifacts, stage 2 (only if all green) pushes images → tag → GitHub release with archives + `SHA256SUMS` → guide site, each step idempotent; `user-guide-pages.yml` becomes the last step (manual test build stays) |
@@ -49,7 +48,8 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 
 ## Verification gaps (implemented but not covered by automated tests)
 
-- Session expiry/sliding (R-ACC-005), reinvite (R-ACC-010), security headers (R-SEC-005), backup command (R-OPS-005), graceful shutdown (R-OPS-008), TLS (R-OPS-006).
+- Session expiry/sliding (R-ACC-005), reinvite (R-ACC-010), security headers (R-SEC-005), backup command (R-OPS-005), TLS (R-OPS-006; also the TLS path of the shutdown drain).
+- Open clients (a-client-outage): `e2e/outage.mjs` is not part of CI (needs a browser and starts its own server); not tested: Firefox/Safari EventSource behaviour, the browser's `beforeunload` dialog (only its condition), a proxy (nginx/Caddy) between client and server, the 6-connections-per-origin limit with many tabs over HTTP/1.1, the `invalid_ink` refusal path in a browser (logic only).
 - Performance requirements R-PERF-001/003/005/006 verified only by prototype benchmarks in `prototypes/` and a manual RSS measurement (≈11 MB idle).
 - System view: only synthetic PDFs in automated tests; real scores checked manually with `examples/layout_report.rs`
   (numbers in `layout.md`). Physical staff size depends on the device density (a-css-mm). Detection time on a
@@ -106,12 +106,12 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
   never deleted by the program (the admin deletes them); `backup` of a stopped server's WAL database may leave empty
   `-wal`/`-shm` files (read-only SQLite connection); `restore` only detects servers of this release or newer (the
   lock file is new); in development builds of one version a program that knows fewer previews removes the guard
-  note of a failing one (same version ⇒ "not older", a-restart-guard); the server does not close its pools on
-  shutdown, so `-wal`/`-shm` stay after a stop (`restore` moves the `-wal` with the replaced file). No blob clean-up
+  note of a failing one (same version ⇒ "not older", a-restart-guard); the server closes its pools with a checkpoint on
+  shutdown (`Db::close`, a-client-outage), so no `-wal` stays after an orderly stop (after a kill it does; `restore` moves the `-wal` with the replaced file). No blob clean-up
   exists; when it is built (R-FILE-009) every database in `snapshots/` counts as referencing its files.
 - Version display (phase 0) is done: `GET /api/version` (public, `no-store`), "About Musicus" (`/about`), docs title
-  pages from `build.sh` (`--input version`; fallback workspace version, else "dev"). The client does not yet compare
-  `api::version()` with its own `musicus_api::VERSION` (reload after an update, R-OPS-048). No release check fails on a
+  pages from `build.sh` (`--input version`; fallback workspace version, else "dev"). The client compares the version of the
+  `ready` event (and of the polled `/api/version`) with its own `musicus_api::VERSION` and reloads at a safe moment (R-OPS-048, a-client-outage). No release check fails on a
   title page whose version differs from the release (R-OPS-035); the guide site only warns on a tag ≠ workspace version.
 - `compose.yaml` builds locally (`build: .`, `musicus:latest`); no published image (R-OPS-010, R-OPS-028).
 - CI database check (job `db-check`) and `db-change` notice exist (workflow `Database`, a-db-check, R-OPS-038,

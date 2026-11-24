@@ -93,7 +93,10 @@ pub async fn send_folder(batch_id: Id, selection: Selection, mut progress: Signa
             failed += 1;
             continue;
         };
-        match bridge::upload_import_file(f.index, &format!("/api/import/files/{}/content", u.id)).await {
+        let running = api::start_running();
+        let sent = bridge::upload_import_file(f.index, &format!("/api/import/files/{}/content", u.id)).await;
+        drop(running);
+        match sent {
             Ok((status, _)) if (200..300).contains(&status) => {}
             Ok((401, _)) => {
                 let _ = web_sys::window().map(|w| w.location().set_href("/login"));
