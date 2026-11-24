@@ -86,7 +86,8 @@ workflow's own `GITHUB_TOKEN`. One-time setup in the repository `Musicus` → **
 
 ## Release Builder
 
-A second GitHub App, used only by the job `tag` of the workflow `Release`. It is kept apart from the
+A second GitHub App, used only by the job `tag` of the workflow `Release`: it tags `vX.Y.Z` in `Musicus`
+and in the three docs repositories. It is kept apart from the
 bot for `/update-submodules`: its key may create release tags, so it is stored
 in an environment that only runs on `main`, while the other bot's key must be usable from every
 pull request comment.
@@ -101,7 +102,8 @@ pull request comment.
    - **Where can this GitHub App be installed?**: *Only on this account*.
 2. On the app's page: note the **Client ID** (under **About**); **Credentials** → **Key pairs** →
    **New key** (a `.pem` file is downloaded).
-3. **Install App** → Musicus-Sheets → **Only select repositories** → `Musicus`.
+3. **Install App** → Musicus-Sheets → **Only select repositories** → `Musicus`,
+   `Musicus-requirements`, `Musicus-docs` and `Musicus-user-guide`.
 4. Repository `Musicus` → **Settings** → **Environments** → **New environment** `release`:
    - **Deployment branches and tags**: *Selected branches and tags* → add `main`.
    - **Environment variables**: `RELEASE_BOT_CLIENT_ID` = the Client ID.
@@ -109,7 +111,7 @@ pull request comment.
      Delete the downloaded file afterwards.
    - *Required reviewers* are optional: with them every release waits for your approval before the
      tag (the images are pushed by then). The release pull request is already a review.
-5. Repository `Musicus` → **Settings** → **Rules** → **Rulesets** → **New ruleset** →
+5. In **each of the four repositories** → **Settings** → **Rules** → **Rulesets** → **New ruleset** →
    **New tag ruleset**:
    - Name e.g. `Release tags`; **Enforcement status**: *Active*.
    - **Target tags** → **Add target** → *Include by pattern* `v*`.
@@ -119,5 +121,5 @@ pull request comment.
    Then nobody else can create, move or delete a release tag, also not by mistake. To repair a tag
    by hand, switch the ruleset to *Disabled* for that moment.
 
-The docs repositories' tags (made by hand, see RELEASING.md) are not affected: they are separate
-repositories with their own rules.
+The environment and its secret exist only in `Musicus`: the job runs there and reaches the docs
+repositories through the app's installation.

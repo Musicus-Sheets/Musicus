@@ -5,7 +5,7 @@ platforms" of the technical documentation (`docs/technical/chapters/14-updates.t
 downgrade window, database updates and the checks in continuous integration.
 
 The release pipeline (workflow `Release`, `.github/workflows/release.yml`) builds, checks and publishes;
-the maintainer prepares the release pull request and tags the docs repositories afterwards. Its one-time
+the maintainer prepares the release pull request and checks the result. Its one-time
 GitHub setup is in [docs/github-setup.md](docs/github-setup.md).
 
 ## 1. Choose the kind of release
@@ -123,7 +123,7 @@ release.
    ```
 
    If the bot committed, pull its commit (`git pull`) before you continue locally. The tags of the docs
-   repositories are created only after the release was published (§ 4, step 5).
+   repositories are created by the pipeline in the real run (§ 4, step 5); do not tag them yourself.
 
 ## 4. Pull request, merge, publish
 
@@ -154,13 +154,15 @@ The release pipeline builds and checks everything first and publishes only when 
        the complete user guide website built, including the new release;
      - `SHA256SUMS` and the release notes.
    - *Stage 2* (only if stage 1 is entirely green), in this order: push the images `X.Y.Z` and `X.Y` →
-     create the tag `vX.Y.Z` on the merge commit → create the GitHub release `vX.Y.Z` with the program
+     create the tag `vX.Y.Z` on the merge commit and in the three docs repositories (requirements,
+     technical documentation, user guide) on the commits the release points to → create the GitHub release `vX.Y.Z` with the program
      archives and `SHA256SUMS` (as a draft first, published once every file is there) → deploy the user
      guide website.
 3. **Check** the run (Actions → Release): every job green (a yellow note for macOS x86_64 is allowed); the
-   images `X.Y.Z` and `X.Y` exist (by default `ghcr.io/musicus-sheets/musicus`); the tag `vX.Y.Z` and the
-   GitHub release with the archives and `SHA256SUMS` exist; `sha256sum -c SHA256SUMS` succeeds on the
-   downloads; the user guide site lists `vX.Y.Z` as latest.
+   images `X.Y.Z` and `X.Y` exist (by default `ghcr.io/musicus-sheets/musicus`); the tag `vX.Y.Z` exists in
+   `Musicus` and in the three docs repositories (the summary of the job `tag` lists them); the GitHub
+   release with the archives and `SHA256SUMS` exists; `sha256sum -c SHA256SUMS` succeeds on the downloads;
+   the user guide site lists `vX.Y.Z` as latest.
 4. **If something fails**, nothing is published until stage 1 is green. Every publish step skips what
    already exists (an image tag `X.Y.Z` is never replaced, an existing tag on the same commit is kept, a
    draft release is completed), so running again finishes what is missing:
@@ -170,19 +172,10 @@ The release pipeline builds and checks everything first and publishes only when 
      commit to release; it must contain the merge of `release/X.Y.Z`). Merge nothing else in between.
      The switch `publish` off gives a dry run of that commit.
    - If the tag `vX.Y.Z` points to another commit, the version is released already: make a new release.
-5. After the release was published successfully, tag the three docs repositories by hand on exactly the
-   commits the release points to (always by hand, not part of the pipeline):
-
-   ```sh
-   git switch main && git pull && git submodule update --init
-   for repo in docs/requirements docs/technical docs/user-guide; do
-       git -C "$repo" tag vX.Y.Z "$(git rev-parse "vX.Y.Z:$repo")"
-       git -C "$repo" push origin vX.Y.Z
-   done
-   ```
-
-   `git rev-parse vX.Y.Z:<path>` prints the commit the release's submodule pointer names, so the tag lands
-   on that commit even if the submodule checkout is elsewhere.
+5. The tags of the docs repositories are made by the pipeline too. If a docs repository is tagged on
+   another commit already, the job `tag` fails and names it: someone tagged it by hand. Check which
+   commit is right (`git rev-parse vX.Y.Z:docs/<name>` in this repository prints the commit the release
+   points to), and correct it with the repository's tag ruleset switched off for that moment.
 
 ## 5. Release notes
 
