@@ -4,7 +4,7 @@
 
 ```sh
 cargo build                       # api + server (web excluded from default-members)
-cargo test                        # api unit, i18n unit + catalogue checks, server unit, API integration tests, no_prose
+cargo test                        # api unit, i18n unit + catalogue checks, server unit, API integration tests, no_prose, release scripts + program smoke test (tests/release_tools.rs; needs python3, git)
 cargo test -p musicus-web         # client unit tests on the host (errors.rs: texts, pseudo-locale check); not in default-members
 cargo run --release -p musicus-server --example layout_report -- a.pdf …   # system detection per page (regressions)
 cargo clippy --all-targets        # must be warning-free
@@ -89,8 +89,9 @@ Toolchain: Rust ≥ 1.88 (edition 2024, let-chains used), target `wasm32-unknown
 ### Publish/test the user guide site
 Site: GitHub Pages of the main repository (`https://<owner>.github.io/Musicus/`), workflow `User guide site`
 (`.github/workflows/user-guide-pages.yml`), logic in `scripts/build-guide-site.sh` (a-guide-site).
-1. Release: publishing a GitHub release (not a prerelease, not a draft) rebuilds the whole site from all release
-   tags and deploys it; earlier test builds disappear. The guide of a release is the `docs/user-guide` commit pinned
+1. Release: the last step of the release pipeline (`release.yml` job `site`) calls the workflow (`workflow_call`,
+   input `site-artifact`) with the site its stage 1 built from all published releases plus the new one; earlier test
+   builds disappear. Publishing a GitHub release by hand no longer deploys anything (no `release` trigger). The guide of a release is the `docs/user-guide` commit pinned
    in its tag, so update the guide (and its pointer) before tagging.
    The workspace `version` in `Cargo.toml` (raised on the release branch, `RELEASING.md`) is the version on the guide's
    title page, in `GET /api/version` and `--version` (a-version-source); the script warns on a tag ≠ workspace version.
@@ -102,8 +103,8 @@ Site: GitHub Pages of the main repository (`https://<owner>.github.io/Musicus/`)
    builds every local tag (or `--releases FILE`, one tag per line); then `python3 -m http.server -d /tmp/site`.
    Without tags, create temporary local ones (`git tag v0.1.0 <commit>`; delete them afterwards, do not push).
 4. One-time repository setup: Settings → Pages → Source `GitHub Actions`; Settings → Environments →
-   `github-pages` → deployment branches and tags: add the release tag pattern (e.g. `v*`) and any branch manual
-   runs start from (the default branch is allowed by default). Otherwise deploys from release tags are rejected.
+   `github-pages` → deployment branches and tags: `main` (the release pipeline runs on pushes to main and on
+   manual runs from main) and any branch manual test builds start from. Details: `docs/github-setup.md`.
 5. New Typst version: change `TYPST_VERSION`/`TYPST_SHA256` in the workflow (sha256 from the release asset) and
    the version in `docs/user-guide/README.md`; run the script locally over all tags first.
 
@@ -142,17 +143,26 @@ merged release missing) is refused with a message: move the data directory away.
 
 ### Release
 Step by step for the maintainer: `RELEASING.md` (repository root; kinds and what they may contain, `release/<version>`
-branch, version bump, `scripts/release-migrations.py`, checklist incl. "patch: no new stored values", merge →
-pipeline → check the run, docs tags by hand (R-OPS-036), release notes, troubleshooting). Target flow (a-release-pipeline,
-R-OPS-049, marked "planned" there, PR G): dry run on the release pull request; merging it starts the real run; stage 1
-builds and checks everything (version = branch, title pages, release and database checks R-OPS-038…040, per-platform
-builds with `MUSICUS_RELEASE_BUILD=1` + smoke, multi-arch images, archives, docs, guide site) into expiring artifacts;
-stage 2, only if all green: images → tag `vX.Y.Z` → GitHub release with archives + `SHA256SUMS` → guide site
-(`user-guide-pages.yml`), each idempotent. Until then RELEASING.md § 4 lists the manual steps (tag, local release image,
-GitHub release ⇒ site workflow). After a successful release the maintainer tags `docs/requirements`, `docs/technical`
-and `docs/user-guide` by hand on the pinned commits. The version on the title pages comes from the workspace version
-(a-version-source); RELEASING.md step 2.2 and its checklist say how to check it.
-Keep `RELEASING.md` in step when one of these is built. `RELEASING.md` is for humans: it never refers to `AGENTS.md` or `docs/agents`; its step 6 repeats the commands of `AGENTS.md` § Commands — change both together.
+branch, version bump, `scripts/release-migrations.py`, checklist incl. "patch: no new stored values", release pull
+request with a `## Release notes` section → dry run → merge → real run → check, running it again, docs tags by hand
+(R-OPS-036), troubleshooting). Pipeline: `.github/workflows/release.yml` (a-release-pipeline, R-OPS-049): dry run on the
+release pull request; the push of its merge to main starts the real run; `workflow_dispatch` (`version`, `ref`,
+`publish`) runs it again from main. Stage 1 (expiring artifacts): `checks`, `lint`, `web`, `program` ×5 platforms,
+`image`, `docs`, `assets` → gate `stage-1`; stage 2: `images` → `tag` → `github-release` → `site`. Locally:
+```sh
+python3 scripts/release-check.py --branch "$(git branch --show-current)" origin/main   # version + R-OPS-040 (on release/X.Y.Z)
+python3 scripts/release-check.py --title-pages X.Y.Z docs/user-guide/out/*.html docs/user-guide/out/*.pdf docs/technical/out/*.{html,pdf}
+python3 scripts/smoke-program.py --program target/release/musicus-server --version X.Y.Z   # built-in client; `--web dir -- --web-dir <dir>` otherwise
+python3 scripts/package-program.py archive --program target/release/musicus-server --version X.Y.Z --platform linux-x86_64 --out dist && python3 scripts/package-program.py sums dist
+python3 scripts/release-notes.py --version X.Y.Z --body pr-description.md
+docker buildx build --target release --build-context program=<dir with amd64/musicus-server> --platform linux/amd64 --load -t musicus:release .
+```
+Pitfalls: a program built on a newer glibc than Debian 12 (2.36) does not start in the image (the pipeline builds on
+ubuntu-22.04; locally build inside `rust:1.97-bookworm`); multi-platform `--output type=oci` needs a `docker-container`
+buildx builder; `MUSICUS_RELEASE_BUILD=1` without `--features embed-web` fails in `build.rs`, with previews the program
+refuses to start. Changes to `rust.yml` jobs: keep the job `lint` of `release.yml` in step. `RELEASING.md` is for
+humans: it never refers to `AGENTS.md` or `docs/agents`; its step 6 repeats the commands of `AGENTS.md` § Commands —
+change both together. The version on the title pages comes from the workspace version (a-version-source).
 
 ### Add/modify a requirement-driven feature
 1. Read the requirement + its links (`refines`, `depends_on`, `constrains`, `conflicts_with`) in `docs/requirements`.

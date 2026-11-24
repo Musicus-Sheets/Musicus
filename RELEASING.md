@@ -4,7 +4,9 @@ How the maintainer makes a release, step by step. Background: chapter "Updates, 
 platforms" of the technical documentation (`docs/technical/chapters/14-updates.typ`): versions, the
 downgrade window, database updates and the checks in continuous integration.
 
-Steps marked **(planned)** are not automated yet; do what the step says under "until then".
+The release pipeline (workflow `Release`, `.github/workflows/release.yml`) builds, checks and publishes;
+the maintainer prepares the release pull request and tags the docs repositories afterwards. Its one-time
+GitHub setup is in [docs/github-setup.md](docs/github-setup.md).
 
 ## 1. Choose the kind of release
 
@@ -105,7 +107,7 @@ release.
          "Musicus X.Y.Z". The guide site builds each release with the version of its tagged commit and
          warns if the tag `vX.Y.Z` differs from it (check the workflow log of § 4.4).
    - [ ] Requirement statuses in `docs/requirements` are current; `uv run docs/requirements/tools/validate.py`.
-   - [ ] Release notes drafted (§ 5).
+   - [ ] Release notes written in the pull request description, section `## Release notes` (§ 5).
 
 ## 3. Docs repositories
 
@@ -125,49 +127,51 @@ release.
 
 ## 4. Pull request, merge, publish
 
-Target flow: one release pipeline builds and checks everything first and publishes only when all of it
-succeeded. **(planned:** the pipeline does not exist yet; below each step says what to do by hand until
-then.)
+The release pipeline builds and checks everything first and publishes only when all of it succeeded.
 
-1. Open the pull request from `release/X.Y.Z` to `main`; all required checks must pass.
-   **(planned)** The pipeline runs as a *dry run* on this pull request: it builds and checks everything
-   (stage 1 below) and publishes nothing.
-   Until then check by hand: patch ⇒ no preview and no `X.Y.Z.sql`; minor ⇒ `X.Y.0.sql` lists exactly the
-   deleted previews and `migrations/preview/` is gone; the workspace version is `X.Y.Z` (§ 2 step 2) and
-   both title pages say "Musicus X.Y.Z" (§ 2 checklist).
-2. Merge the pull request. **(planned)** The merge of a `release/<version>` pull request into `main` starts
-   the real run automatically:
-   - *Stage 1* (temporary results only, workflow artifacts that expire): workspace version in `Cargo.toml` =
-     version in the branch name; all tests, lints, documentation and requirements checks; the database
-     release check; program build and smoke test on every platform, with `MUSICUS_RELEASE_BUILD=1` (a release
-     build refuses to start with preview updates); linux/amd64 + linux/arm64 images built but not pushed;
-     user guide and technical documentation built, their title pages checked to show `X.Y.Z`; the complete
-     user guide website built, including the new release.
-   - *Stage 2* (only if stage 1 is entirely green), in this order: push the images with their version tags →
-     create the tag `vX.Y.Z` on the merge commit → create the GitHub release with the program archives and
-     `SHA256SUMS` → deploy the user guide website.
-   - If anything fails, nothing is published and the artifacts are discarded: fix the problem (a normal
-     pull request) and run the pipeline again. Every publish step skips what already exists, so a run that
-     failed while publishing is simply run again.
-3. Check the run: every job green; the images `X.Y.Z` and `X.Y` exist; the tag `vX.Y.Z` and the GitHub
-   release with the archives and `SHA256SUMS` exist; the user guide site lists `vX.Y.Z` as latest.
-4. Until the pipeline exists, publish by hand instead of steps 2 and 3:
-
-   ```sh
-   git switch main && git pull && git tag vX.Y.Z && git push origin vX.Y.Z
-   ```
-
-   Build the image locally with `MUSICUS_RELEASE_BUILD=1` set for `cargo build --release` (e.g. add it to
-   the build command in the `Dockerfile` for that build) and start it once on a copy of an existing data
-   directory; nothing is published automatically. Then create the GitHub release for the tag with the
-   release notes; publishing it (not as prerelease) runs `.github/workflows/user-guide-pages.yml`, which
-   rebuilds the user guide site for all release tags. (In the pipeline this workflow becomes the last step;
-   its manual test build stays.)
-   **(planned)** The program archives are built by the pipeline. Until then, build the program for your
-   own system as described in [Building the program](#building-the-program) and attach it only if you
-   tested it.
+1. Open the pull request from `release/X.Y.Z` to `main`. Its description must have a section
+   `## Release notes` (§ 5): the pipeline takes the notes from there (read when it runs, so later edits
+   count) and fails without it. The pipeline runs as a **dry run** on the pull request (workflow `Release`):
+   it builds and checks everything (stage 1 below) and publishes nothing. It and all other required checks
+   must be green. A new push to the branch starts the dry run again; after editing only the description,
+   use **Re-run all jobs** of the last run.
+2. **Merge** the pull request (as a person or through the merge queue; use a merge commit, squash or rebase).
+   The push of the merge to `main` starts the **real run** automatically:
+   - *Stage 1* (temporary results only, workflow artifacts that expire after 7 days):
+     - workspace version in `Cargo.toml` and `Cargo.lock` = version in the branch name, newer than on `main`
+       before; the database release check (patch: no preview, no update file, nothing under `migrations/`
+       changed; minor/major: `X.Y.0.sql` lists exactly the removed previews, none left, `releases.txt`
+       gained exactly `X.Y`) and `./scripts/db-schema.sh --check` (`scripts/release-check.py`);
+     - submodule pointers, agent-docs check, requirements, UI literals, rustfmt, clippy (host and wasm32),
+       client tests;
+     - on Linux x86_64 and arm64, Windows x86_64, macOS arm64 and macOS x86_64: `cargo test`, the release
+       build with `MUSICUS_RELEASE_BUILD=1` and the web client built in (a release build refuses to start
+       with preview updates), a smoke test of the built program (start, web client, version, upload, a
+       marking, `backup`, Ctrl+C, second start; `scripts/smoke-program.py`) and its archive. macOS x86_64
+       does not block: if it fails, the release notes say that it is not available;
+     - the linux/amd64 + linux/arm64 image around these programs, built and started, not pushed;
+     - user guide and technical documentation built, their title pages checked to show "Musicus X.Y.Z";
+       the complete user guide website built, including the new release;
+     - `SHA256SUMS` and the release notes.
+   - *Stage 2* (only if stage 1 is entirely green), in this order: push the images `X.Y.Z` and `X.Y` →
+     create the tag `vX.Y.Z` on the merge commit → create the GitHub release `vX.Y.Z` with the program
+     archives and `SHA256SUMS` (as a draft first, published once every file is there) → deploy the user
+     guide website.
+3. **Check** the run (Actions → Release): every job green (a yellow note for macOS x86_64 is allowed); the
+   images `X.Y.Z` and `X.Y` exist (by default `ghcr.io/musicus-sheets/musicus`); the tag `vX.Y.Z` and the
+   GitHub release with the archives and `SHA256SUMS` exist; `sha256sum -c SHA256SUMS` succeeds on the
+   downloads; the user guide site lists `vX.Y.Z` as latest.
+4. **If something fails**, nothing is published until stage 1 is green. Every publish step skips what
+   already exists (an image tag `X.Y.Z` is never replaced, an existing tag on the same commit is kept, a
+   draft release is completed), so running again finishes what is missing:
+   - a flaky job or a failed publish step: **Re-run failed jobs** of the same run;
+   - a real problem: fix it in a normal pull request into `main`, then Actions → **Release** → **Run
+     workflow**, branch `main`, input `version` = `X.Y.Z` (input `ref` empty = the head of `main`, or the
+     commit to release; it must contain the merge of `release/X.Y.Z`). Merge nothing else in between.
+     The switch `publish` off gives a dry run of that commit.
+   - If the tag `vX.Y.Z` points to another commit, the version is released already: make a new release.
 5. After the release was published successfully, tag the three docs repositories by hand on exactly the
-   commits the release points to (always by hand, also with the pipeline):
+   commits the release points to (always by hand, not part of the pipeline):
 
    ```sh
    git switch main && git pull && git submodule update --init
@@ -182,7 +186,9 @@ then.)
 
 ## 5. Release notes
 
-Always mention:
+Write them in the release pull request's description under the heading `## Release notes` (everything up
+to the next heading of the same level; HTML comments are left out). The pipeline adds the list of
+downloads, the image names and, if macOS x86_64 failed, that it is not available. Always mention:
 
 - New features and fixes; for a minor/major that the database is updated at the first start.
 - **Removed features** and that their data stays while an older release may still be started.
@@ -191,7 +197,7 @@ Always mention:
 - **The downgrade window**: an installation can go back to any release of the three previous minor lines
   (in release order), to the release it was upgraded from for three months, and to every patch of the same
   minor (R-OPS-014). Outside it the older release refuses to start and names the oldest one that can.
-- Platforms whose non-blocking checks failed (macOS Intel, R-OPS-042), once those checks exist.
+- Platforms whose non-blocking checks failed (macOS Intel, R-OPS-042): added by the pipeline.
 
 ## Building the program
 
@@ -210,12 +216,22 @@ message if the web client was not built first. To build in a client from another
 `MUSICUS_WEB_DIST=<folder>` (relative to the repository root) for the `cargo build`. Check the file: started
 with only `--data-dir` on an empty folder, it must print `web client: built into the program` and serve the
 login page; started without `--data-dir`, it prints the usual data folder of the system. The Docker image is
-built the same way (`Dockerfile`).
+built the same way (`Dockerfile`); the release pipeline instead puts the programs it built and tested for
+Linux into the image (`Dockerfile` target `release`).
 
 A program built without `--features embed-web` contains no web client and warns at start that only the API
 is served; such a build must never be published.
 
 ## Troubleshooting
+
+- **The job `checks` of the release pipeline fails** (`release-check: …`): the message names the file. Version ⇒
+  § 2 step 2 (also commit `Cargo.lock`); previews or `releases.txt` ⇒ run `scripts/release-migrations.py X.Y.Z` on
+  a clean branch; a patch with database changes ⇒ make it a minor. Check locally with
+  `scripts/release-check.py --branch release/X.Y.Z origin/main`.
+- **The job `assets` fails with "no section `## Release notes`"**: add the section to the pull request
+  description, then **Re-run all jobs**.
+- **The job `docs` fails on a title page**: the docs submodules point to commits whose title page does not take
+  the version from the build; update the docs and their pointers (§ 3).
 
 - **The CI job `db-check` fails on the release pull request**: on a `release/<version>` branch it only compares
   `crates/musicus-server/schema.sql` with the structure the updates create. The merged update (or its
