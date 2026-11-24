@@ -25,7 +25,8 @@ name: Release
 #   secrets.IMAGE_REGISTRY_USERNAME / IMAGE_REGISTRY_PASSWORD (default for ghcr.io: the workflow's
 #   GITHUB_TOKEN with packages: write); a second registry: vars.DOCKERHUB_IMAGE (e.g. musicus/musicus)
 #   with secrets.DOCKERHUB_USERNAME / DOCKERHUB_TOKEN. Tags: X.Y.Z and X.Y (R-OPS-028).
-# One-time setup (Pages environment, package visibility, tag rules): docs/github-setup.md.
+# One-time setup (Pages environment, package visibility, Release Builder app, environment `release`,
+# tag ruleset): docs/github-setup.md.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -689,28 +690,58 @@ jobs:
     concurrency:
       group: release-publish
       cancel-in-progress: false
+    environment: release
     permissions:
-      contents: write
+      contents: read
     steps:
-      - name: Tag the release commit
+      # The Release Builder app (docs/github-setup.md): only it passes the v* tag rulesets (GITHUB_TOKEN
+      # cannot be put on a bypass list). Its key lives only in the environment `release` (main only).
+      # One token for the main repository and the three docs repositories (R-OPS-036).
+      - name: Create the app token
+        id: app-token
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }},Musicus-requirements,Musicus-docs,Musicus-user-guide
+          permission-contents: write
+      # Main repository first, then each docs repository on the commit the release's submodule
+      # pointer names (on its main: check `pinned`). Same commit tagged already => kept; tag on
+      # another commit => error. A run again creates only the missing tags.
+      - name: Tag the release commit and the docs repositories
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
           TAG: ${{ needs.plan.outputs.tag }}
           SHA: ${{ needs.plan.outputs.sha }}
         run: |
-          if tagged="$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha' 2>/dev/null)"; then
-            read -r type obj <<<"$tagged"
-            [[ "$type" != tag ]] || obj="$(gh api "repos/$REPO/git/tags/$obj" --jq .object.sha)"
-            if [[ "$obj" != "$SHA" ]]; then
-              echo "::error::The tag $TAG exists on $obj, not on $SHA"
-              exit 1
+          # tag_repo <owner/repo> <commit>
+          tag_repo() {
+            local target="$1" sha="$2" tagged type obj
+            if tagged="$(gh api "repos/$target/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha' 2>/dev/null)"; then
+              read -r type obj <<<"$tagged"
+              [[ "$type" != tag ]] || obj="$(gh api "repos/$target/git/tags/$obj" --jq .object.sha)"
+              if [[ "$obj" != "$sha" ]]; then
+                echo "::error::$target: the tag $TAG exists on $obj, not on $sha"
+                return 1
+              fi
+              echo "::notice::$target: $TAG exists on $sha already."
+            else
+              gh api "repos/$target/git/refs" -f "ref=refs/tags/$TAG" -f "sha=$sha" --silent
+              echo "- $target: created $TAG on $sha" | tee -a "$GITHUB_STEP_SUMMARY"
             fi
-            echo "::notice::$TAG exists on $SHA already."
-          else
-            gh api "repos/$REPO/git/refs" -f "ref=refs/tags/$TAG" -f "sha=$SHA" --silent
-            echo "Created $TAG on $SHA." | tee -a "$GITHUB_STEP_SUMMARY"
-          fi
+          }
+          tag_repo "$REPO" "$SHA"
+          # Submodule path => repository (the URLs in .gitmodules are not used: they are SSH URLs).
+          for pair in docs/requirements=Musicus-requirements docs/technical=Musicus-docs \
+                      docs/user-guide=Musicus-user-guide; do
+            path="${pair%%=*}" target="$OWNER/${pair#*=}"
+            pinned="$(gh api "repos/$REPO/contents/$path?ref=$SHA" --jq 'select(.type == "submodule") | .sha')"
+            [[ "$pinned" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::$path is no submodule at $SHA"; exit 1; }
+            tag_repo "$target" "$pinned"
+          done
 
   github-release:
     needs: [plan, tag]
