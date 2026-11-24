@@ -1,4 +1,4 @@
-# GitHub setup: bot for `/update-submodules`
+# GitHub setup: bot for `/update-submodules`, release pipeline
 
 A comment `/update-submodules` on a pull request of this repository runs the workflow
 `Update submodules` (`.github/workflows/update-submodules.yml`). It moves the pull request's
@@ -52,3 +52,30 @@ default branch), so it works once it has been merged.
 - Or comment `/update-submodules` (exactly that, nothing else) on a pull request. The bot reacts
   with 👀 when it starts, then 🚀 (pushed), 👍 (already up to date), 😕 (refused, with the reason)
   or 👎 (failed, with the error and a link to the run).
+
+# Release pipeline
+
+The workflow `Release` (`.github/workflows/release.yml`, see [RELEASING.md](../RELEASING.md) § 4)
+publishes with the workflow's own `GITHUB_TOKEN`; no app or personal token is needed. One-time
+setup in the repository `Musicus` → **Settings**:
+
+1. **Pages**: Source *GitHub Actions*. **Environments** → `github-pages` → deployment branches and
+   tags: allow `main` (the pipeline's real run is a push to `main`, a run by hand starts from
+   `main`) and the branches manual test builds of the guide site start from.
+2. **Actions** → **General** → Workflow permissions: the workflow asks for the permissions it needs
+   per job (`contents: write` for the tag and the release, `packages: write` for the images,
+   `pages: write` for the site); an organisation policy must not forbid them.
+3. **Rules** (rulesets): a tag ruleset for `v*` must let GitHub Actions create tags (add it to the
+   bypass list), otherwise the job `tag` fails.
+4. Container images, by default to `ghcr.io/<owner>/<repository>` (lower case). Optional
+   **Secrets and variables** → **Actions** → **Variables**: `IMAGE_REGISTRY` (e.g. `docker.io`) and
+   `IMAGE_NAME` (e.g. `musicus/musicus`) for another registry, with the secrets
+   `IMAGE_REGISTRY_USERNAME` and `IMAGE_REGISTRY_PASSWORD`; `DOCKERHUB_IMAGE` (e.g.
+   `musicus/musicus`) to push to Docker Hub as well, with the secrets `DOCKERHUB_USERNAME` and
+   `DOCKERHUB_TOKEN` (an access token with write access).
+5. After the first release: GitHub creates the package `musicus` as *private*. Organisation →
+   **Packages** → `musicus` → **Package settings**: change the visibility to *Public* and, under
+   **Manage Actions access**, give the repository `Musicus` the role *Write* (so later runs can push).
+6. The release pull request's merge must start workflows: merge it as a person (or with the merge
+   queue), not with a workflow's `GITHUB_TOKEN`; otherwise start the run by hand (Actions →
+   **Release** → **Run workflow**, branch `main`, input `version`).

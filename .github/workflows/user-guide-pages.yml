@@ -3,13 +3,25 @@ name: User guide site
 #   /                 list of all versions
 #   /<tag>/           guide of each release (HTML + PDF), /latest/ = newest release
 #   /test-<ref>/      manual runs only: test build of the chosen ref
-# Every run rebuilds the whole site from the release tags (scripts/build-guide-site.sh)
-# and replaces the deployed site, so a release run drops earlier test builds.
+# Two ways it runs:
+#   - last step of the release pipeline (.github/workflows/release.yml, workflow_call): deploys
+#     the site that the pipeline built and checked in its stage 1 (input `site-artifact`, an
+#     artifact of the calling run), including the new release. It no longer runs on
+#     `release: published` (that would deploy twice; a release published by hand does not
+#     change the site until the next pipeline run or a manual run).
+#   - manual run (workflow_dispatch, input `ref`): rebuilds the whole site from the published
+#     release tags (scripts/build-guide-site.sh) plus a test build of `ref`.
+# Every deploy replaces the deployed site, so a release run drops earlier test builds.
 # One-time setup: Settings -> Pages -> Source: "GitHub Actions"; the environment
-# "github-pages" must allow deployments from release tags (see docs/agents/workflows.md).
+# "github-pages" must allow deployments from main and from the branches manual runs use
+# (see docs/agents/workflows.md, docs/github-setup.md).
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      site-artifact:
+        description: Name of an artifact of the calling run that holds the built site
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       ref:
@@ -18,23 +30,26 @@ on:
         default: ""
 permissions:
   contents: read
-concurrency:
-  group: user-guide-pages
-  cancel-in-progress: false
 env:
   TYPST_VERSION: v0.15.1
   TYPST_SHA256: a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c
 jobs:
   build:
-    # Prereleases are not listed on the site; publishing one changes nothing.
-    if: github.event_name != 'release' || !github.event.release.prerelease
     runs-on: ubuntu-latest
     steps:
+      # Called by the release pipeline: its tested site, nothing is built here.
+      - uses: actions/download-artifact@v4
+        if: inputs.site-artifact
+        with:
+          name: ${{ inputs.site-artifact }}
+          path: _site
       - uses: actions/checkout@v4
+        if: ${{ !inputs.site-artifact }}
         with:
           fetch-depth: 0 # all tags and branches; the script reads each tag's submodule pointer
           submodules: false # the script fetches the user-guide commits itself (HTTPS)
       - name: Install Typst
+        if: ${{ !inputs.site-artifact }}
         run: |
           curl -sSfL -o typst.tar.xz \
             "https://github.com/typst/typst/releases/download/$TYPST_VERSION/typst-x86_64-unknown-linux-musl.tar.xz"
@@ -44,6 +59,7 @@ jobs:
           rm typst.tar.xz
           echo "$RUNNER_TEMP/typst" >>"$GITHUB_PATH"
       - name: List releases
+        if: ${{ !inputs.site-artifact }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -51,8 +67,9 @@ jobs:
             --json tagName --jq '.[].tagName' >"$RUNNER_TEMP/releases.txt"
           cat "$RUNNER_TEMP/releases.txt"
       - name: Build site
+        if: ${{ !inputs.site-artifact }}
         env:
-          PREVIEW: ${{ github.event_name == 'workflow_dispatch' && (inputs.ref || github.ref_name) || '' }}
+          PREVIEW: ${{ inputs.ref || github.ref_name }}
         run: ./scripts/build-guide-site.sh --out _site --releases "$RUNNER_TEMP/releases.txt" ${PREVIEW:+--preview "$PREVIEW"}
       - uses: actions/upload-pages-artifact@v3
         with:
@@ -60,6 +77,10 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    # One deploy at a time (manual runs and release pipelines).
+    concurrency:
+      group: user-guide-pages
+      cancel-in-progress: false
     permissions:
       pages: write
       id-token: write

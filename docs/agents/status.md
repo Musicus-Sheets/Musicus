@@ -24,10 +24,10 @@ Everything in `server.md` endpoint table and `web-client.md`; requirements with 
 | R-FILE-010 | bilevel compression of scans | |
 | R-SEC-009, R-SEC-010 | watermark, download audit log | watermark must not create blobs (conflict with R-FILE-004) |
 | R-OPS-009 | continuous replication (Litestream) | |
-| F-OPS-005, R-OPS-010, R-OPS-012, R-OPS-018, R-OPS-025, R-OPS-040, R-OPS-041 | updates and downgrades (d-update-model, a-preview-migrations, a-patch-no-db-changes, a-db-check) | plan and roadmap in `docs/technical/chapters/14-updates.typ`; done: own update runner (a-update-runner; R-OPS-011, 013–017 mechanism, 023, 024), handling of unknown stored values where they are read (a-stored-fallbacks), schema snapshot + CI database check + `db-change` notice (a-db-check; R-OPS-038, R-OPS-039), snapshot + automatic restore + restart guard, `backup` without updating, `restore` (R-OPS-019…022, a-snapshots). Still for 1.0.0: release check, release pipeline (R-OPS-049, PR G); see § Updates below |
-| F-OPS-006, R-OPS-026…032, R-OPS-042 | platforms (a-platforms) | multi-arch images + version tags (phase 0); Windows blocker and other findings in § Updates below; program archives + `SHA256SUMS` (unsigned; guide text for SmartScreen/Gatekeeper), platform-dependent CI (tests, build, smoke) on all systems, the rest Linux-only (phase 1) |
-| F-OPS-007, R-OPS-036 | version visible (a-version-public) | done: `/api/version`, About view, title pages from the build's version (R-OPS-033…035); missing: the title-page check in stage 1 of the release pipeline (R-OPS-035, PR G); docs tags `vX.Y.Z` in requirements, technical docs and user guide by hand after each release (R-OPS-036, RELEASING.md § 4) |
-| R-OPS-049 | release pipeline (a-release-pipeline) | PR G: dry run on the `release/<version>` pull request, real run on its merge; stage 1 builds and checks everything into expiring artifacts, stage 2 (only if all green) pushes images → tag → GitHub release with archives + `SHA256SUMS` → guide site, each step idempotent; `user-guide-pages.yml` becomes the last step (manual test build stays) |
+| F-OPS-005, R-OPS-010, R-OPS-012, R-OPS-018, R-OPS-025, R-OPS-040, R-OPS-041 | updates and downgrades (d-update-model, a-preview-migrations, a-patch-no-db-changes, a-db-check) | plan and roadmap in `docs/technical/chapters/14-updates.typ`; done: own update runner (a-update-runner; R-OPS-011, 013–017 mechanism, 023, 024), handling of unknown stored values where they are read (a-stored-fallbacks), schema snapshot + CI database check + `db-change` notice (a-db-check; R-OPS-038, R-OPS-039), snapshot + automatic restore + restart guard, `backup` without updating, `restore` (R-OPS-019…022, a-snapshots). release check (`scripts/release-check.py`, R-OPS-040) in the release pipeline (PR G, not yet run on GitHub); see § Updates below |
+| F-OPS-006, R-OPS-026…032, R-OPS-042 | platforms (a-platforms) | release pipeline (PR G, not yet run on GitHub): multi-arch image (target `release`, tags `X.Y.Z` + `X.Y`, registry configurable, default GHCR), program archives for all 5 platforms + `SHA256SUMS` (unsigned), tests + release build + smoke test per platform for release pull requests (macos-x86_64 non-blocking). Missing: platform-dependent CI on every pull request (PR I, R-OPS-032), user-guide text for SmartScreen/Gatekeeper and for downloads/published images, Compose file of a release with a version tag (R-OPS-028); Windows findings in § Updates below |
+| F-OPS-007, R-OPS-036 | version visible (a-version-public) | done: `/api/version`, About view, title pages from the build's version (R-OPS-033…035); title pages and workspace version checked in stage 1 of the release pipeline (R-OPS-035, PR G); docs tags `vX.Y.Z` in requirements, technical docs and user guide by hand after each release (R-OPS-036, RELEASING.md § 4) |
+| R-OPS-049 | release pipeline (a-release-pipeline) | implemented (PR G, `.github/workflows/release.yml`), never run on GitHub yet: dry run on the `release/<version>` pull request, real run on the push of its merge to main, again by hand (`workflow_dispatch`); stage 1 builds and checks everything into expiring artifacts, gate `stage-1`, stage 2 pushes images → tag → GitHub release (draft → published) → guide site (`user-guide-pages.yml` via `workflow_call`), each step idempotent. Simulated locally only (see § Test gaps) |
 | F-TECH-002, R-TECH-004…007 | prepared replaceability | storage modules per data area (no SQL in `routes/`), file store without `path()`, PDF engine module, conformance suites; no second backend |
 
 | F-LIB-004 phase 2 | mass import extensions | pattern per subfolder (archives mixing structures; today: several batches), ZIP upload, server-side paging of the review for very large batches, CSV inventory and OCR sources (R-LIB-022) |
@@ -61,7 +61,8 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
   only simulated with CDP device-metrics emulation (sizes checked, not the painted pixels); pinch zoom sharpness checked
   by backing size only. The layout editor renders at the current ratio but does not re-render on a ratio change.
 - arm64 (Raspberry Pi) build not tested; Caddy HTTPS profile not tested end to end; release wasm with current wasm-opt not tested in CI.
-- Rust CI (`rust.yml`) runs only on Linux x86_64; nothing is built or tested on Windows, macOS or arm64, and no image is built in CI (R-OPS-032).
+- Rust CI for pull requests (`rust.yml`) runs only on Linux x86_64 (R-OPS-032; PR I). Only the release pipeline builds and tests on Linux arm64, Windows and macOS and builds the image.
+- Release pipeline (a-release-pipeline): simulated locally only — release check on a clone with `release/1.0.0` made by the merge script (dry and after a `--no-ff` merge), release build with the real release client + `smoke-program.py` + archive + `sha256sum -c`, release build with previews refused at start, image target `release` (multi-arch OCI archive, amd64 container checked with the workflow's commands), skopeo push of the archive to a local registry (`X.Y.Z`, `X.Y` twice, digests equal, both platforms), guide site with a local tag, title pages, release notes; `actionlint` with shellcheck clean. Not run: anything on GitHub (event payloads, API lookups of the merge, runners other than Linux x86_64 — the Windows Ctrl+C helper of the smoke test, macOS, arm64 —, GHCR login and package visibility, the tag and release API calls, the Pages deploy through `workflow_call` and the `github-pages` environment rules for main).
 - User-guide Pages workflow (a-guide-site): the script is tested locally (tags, test build, skipped and failing versions, HTTPS fetch); the GitHub-side parts (`gh release list`, Pages deploy, `github-pages` environment rules for tags) are only verified by a real run.
 
 ## Known debt / quirks
@@ -96,8 +97,8 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
   automatic simplification covers only safe folds), keep its `-- @previews:` line, and check it against the appended
   version. Open points of the runner:
   derived data after another program ran = only the part search index (system layouts not re-checked); a due removal
-  runs only at a start; unparsable stored versions block removals; the program version stays 0.1.0 until the release sets it; nothing checks yet that a release build's line is in
-  `releases.txt` (release check, a-db-check). Verified only on temporary databases with test programs
+  runs only at a start; unparsable stored versions block removals; the program version stays 0.1.0 until the release sets it; the release check (a-db-check) makes a release's line the last one in
+  `releases.txt`. Verified only on temporary databases with test programs
   (`tests/updates.rs`); the upgrade/downgrade matrix with real release binaries comes with the second release.
 - Snapshot before updates, automatic restore, restart guard, `backup` without the runner, `restore` and
   `retry-update` are implemented (a-snapshots, a-restart-guard, a-data-lock; `tests/snapshots.rs`; R-OPS-019…022).
@@ -111,17 +112,17 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
   exists; when it is built (R-FILE-009) every database in `snapshots/` counts as referencing its files.
 - Version display (phase 0) is done: `GET /api/version` (public, `no-store`), "About Musicus" (`/about`), docs title
   pages from `build.sh` (`--input version`; fallback workspace version, else "dev"). The client compares the version of the
-  `ready` event (and of the polled `/api/version`) with its own `musicus_api::VERSION` and reloads at a safe moment (R-OPS-048, a-client-outage). No release check fails on a
-  title page whose version differs from the release (R-OPS-035); the guide site only warns on a tag ≠ workspace version.
-- `compose.yaml` builds locally (`build: .`, `musicus:latest`); no published image (R-OPS-010, R-OPS-028).
+  `ready` event (and of the polled `/api/version`) with its own `musicus_api::VERSION` and reloads at a safe moment (R-OPS-048, a-client-outage). Stage 1 of the release pipeline
+  fails on a title page whose version differs from the release (R-OPS-035); for older releases the guide site only warns on a tag ≠ workspace version.
+- `compose.yaml` builds locally (`build: .`, `musicus:latest`); the release pipeline publishes images, but neither `compose.yaml` nor the user guide uses them yet (R-OPS-010, R-OPS-028).
 - CI database check (job `db-check`) and `db-change` notice exist (workflow `Database`, a-db-check, R-OPS-038,
   R-OPS-039), with the schema snapshot `crates/musicus-server/schema.sql` (`scripts/db-schema.sh`). Not yet exercised on
   GitHub: the merge-queue path (head branch read from the API) and the label/comment calls; `db-check` still has to be
-  made a required status check. The release check (R-OPS-040) comes with the release pipeline (PR G).
+  made a required status check. The release check (R-OPS-040) is part of the release pipeline (`scripts/release-check.py`, PR G).
 - Patches writing new kinds of stored values (R-OPS-041) are not caught by any check; the fallbacks
   (a-stored-fallbacks) and the release checklist line (`RELEASING.md` step 7) exist, the test matrix with release
   test data is still missing (phase 2).
-- Open: container registry and image name (decided when the release pipeline is built, PR G; Docker Hub and/or GHCR).
+- Container registry: configurable (`vars.IMAGE_REGISTRY`, `vars.IMAGE_NAME`, optional `vars.DOCKERHUB_IMAGE`), default `ghcr.io/musicus-sheets/musicus`; the maintainer still has to confirm the choice and make the package public.
 - Today the server listens only after migrations (`open_state` before `bind`) and closes the listener on the stop
   signal (R-OPS-008); the client shows generic errors when the server is away and reloads only on 401.
 - Unknown stored values are handled where they are read, with exact enums (no catch-all variants; a-stored-fallbacks,

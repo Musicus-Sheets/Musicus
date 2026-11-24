@@ -13,7 +13,16 @@ use std::{
 
 fn main() {
     migrations();
-    if env::var_os("CARGO_FEATURE_EMBED_WEB").is_some() {
+    let embed_web = env::var_os("CARGO_FEATURE_EMBED_WEB").is_some();
+    // A release build (`MUSICUS_RELEASE_BUILD`, read like `updates::Program::builtin`) is what the
+    // release pipeline publishes: it must contain the web client (R-OPS-030, a-embedded-web).
+    if matches!(env::var("MUSICUS_RELEASE_BUILD").as_deref(), Ok("1" | "true" | "yes")) && !embed_web {
+        panic!(
+            "MUSICUS_RELEASE_BUILD is set, but the feature embed-web is not: a release build contains the web \
+             client. Build it with --features embed-web (see RELEASING.md, \"Building the program\")."
+        );
+    }
+    if embed_web {
         web_client();
     }
 }
