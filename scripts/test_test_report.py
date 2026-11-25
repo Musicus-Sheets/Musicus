@@ -86,6 +86,53 @@ class Inputs(unittest.TestCase):
         self.assertIsNone(tr.percent(0, 0))
 
 
+class BrowserCoverage(unittest.TestCase):
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp())
+        (self.root / "crates/musicus-server/src").mkdir(parents=True)
+
+    def lcov(self, name: str, records: dict[str, str]) -> Path:
+        path = self.root / name
+        path.write_text("".join(f"SF:{self.root}/{f}\n{da}end_of_record\n" for f, da in records.items()),
+                        encoding="utf-8")
+        return path
+
+    def test_unit_lines_are_the_reference(self) -> None:
+        unit = tr.read_lcov_lines(self.lcov("u.info", {
+            "crates/musicus-server/src/db.rs": "DA:1,1\nDA:2,0\nDA:3,0\nDA:4,0\n"}), self.root)
+        # The release build lists line 9 that the unit build does not: it is left out.
+        e2e = tr.read_lcov_lines(self.lcov("e.info", {
+            "crates/musicus-server/src/db.rs": "DA:2,5\nDA:3,0\nDA:9,1\n",
+            "crates/musicus-server/src/main.rs": "DA:1,1\nDA:2,0\n"}), self.root)
+        parts = tr.combine_lcov(unit, e2e)
+        db = "crates/musicus-server/src/db.rs"
+        self.assertEqual(parts["unit"][db], {"lines": 4, "hit": 1})
+        self.assertEqual(parts["e2e"][db], {"lines": 4, "hit": 1})
+        self.assertEqual(parts["combined"][db], {"lines": 4, "hit": 2})
+        # A file only the browser run has: its own lines are the reference.
+        self.assertEqual(parts["combined"]["crates/musicus-server/src/main.rs"], {"lines": 2, "hit": 1})
+        self.assertEqual(parts["unit"]["crates/musicus-server/src/main.rs"], {"lines": 2, "hit": 0})
+
+    def test_report_shows_unit_browser_and_together(self) -> None:
+        junit = self.root / "junit.xml"
+        junit.write_text(JUNIT, encoding="utf-8")
+        u = self.lcov("u.info", {"crates/musicus-server/src/db.rs": "DA:1,1\nDA:2,0\nDA:3,0\nDA:4,0\n"})
+        e1 = self.lcov("e1.info", {"crates/musicus-server/src/db.rs": "DA:2,1\n"})
+        e2 = self.lcov("e2.info", {"crates/musicus-server/src/db.rs": "DA:3,1\n"})
+        out = self.root / "r.md"
+        tr.main(["--junit", str(junit), "--lcov", str(u), "--lcov-e2e", str(e1), "--lcov-e2e", str(e2),
+                 "--root", str(self.root), "--json", str(self.root / "r.json"), "--markdown", str(out)])
+        md = out.read_text(encoding="utf-8")
+        self.assertIn("### Code coverage: 75.0 % of lines", md)
+        self.assertIn("Unit tests alone 25.0 %, browser tests alone (the server while they ran) 50.0 %", md)
+        self.assertIn("| musicus-server | 4 | 25.0 | 50.0 | 75.0 |", md)
+        stored = json.loads((self.root / "r.json").read_text(encoding="utf-8"))
+        self.assertEqual(stored["format"], tr.FORMAT)
+        self.assertEqual((stored["coverage"]["lines"], stored["coverage"]["hit"]), (4, 3))
+        self.assertEqual(stored["coverage"]["sources"]["unit"]["hit"], 1)
+        self.assertNotIn("files", stored["coverage"])
+
+
 class Targets(unittest.TestCase):
     def test_unit_test_in_a_module(self) -> None:
         t = test("musicus-api", "ink::tests::round_trip_keeps_every_object")

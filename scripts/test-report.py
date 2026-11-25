@@ -5,7 +5,10 @@ coverage and requirement coverage. Standard library only.
 Inputs:
   --junit FILE     JUnit XML (cargo-nextest; later also e2e). Repeatable. A test's id is
                    `<testsuite>::<testcase>`, e.g. `musicus-server::api::user_administration`.
-  --lcov FILE      lcov coverage (cargo llvm-cov). Optional.
+  --lcov FILE      lcov coverage of the unit tests (cargo llvm-cov). Optional.
+  --lcov-e2e FILE  lcov coverage of the server while the browser tests ran (instrumented release
+                   build). Optional, repeatable. The report then shows unit, browser and combined
+                   coverage; the combined value is the one compared with main.
   --requirements FILE   docs/requirements/requirements.json. Optional.
   --baseline FILE  report.json of the last run on main. Optional; without it there is no comparison.
   --root DIR       repository root, to make lcov paths relative (default: current directory).
@@ -30,7 +33,8 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 MARKER = "<!-- musicus-test-report -->"
-FORMAT = 1
+# 2: `coverage` is the combined coverage (unit + browser tests), with `sources`.
+FORMAT = 2
 # Status order for the counts and the list.
 STATES = ("failed", "flaky", "passed", "skipped")
 ICON = {"passed": "✅", "failed": "❌", "flaky": "⚠️", "skipped": "⏭️"}
@@ -69,9 +73,10 @@ def read_junit(paths: list[Path]) -> dict[str, dict]:
     return tests
 
 
-def read_lcov(path: Path, root: Path) -> dict[str, dict]:
-    """Relative source path -> {lines, hit}. Files outside the repository (dependencies) are left out."""
-    files: dict[str, dict] = {}
+def read_lcov_lines(path: Path, root: Path) -> dict[str, dict[int, bool]]:
+    """Relative source path -> {line: reached}. Files outside the repository (dependencies) are
+    left out; a line listed twice (several functions, generics) counts as reached if any entry is."""
+    files: dict[str, dict[int, bool]] = {}
     current = None
     root = root.resolve()
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -82,16 +87,44 @@ def read_lcov(path: Path, root: Path) -> dict[str, dict]:
             except ValueError:
                 current = None
             if current is not None:
-                files.setdefault(current, {"lines": 0, "hit": 0})
+                files.setdefault(current, {})
         elif current is not None and line.startswith("DA:"):
             # DA:<line>,<count>[,<checksum>]: count the lines ourselves (LF/LH are optional).
             parts = line[3:].split(",")
-            files[current]["lines"] += 1
-            if len(parts) > 1 and parts[1].strip() not in ("", "0"):
-                files[current]["hit"] += 1
+            try:
+                number = int(parts[0])
+            except ValueError:
+                continue
+            reached = len(parts) > 1 and parts[1].strip() not in ("", "0")
+            files[current][number] = files[current].get(number, False) or reached
         elif line == "end_of_record":
             current = None
-    return {f: v for f, v in files.items() if v["lines"]}
+    return {f: v for f, v in files.items() if v}
+
+
+def line_totals(files: dict[str, dict[int, bool]]) -> dict[str, dict]:
+    return {f: {"lines": len(v), "hit": sum(v.values())} for f, v in files.items()}
+
+
+def read_lcov(path: Path, root: Path) -> dict[str, dict]:
+    """Relative source path -> {lines, hit}. Files outside the repository (dependencies) are left out."""
+    return line_totals(read_lcov_lines(path, root))
+
+
+def combine_lcov(unit: dict[str, dict[int, bool]], e2e: dict[str, dict[int, bool]]) -> dict[str, dict]:
+    """Per file, the lines of the unit run are the reference (where it has the file; else the
+    browser run's): the browser tests' release build is optimised and lists some lines differently.
+    Returns {unit, e2e, combined}, each relative path -> {lines, hit}: a line of the reference
+    counts for `e2e` if the browser tests reached it, for `combined` if either did."""
+    out: dict[str, dict] = {"unit": {}, "e2e": {}, "combined": {}}
+    for f in sorted(set(unit) | set(e2e)):
+        u, e = unit.get(f, {}), e2e.get(f, {})
+        ref = u or e
+        lines = len(ref)
+        out["unit"][f] = {"lines": lines, "hit": sum(1 for n in ref if u.get(n))}
+        out["e2e"][f] = {"lines": lines, "hit": sum(1 for n in ref if e.get(n))}
+        out["combined"][f] = {"lines": lines, "hit": sum(1 for n in ref if u.get(n) or e.get(n))}
+    return out
 
 
 def group_of(path: str) -> str:
@@ -275,16 +308,36 @@ def render(report: dict, diff: dict | None, full: bool) -> str:
     if cov:
         before = (diff or {}).get("coverage") or {}
         pct = percent(cov["hit"], cov["lines"])
-        lines += [f"### Code coverage: {pct} % of lines{delta(pct, percent(before.get('hit', 0), before.get('lines', 0)) if before else None)}", "",
-                  "| Part | Lines | Covered | % |", "| --- | ---: | ---: | ---: |"]
-        for name, g in cov["groups"].items():
-            b = before.get("groups", {}).get(name)
-            p = percent(g["hit"], g["lines"])
-            lines.append(f"| {name} | {g['lines']} | {g['hit']} | {p}{delta(p, percent(b['hit'], b['lines']) if b else None)} |")
+        bpct = percent(before.get("hit", 0), before.get("lines", 0)) if before else None
+        sources = cov.get("sources")
+        if sources:
+            unit, e2e = sources["unit"], sources["e2e"]
+            lines += [f"### Code coverage: {pct} % of lines{delta(pct, bpct)}", "",
+                      f"Unit tests and browser tests together. Unit tests alone "
+                      f"{percent(unit['hit'], unit['lines'])} %, browser tests alone (the server while they ran) "
+                      f"{percent(e2e['hit'], e2e['lines'])} %.", "",
+                      "| Part | Lines | Unit tests % | Browser tests % | Together % |",
+                      "| --- | ---: | ---: | ---: | ---: |"]
+            for name, g in cov["groups"].items():
+                b = before.get("groups", {}).get(name)
+                p = percent(g["hit"], g["lines"])
+                gu, ge = unit["groups"].get(name), e2e["groups"].get(name)
+                pu = percent(gu["hit"], gu["lines"]) if gu else None
+                pe = percent(ge["hit"], ge["lines"]) if ge else None
+                lines.append(f"| {name} | {g['lines']} | {pu} | {pe} | "
+                             f"{p}{delta(p, percent(b['hit'], b['lines']) if b else None)} |")
+        else:
+            lines += [f"### Code coverage: {pct} % of lines{delta(pct, bpct)}", "",
+                      "| Part | Lines | Covered | % |", "| --- | ---: | ---: | ---: |"]
+            for name, g in cov["groups"].items():
+                b = before.get("groups", {}).get(name)
+                p = percent(g["hit"], g["lines"])
+                lines.append(f"| {name} | {g['lines']} | {g['hit']} | {p}{delta(p, percent(b['hit'], b['lines']) if b else None)} |")
         lines.append("")
         if "musicus-web" in cov["groups"]:
             lines += ["`musicus-web` counts only what its host tests reach (names, state logic); its pages and the "
-                      "pdf.js bridge run in the browser and are tested end to end, not measured here.", ""]
+                      "pdf.js bridge run in the browser (WebAssembly and JavaScript) and are tested end to end, "
+                      "not measured.", ""]
         if full:
             worst = sorted(cov["files"].items(), key=lambda kv: (kv[1]["hit"] / kv[1]["lines"], -kv[1]["lines"]))
             lines += ["<details><summary>Files by coverage (lowest first)</summary>", "",
@@ -339,8 +392,23 @@ def build(args: argparse.Namespace) -> tuple[dict, dict | None]:
         "tests": {k: v["status"] for k, v in sorted(tests.items())},
         "tests_detail": tests,
     }
-    if args.lcov:
-        report["coverage"] = coverage_summary(read_lcov(args.lcov, args.root))
+    if args.lcov or args.lcov_e2e:
+        unit = read_lcov_lines(args.lcov, args.root) if args.lcov else {}
+        e2e: dict[str, dict[int, bool]] = {}
+        for path in args.lcov_e2e or []:
+            for f, v in read_lcov_lines(path, args.root).items():
+                lines = e2e.setdefault(f, {})
+                for n, reached in v.items():
+                    lines[n] = lines.get(n, False) or reached
+        if e2e:
+            parts = combine_lcov(unit, e2e)
+            report["coverage"] = coverage_summary(parts["combined"])
+            report["coverage"]["sources"] = {
+                name: {k: v for k, v in coverage_summary(parts[name]).items() if k != "files"}
+                for name in ("unit", "e2e")
+            }
+        else:
+            report["coverage"] = coverage_summary(line_totals(unit))
     if args.requirements:
         items = json.loads(args.requirements.read_text(encoding="utf-8"))["items"]
         report["requirements"] = requirement_coverage(items, tests)
@@ -357,6 +425,7 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--junit", type=Path, action="append", required=True)
     p.add_argument("--lcov", type=Path)
+    p.add_argument("--lcov-e2e", type=Path, action="append")
     p.add_argument("--requirements", type=Path)
     p.add_argument("--baseline", type=Path)
     p.add_argument("--root", type=Path, default=Path.cwd())
