@@ -593,14 +593,22 @@ if (total > 1) {
 // --- System view (whole systems across pages) -----------------------------
 // A generated part: 2 A4 pages with 8 single-staff systems each (lines 5 pt apart),
 // read on an 8" tablet in landscape (1280 × 800).
-function staffPdf(pages, staves) {
+// `perSystem` > 1 makes a score: `staves` systems of that many staves (30 pt apart), joined by
+// a barline at the left edge and barlines through the whole system, as the detection expects.
+function staffPdf(pages, staves, perSystem = 1) {
   let content = '0.6 w\n250 790 m 345 790 l 4 w S 0.6 w\n';
+  const systemHeight = (perSystem - 1) * 30 + 20;
   for (let k = 0; k < staves; k += 1) {
-    const top = 740 - k * 80;
-    for (let l = 0; l < 5; l += 1) content += `40 ${top - l * 5} m 555 ${top - l * 5} l S\n`;
-    for (let b = 1; b < 4; b += 1) { const x = 40 + b * 128.75; content += `${x} ${top} m ${x} ${top - 20} l S\n`; }
-    // A chord symbol above and a dynamic mark below each staff, like real music.
-    content += `60 ${top + 12} 14 6 re f 90 ${top - 38} 10 6 re f\n`;
+    const top = 740 - k * (systemHeight + 60);
+    const bottom = top - systemHeight;
+    for (let st = 0; st < perSystem; st += 1) {
+      const y = top - st * 30;
+      for (let l = 0; l < 5; l += 1) content += `40 ${y - l * 5} m 555 ${y - l * 5} l S\n`;
+    }
+    if (perSystem > 1) content += `40 ${top} m 40 ${bottom} l S\n`;
+    for (let b = 1; b < 4; b += 1) { const x = 40 + b * 128.75; content += `${x} ${top} m ${x} ${bottom} l S\n`; }
+    // A chord symbol above and a dynamic mark below each system, like real music.
+    content += `60 ${top + 12} 14 6 re f 90 ${bottom - 18} 10 6 re f\n`;
   }
   const objects = ['<< /Type /Catalog /Pages 2 0 R >>',
     `<< /Type /Pages /Kids [${Array.from({ length: pages }, (_, i) => `${i + 4} 0 R`).join(' ')}] /Count ${pages} >>`,
@@ -869,12 +877,18 @@ const resetLayout = await m.evaluate(async (sha) => (await fetch(`/api/files/${s
 check(!resetLayout.pages[1].full_page && !resetLayout.pages[1].corrected, 'a page can be reset to the automatic detection');
 
 // --- Mass import: a folder with a German structure ---------------------------
-// Distinct copies of the test PDF (bytes appended after %%EOF), one twice.
+// Generated files, so that the review's cross-check with the detected systems is
+// predictable (review.rs: "Partitur" with one staff per system or a single instrument
+// with 4 or more staves would be yellow, and "Import all green" would skip the piece):
+// parts with single-staff systems, the full score with 4 staves per system. Distinct
+// copies (bytes appended after %%EOF), the trumpet part twice.
+const partPdf = Buffer.from(staffPdf(2, 8));
+const scorePdf = Buffer.from(staffPdf(2, 4, 4));
 const importRoot = join(outDir, 'import-archive', 'Archiv');
 const pieceDir = join(importRoot, 'Märsche', '0412 Alte Kameraden - Teike');
 mkdirSync(pieceDir, { recursive: true });
 mkdirSync(join(importRoot, 'Zweitschrift'), { recursive: true });
-const copy = (tag) => Buffer.concat([readFileSync(pdfPath), Buffer.from(`\n%import-${tag}\n`)]);
+const copy = (tag) => Buffer.concat([tag === 'Partitur' ? scorePdf : partPdf, Buffer.from(`\n%import-${tag}\n`)]);
 for (const name of ['Trompete 1+2 in B', 'Partitur', 'Direktion', 'Klar 2']) writeFileSync(join(pieceDir, `${name}.pdf`), copy(name));
 writeFileSync(join(importRoot, 'Zweitschrift', 'Trompete.pdf'), copy('Trompete 1+2 in B'));
 writeFileSync(join(importRoot, 'Inventar.txt'), 'not a PDF');
