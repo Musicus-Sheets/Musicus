@@ -9,8 +9,9 @@ name: Tests
 # Then `tests` takes every result and writes, with scripts/test-report.py:
 #   - the job summary (everything, including the list of every test),
 #   - one comment on the pull request, updated in place (hidden marker; not for forks),
-#   - the artifact `test-report` (report.json = the next run's baseline; kept 90 days on main).
-# Regressions: compared with the report of the last successful run on main (its artifact).
+#   - the artifact `test-report` (report.json = the next run's baseline; kept 90 days on main);
+# and the check run "Test results" (EnricoMi/publish-unit-test-result-action): every test in the
+# GitHub UI, failures as annotations. Regressions: compared with the report of the last successful run on main (its artifact).
 # `tests` is the merge gate (make it the required status check; rust.yml has no test jobs). It fails
 # when a test failed or was flaky (failed first, passed on a retry: .config/nextest.toml sets the
 # retries), when a doctest failed, or when results are missing (a build or a job failed).
@@ -224,6 +225,7 @@ jobs:
       actions: read # the report artifact of main
       pull-requests: write # the comment
       issues: write
+      checks: write # the check run "Test results"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -269,6 +271,28 @@ jobs:
             --commit "$COMMIT" --json report/report.json --markdown report/report.md --full report/full.md
           cat report/full.md >>"$GITHUB_STEP_SUMMARY"
           cp -r results report/results
+
+      # Every test in GitHub's UI: a check run "Test results" with all tests (also on pull request
+      # branches), failures as annotations, and the change against earlier commits. Our own report
+      # stays the PR comment and the job summary, so the action writes neither. Informational: the
+      # gate is the last step. Pull requests from forks get no check run (read-only token).
+      - name: Check run with every test
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        uses: EnricoMi/publish-unit-test-result-action/linux@da5b7be67623cd59bbbd1a0ce4f022050a55605f # v2.26.0
+        with:
+          check_name: Test results
+          # The same files as the report: unit + the e2e tests of E2E_REQUIRED (keep in step).
+          files: |
+            results/results-unit/*junit.xml
+            results/results-e2e-smoke/*junit.xml
+            results/results-e2e-german/*junit.xml
+            results/results-e2e-pseudo/*junit.xml
+            results/results-e2e-outage/*junit.xml
+          comment_mode: "off"
+          job_summary: false
+          check_run_annotations: all tests, skipped tests
+          check_run_annotations_branch: "*"
 
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
