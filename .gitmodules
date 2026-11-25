@@ -1,12 +1,12 @@
 [submodule "docs/technical"]
 	path = docs/technical
-	url = git@github.com:NelDav/Musicus-docs.git
+	url = https://github.com/Musicus-Sheets/Musicus-docs.git
 	branch = main
 [submodule "docs/requirements"]
 	path = docs/requirements
-	url = git@github.com:NelDav/Musicus-requirements.git
+	url = https://github.com/Musicus-Sheets/Musicus-requirements.git
 	branch = main
 [submodule "docs/user-guide"]
 	path = docs/user-guide
-	url = git@github.com:NelDav/Musicus-user-guide.git
+	url = https://github.com/Musicus-Sheets/Musicus-user-guide.git
 	branch = main

@@ -745,7 +745,7 @@ jobs:
             fi
           }
           tag_repo "$REPO" "$SHA"
-          # Submodule path => repository (the URLs in .gitmodules are not used: they are SSH URLs).
+          # Submodule path => repository (fixed here instead of read from .gitmodules, whose URLs could change).
           for pair in docs/requirements=Musicus-requirements docs/technical=Musicus-docs \
                       docs/user-guide=Musicus-user-guide; do
             path="${pair%%=*}" target="$OWNER/${pair#*=}"
