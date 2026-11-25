@@ -109,8 +109,9 @@ docker compose logs musicus           # the one-time admin setup link
 The web client is then on http://localhost:8080; the port is published on
 every address over IPv4 and IPv6 (`MUSICUS_LOCAL_ONLY` empty). `MUSICUS_LOCAL_ONLY=true`
 publishes it on `127.0.0.1` and `[::1]` only, for a proxy on the same machine
-(either address, or `localhost`, works). Other addresses: a
-`compose.override.yaml` with `ports: !override` (user guide). Tablets and phones on the
+(either address, or `localhost`, works). Other addresses, or the data in a
+folder of your own instead of the volume: your own `compose.override.yaml`
+(example `compose.override.example.yaml`, user guide). Tablets and phones on the
 network need HTTPS (see below). With a domain that points to the machine,
 set `MUSICUS_DOMAIN`, `MUSICUS_PUBLIC_URL`, `MUSICUS_LOCAL_ONLY=true` and
 `MUSICUS_TRUST_PROXY=true` in `.env`, then start with Caddy in front. Caddy

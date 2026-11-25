@@ -38,10 +38,12 @@ services:
       # MUSICUS_LOCAL_ONLY=true (any non-empty value): only 127.0.0.1 and
       # [::1], for the https profile or a proxy on this machine, so nobody
       # bypasses it; the proxy may connect to "localhost".
-      # Other addresses: compose.override.yaml with `ports: !override`
-      # (see the user guide).
+      # Other addresses: your own compose.override.yaml, see
+      # compose.override.example.yaml and the user guide.
       - "${MUSICUS_LOCAL_ONLY:+127.0.0.1:}${MUSICUS_PORT:-8080}:8080"
       - "${MUSICUS_LOCAL_ONLY:+[::1]:}${MUSICUS_PORT:-8080}:8080"
+    # Data in a folder of your own instead of this volume (running as your
+    # user): compose.override.yaml, see compose.override.example.yaml.
     volumes:
       - musicus-data:/data
     # On SIGTERM the server announces the stop to open browsers, serves them
