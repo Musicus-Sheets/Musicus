@@ -36,3 +36,7 @@ __pycache__/
 
 # Local test scores (copyrighted; never commit them or images derived from them)
 /example_scores/
+
+# Coverage profiles (instrumented builds; build scripts write them into their crate folder).
+*.profraw
+*.profdata
