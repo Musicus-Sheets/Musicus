@@ -145,8 +145,8 @@ merged release missing) is refused with a message: move the data directory away.
 Step by step for the maintainer: `RELEASING.md` (repository root; kinds and what they may contain, `release/<version>`
 branch, version bump, `scripts/release-migrations.py`, checklist incl. "patch: no new stored values", release pull
 request with a `## Release notes` section → dry run → merge → real run → check, running it again, checking the docs tags
-(R-OPS-036), troubleshooting). Pipeline: `.github/workflows/release.yml` (a-release-pipeline, R-OPS-049): dry run on the
-release pull request; the push of its merge to main starts the real run; `workflow_dispatch` (`version`, `ref`,
+(R-OPS-036), troubleshooting). Pipeline: `.github/workflows/release.yml` (a-release-pipeline, R-OPS-049): dry run on every
+push to a `release/X.Y.Z` branch (needs its open pull request; checks show there, other pull requests start nothing); the push of its merge to main starts the real run; `workflow_dispatch` (`version`, `ref`,
 `publish`) runs it again from main. Stage 1 (expiring artifacts): `checks`, `lint`, `web`, `program` ×5 platforms,
 `image`, `docs`, `assets` → gate `stage-1`; stage 2: `images` → `tag` → `github-release` → `site`. Locally:
 ```sh

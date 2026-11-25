@@ -131,10 +131,12 @@ The release pipeline builds and checks everything first and publishes only when 
 
 1. Open the pull request from `release/X.Y.Z` to `main`. Its description must have a section
    `## Release notes` (§ 5): the pipeline takes the notes from there (read when it runs, so later edits
-   count) and fails without it. The pipeline runs as a **dry run** on the pull request (workflow `Release`):
-   it builds and checks everything (stage 1 below) and publishes nothing. It and all other required checks
-   must be green. A new push to the branch starts the dry run again; after editing only the description,
-   use **Re-run all jobs** of the last run.
+   count) and fails without it. Every push to the branch `release/X.Y.Z` starts the **dry run** (workflow
+   `Release`): it builds and checks everything (stage 1 below) and publishes nothing; its checks show on
+   the pull request. The first push usually comes before the pull request exists, so that dry run fails
+   with "no open pull request": open the pull request, then **Re-run all jobs** of that run (Actions →
+   Release, or the failed check on the pull request). The same after editing only the description. The
+   dry run and all other required checks must be green. Other pull requests do not start the workflow.
 2. **Merge** the pull request (as a person or through the merge queue; use a merge commit, squash or rebase).
    The push of the merge to `main` starts the **real run** automatically:
    - *Stage 1* (temporary results only, workflow artifacts that expire after 7 days):
@@ -221,6 +223,8 @@ is served; such a build must never be published.
   § 2 step 2 (also commit `Cargo.lock`); previews or `releases.txt` ⇒ run `scripts/release-migrations.py X.Y.Z` on
   a clean branch; a patch with database changes ⇒ make it a minor. Check locally with
   `scripts/release-check.py --branch release/X.Y.Z origin/main`.
+- **The job `plan` fails with "no open pull request"**: open the pull request from `release/X.Y.Z` into
+  `main`, then **Re-run all jobs** (or push again).
 - **The job `assets` fails with "no section `## Release notes`"**: add the section to the pull request
   description, then **Re-run all jobs**.
 - **The job `docs` fails on a title page**: the docs submodules point to commits whose title page does not take
