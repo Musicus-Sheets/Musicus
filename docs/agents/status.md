@@ -49,7 +49,8 @@ Also not implemented (no requirement yet): user deletion, rate limiting beyond l
 ## Verification gaps (implemented but not covered by automated tests)
 
 - Session expiry/sliding (R-ACC-005), reinvite (R-ACC-010), security headers (R-SEC-005), backup command (R-OPS-005), TLS (R-OPS-006; also the TLS path of the shutdown drain).
-- Open clients (a-client-outage): `e2e/outage.mjs` is not part of CI (needs a browser and starts its own server); not tested: Firefox/Safari EventSource behaviour, the browser's `beforeunload` dialog (only its condition), a proxy (nginx/Caddy) between client and server, the 6-connections-per-origin limit with many tabs over HTTP/1.1, the `invalid_ink` refusal path in a browser (logic only).
+- E2E in CI (a-e2e-ci, workflow `E2E`): `smoke` stops at the mass-import step ("Import all green (1)" never appears; separate fix branch `fix/import-sample-pdf`), so `e2e (smoke)` is red until that is merged; `german`, `pseudo`, `outage` pass. `smoke` in Firefox (Playwright 1.65, Firefox 159) crashes the page at the tag-chip step (`smoke.mjs` line 174, reproducible locally), so `e2e (smoke-firefox)` is non-blocking; not investigated.
+- Open clients (a-client-outage): `e2e/outage.mjs` runs in CI (workflow `E2E`, a-e2e-ci); not tested: Firefox/Safari EventSource behaviour, the browser's `beforeunload` dialog (only its condition), a proxy (nginx/Caddy) between client and server, the 6-connections-per-origin limit with many tabs over HTTP/1.1, the `invalid_ink` refusal path in a browser (logic only).
 - Performance requirements R-PERF-001/003/005/006 verified only by prototype benchmarks in `prototypes/` and a manual RSS measurement (≈11 MB idle).
 - System view: only synthetic PDFs in automated tests; real scores checked manually with `examples/layout_report.rs`
   (numbers in `layout.md`). Physical staff size depends on the device density (a-css-mm). Detection time on a

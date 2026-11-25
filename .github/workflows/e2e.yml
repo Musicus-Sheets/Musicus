@@ -1,0 +1,135 @@
+name: E2E
+# End-to-end browser tests (Playwright) against a real server with the release web client:
+# e2e/smoke.mjs (main flows), e2e/german.mjs (German UI), e2e/pseudo.mjs (every text from the
+# catalogue), e2e/outage.mjs (stop, start and update with an open reader). One build job, then one
+# job per test, run by scripts/run-e2e.sh exactly as locally. smoke in Firefox runs too but does
+# not block. Make e2e (smoke), e2e (german), e2e (pseudo) and e2e (outage) required checks once
+# they are reliably green.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+  push:
+    branches: [main]
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+env:
+  # Same toolchain as rust.yml and the Docker build; same dx as the Dockerfile and release.yml.
+  RUST_TOOLCHAIN: "1.97"
+  DX_VERSION: 0.7.10
+  CARGO_TERM_COLOR: always
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Dioxus CLI (cached)
+        id: dx-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/musicus-dx
+          key: dx-${{ env.DX_VERSION }}-${{ runner.os }}-${{ runner.arch }}-rust-${{ env.RUST_TOOLCHAIN }}
+      - name: Install the Dioxus CLI
+        if: steps.dx-cache.outputs.cache-hit != 'true'
+        run: cargo install --locked dioxus-cli --version "$DX_VERSION" --root ~/.cache/musicus-dx
+      - run: echo "$HOME/.cache/musicus-dx/bin" >>"$GITHUB_PATH"
+      - run: ./scripts/fetch-pdfjs.sh
+      # The release client, as users get it; the folder is emptied first (no files of a cached build).
+      - name: Build the web client
+        run: |
+          rm -rf target/dx/musicus-web/release
+          dx bundle --platform web --package musicus-web --release
+          test -f target/dx/musicus-web/release/web/public/index.html
+      # Release build: password hashing in a debug build is slow enough to time out browser steps.
+      - name: Build the server
+        run: cargo build --locked --release -p musicus-server
+      - name: Collect
+        run: |
+          mkdir -p e2e-build
+          cp target/release/musicus-server e2e-build/
+          cp -r target/dx/musicus-web/release/web/public e2e-build/web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: e2e-build
+          path: e2e-build
+          retention-days: 3
+          if-no-files-found: error
+
+  e2e:
+    needs: build
+    name: e2e (${{ matrix.test }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        test: [smoke, german, pseudo, outage]
+        browser: [chromium]
+        blocking: [true]
+        include:
+          - test: smoke-firefox
+            browser: firefox
+            blocking: false
+    # Firefox does not block: a failure there shows as a failed job, the run stays green.
+    continue-on-error: ${{ !matrix.blocking }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: e2e-build
+          path: e2e-build
+      - run: chmod +x e2e-build/musicus-server
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+      - name: Install the test dependencies
+        working-directory: e2e
+        run: npm ci --no-audit --no-fund
+      - name: Playwright version
+        id: pw
+        working-directory: e2e
+        run: echo "version=$(node -p "require('playwright/package.json').version")" >>"$GITHUB_OUTPUT"
+      - name: Playwright browsers (cached)
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ steps.pw.outputs.version }}-${{ matrix.browser }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Install the browser
+        working-directory: e2e
+        env:
+          BROWSER_NAME: ${{ matrix.browser }}
+        run: |
+          if [[ "${{ steps.pw-cache.outputs.cache-hit }}" == true ]]; then
+            npx playwright install-deps "$BROWSER_NAME"
+          else
+            npx playwright install --with-deps "$BROWSER_NAME"
+          fi
+      - name: Run e2e/${{ matrix.test }}
+        env:
+          MUSICUS_SERVER: e2e-build/musicus-server
+          MUSICUS_WEB: e2e-build/web
+          TEST: ${{ matrix.test }}
+        run: scripts/run-e2e.sh "$TEST" e2e-out
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-${{ matrix.test }}-failure
+          path: e2e-out
+          retention-days: 7
+          if-no-files-found: ignore
