@@ -1,8 +1,9 @@
 name: Rust
-# Format, lint and tests of the Rust workspace, as separate jobs that run in
-# parallel. Runs on pull requests, the merge queue and pushes to main. Make the
-# jobs merge gates by marking them as required status checks
-# (fmt, clippy, clippy-wasm, test, test-web).
+# Format and lint of the Rust workspace, as separate jobs that run in parallel.
+# Runs on pull requests, the merge queue and pushes to main. Make the jobs merge
+# gates by marking them as required status checks (fmt, clippy, clippy-wasm).
+# The tests run in .github/workflows/tests.yml (job `tests`, with the test
+# report and the coverage).
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -55,25 +56,3 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --locked -p musicus-web --target wasm32-unknown-unknown
 
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --locked
-      - run: cargo test --locked -p musicus-server --features embed-web --test embedded_web
-        env:
-          MUSICUS_WEB_DIST: crates/musicus-server/tests/fixtures/web
-
-  test-web:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --locked -p musicus-web

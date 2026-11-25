@@ -6,8 +6,11 @@ name: Tests
 #   - one comment on the pull request, updated in place (hidden marker; not for forks),
 #   - the artifact `test-report` (report.json = the next run's baseline; kept 90 days on main).
 # Regressions: compared with the report of the last successful run on main (its artifact).
-# The merge gate for tests stays the job `test` of rust.yml; this job fails too when a test fails,
-# but only after the report is written. Locally: `cargo test` as always; the same report with
+# The job `tests` is the merge gate for the Rust tests (make it a required status check; rust.yml has
+# no test jobs any more). It fails, after the report is written, when a test failed, when a test was
+# flaky (failed first, passed on a retry: .config/nextest.toml sets the retries), or when a doctest
+# failed (nextest does not run doctests; `cargo test --doc` does). Locally: `cargo test` as always; the
+# same report with
 #   cargo llvm-cov nextest --no-report --workspace --profile ci
 #   cargo llvm-cov nextest --no-report -p musicus-server --features embed-web --test embedded_web --profile ci-embed
 #   cargo llvm-cov report --lcov --output-path target/lcov.info
@@ -16,6 +19,7 @@ name: Tests
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
   push:
     branches: [main]
 concurrency:
@@ -29,7 +33,7 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 jobs:
-  report:
+  tests:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -67,7 +71,10 @@ jobs:
           cargo llvm-cov nextest --locked --no-report -p musicus-server --features embed-web \
             --test embedded_web --profile ci-embed
           embedded=$?
-          if [[ $workspace -ne 0 || $embedded -ne 0 ]]; then
+          # Doctests: not run by nextest, so plainly (not instrumented; none exist today).
+          cargo test --locked --doc
+          doc=$?
+          if [[ $workspace -ne 0 || $embedded -ne 0 || $doc -ne 0 ]]; then
             echo "failed=true" >>"$GITHUB_OUTPUT"
           else
             echo "failed=false" >>"$GITHUB_OUTPUT"
@@ -144,8 +151,22 @@ jobs:
             gh api -X PATCH "repos/$REPO/issues/comments/$id" -F "body=@$RUNNER_TEMP/comment.md" --silent
           fi
 
-      - name: Failing tests
-        if: ${{ !cancelled() && steps.run.outputs.failed == 'true' }}
+      # The gate, last: failed or flaky tests (a flaky test passed only on a retry, which nextest
+      # counts as passed), or no report at all.
+      - name: Failing or flaky tests
+        if: ${{ !cancelled() }}
+        env:
+          FAILED: ${{ steps.run.outputs.failed }}
         run: |
-          echo "::error::Tests failed; see the report in the job summary."
-          exit 1
+          [[ -f report/report.json ]] || { echo "::error::No test report (see the steps above)."; exit 1; }
+          flaky="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["counts"].get("flaky", 0))' report/report.json)"
+          status=0
+          if [[ "$FAILED" != false ]]; then
+            echo "::error::Tests failed; see the report in the job summary."
+            status=1
+          fi
+          if [[ "$flaky" -gt 0 ]]; then
+            echo "::error::$flaky flaky test(s): failed first, passed on a retry; see the report in the job summary."
+            status=1
+          fi
+          exit "$status"

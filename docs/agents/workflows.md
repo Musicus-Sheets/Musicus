@@ -10,8 +10,8 @@ cargo run --release -p musicus-server --example layout_report -- a.pdf …   # s
 cargo clippy --all-targets        # must be warning-free
 cargo fmt --check                 # rustfmt.toml: max_width 120
 cargo clippy -p musicus-web --target wasm32-unknown-unknown
-# CI (workflow `Rust`, .github/workflows/rust.yml) runs fmt, clippy, clippy-wasm, test and test-web as
-# parallel jobs with RUSTFLAGS=-D warnings; when the Docker build's Rust version changes, change RUST_TOOLCHAIN too
+# CI (workflow `Rust`, .github/workflows/rust.yml) runs fmt, clippy and clippy-wasm as parallel jobs with
+# RUSTFLAGS=-D warnings; the tests run in workflow `Tests` (job `tests`, below); when the Docker build's Rust version changes, change RUST_TOOLCHAIN too
 # (also in tests.yml).
 # Test report as in CI (workflow `Tests`, a-test-report; needs cargo-nextest, cargo-llvm-cov, llvm-tools; on a system
 # Rust without rustup set LLVM_COV=/usr/bin/llvm-cov LLVM_PROFDATA=/usr/bin/llvm-profdata):
