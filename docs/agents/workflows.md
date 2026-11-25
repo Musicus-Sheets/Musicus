@@ -33,7 +33,7 @@ python3 scripts/check-db-changes.py --branch "$(git branch --show-current)" orig
 node e2e/pseudo.mjs <admin-invite-url>   # pseudo-locale run (fresh data dir; every UI text marked)
 node e2e/german.mjs <admin-invite-url> [shots]   # German run (fresh data dir; de-DE browser; screenshots + phone-width overflow with a dir)
 node e2e/outage.mjs target/debug/musicus-server <web dir> 8191 [shots]   # stop/start/update with an open reader; starts its own server (port and port+1)
-scripts/run-e2e.sh smoke|smoke-firefox|german|pseudo|outage [out-dir]   # one e2e test exactly like CI (workflow `E2E`): fresh server, invite from its log; needs the release server + client (MUSICUS_SERVER, MUSICUS_WEB) and `cd e2e && npm ci && npx playwright install chromium`
+scripts/run-e2e.sh smoke|smoke-firefox|german|pseudo|outage [out-dir]   # one e2e test exactly like CI (workflow `Tests`, E2E_JUNIT=<file> for its JUnit): fresh server, invite from its log; needs the release server + client (MUSICUS_SERVER, MUSICUS_WEB) and `cd e2e && npm ci && npx playwright install chromium`
 python3 scripts/i18n-review.py de > review-de.md   # side-by-side English | German for the maintainer's review (not shipped)
 python3 docs/agents/check.py [--since <ref>]
 uv run docs/requirements/tools/validate.py

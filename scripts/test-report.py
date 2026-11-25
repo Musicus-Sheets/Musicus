@@ -179,7 +179,7 @@ def requirement_coverage(items: list[dict], tests: dict[str, dict]) -> dict:
         elif matched and states <= {"passed", "flaky"}:
             state = "passing"
         else:
-            # Only e2e or script references, which this report does not contain (yet).
+            # Only references to tests that are not in this run's JUnit files (other scripts).
             state = "not in this run"
         rows.append({
             "id": item["id"], "title": item.get("title", ""), "priority": item.get("priority"),
@@ -297,11 +297,13 @@ def render(report: dict, diff: dict | None, full: bool) -> str:
         before = (diff or {}).get("requirements") or {}
         pct = percent(req["tested"], req["total"])
         bpct = percent(before.get("tested", 0), before.get("total", 0)) if before else None
+        failing = sum(1 for r in req["rows"] if r["state"] == "failing")
+        absent = req["tested"] - req["passing"] - failing
         lines += [f"### Requirement coverage: {pct} %{delta(pct, bpct)}", "",
                   f"{req['tested']} of {req['total']} built must/should requirements (level 3, implemented or "
-                  f"verified) name a test (`verified_by`); for {req['passing']} of them the named Rust tests ran "
-                  "and passed in this run. The others are verified by end-to-end or script tests that this report "
-                  "does not contain yet.", ""]
+                  f"verified) name a test (`verified_by`). In this run: the named tests (Rust and browser tests) "
+                  f"ran and passed for {req['passing']}, one of them failed for {failing}, and {absent} name only "
+                  "tests that are not in this report (other scripts).", ""]
         groups = {
             "untested": "Without a test",
             "failing": "❌ With a failing test",

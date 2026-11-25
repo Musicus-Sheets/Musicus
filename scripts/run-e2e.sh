@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs one end-to-end browser test (e2e/*.mjs) against a freshly started server, the same way
-# locally and in CI (workflow `E2E`, .github/workflows/e2e.yml).
+# locally and in CI (workflow `Tests`, jobs `e2e`, .github/workflows/tests.yml).
 #
 # Usage: scripts/run-e2e.sh <smoke|smoke-firefox|german|pseudo|outage> [out-dir]
 #
@@ -9,7 +9,10 @@
 #   MUSICUS_SERVER  server program   (default target/release/musicus-server)
 #   MUSICUS_WEB     web client folder (default target/dx/musicus-web/release/web/public)
 #   E2E_PORT        port on 127.0.0.1 (default 8191; outage also uses port+1)
-# out-dir (default target/e2e/<test>): screenshots, the server log, the sample PDF.
+#   E2E_JUNIT       optional: write a JUnit file there (every `ok -` check a test case;
+#                   scripts/e2e-junit.py), for the test report (workflow `Tests`)
+# out-dir (default target/e2e/<test>): screenshots, the server log, the sample PDF, the test's
+# output (output.log).
 #
 # smoke, german and pseudo each get a fresh data directory and the one-time admin invite link
 # from the server log; outage starts and stops its own server. The server is stopped when the
@@ -32,8 +35,22 @@ port="${E2E_PORT:-8191}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 
+# Runs the test, keeps its output in output.log, writes the JUnit file if asked, and exits with
+# the test's status.
+run() {
+  local status=0 suite="e2e/$test.mjs"
+  [[ "$test" != smoke-firefox ]] || suite="e2e/smoke.mjs (firefox)"
+  "$@" 2>&1 | tee "$out/output.log" || status=$?
+  if [[ -n "${E2E_JUNIT:-}" ]]; then
+    python3 "$ROOT/scripts/e2e-junit.py" --suite "$suite" --log "$out/output.log" \
+      --status "$status" --out "$E2E_JUNIT"
+  fi
+  return "$status"
+}
+
 if [[ "$test" == outage ]]; then
-  exec node "$ROOT/e2e/outage.mjs" "$server" "$web" "$port" "$out"
+  run node "$ROOT/e2e/outage.mjs" "$server" "$web" "$port" "$out"
+  exit
 fi
 
 data="$(mktemp -d "${TMPDIR:-/tmp}/musicus-e2e-$test.XXXXXX")"
@@ -70,12 +87,12 @@ echo "server ready on $base (log: $log)"
 case "$test" in
   smoke)
     node "$ROOT/e2e/sample-pdf.mjs" "$out/sample.pdf"
-    node "$ROOT/e2e/smoke.mjs" "$invite" "$out/sample.pdf" "$out/shots"
+    run node "$ROOT/e2e/smoke.mjs" "$invite" "$out/sample.pdf" "$out/shots"
     ;;
   smoke-firefox)
     node "$ROOT/e2e/sample-pdf.mjs" "$out/sample.pdf"
-    BROWSER=firefox node "$ROOT/e2e/smoke.mjs" "$invite" "$out/sample.pdf" "$out/shots"
+    run env BROWSER=firefox node "$ROOT/e2e/smoke.mjs" "$invite" "$out/sample.pdf" "$out/shots"
     ;;
-  german) node "$ROOT/e2e/german.mjs" "$invite" "$out/shots" ;;
-  pseudo) node "$ROOT/e2e/pseudo.mjs" "$invite" ;;
+  german) run node "$ROOT/e2e/german.mjs" "$invite" "$out/shots" ;;
+  pseudo) run node "$ROOT/e2e/pseudo.mjs" "$invite" ;;
 esac

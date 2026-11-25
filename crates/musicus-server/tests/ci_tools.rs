@@ -20,3 +20,15 @@ fn test_report_unit_tests() {
     };
     assert!(out.status.success(), "{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
 }
+
+/// `scripts/test_e2e_tools.py`: the JUnit file of a browser test (`scripts/e2e-junit.py`) and the
+/// merge gate of the workflow `Tests` (`scripts/test-gate.sh`; a-test-report, a-e2e-ci).
+#[test]
+fn e2e_tools_unit_tests() {
+    let script = repo().join("scripts/test_e2e_tools.py");
+    let Some(out) = ["python3", "python"].iter().find_map(|py| Command::new(py).arg(&script).output().ok()) else {
+        eprintln!("no Python: e2e tools not tested");
+        return;
+    };
+    assert!(out.status.success(), "{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+}
