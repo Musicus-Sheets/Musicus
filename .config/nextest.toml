@@ -1,0 +1,24 @@
+# cargo-nextest settings (a-test-report). `cargo test` stays the everyday command; CI's workflow
+# `Tests` runs `cargo llvm-cov nextest --profile ci` for the test list and the coverage.
+[profile.ci]
+# Run every test even after a failure, so the report lists all of them.
+fail-fast = false
+# A failure that passes on a retry is reported as flaky, not hidden.
+retries = 1
+
+[profile.ci.junit]
+# target/nextest/ci/junit.xml
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+
+# The tests of the built-in web client (`--features embed-web --test embedded_web`), a second run
+# with its own JUnit file: target/nextest/ci-embed/junit.xml.
+[profile.ci-embed]
+fail-fast = false
+retries = 1
+
+[profile.ci-embed.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true

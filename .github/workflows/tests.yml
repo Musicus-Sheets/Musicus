@@ -1,0 +1,151 @@
+name: Tests
+# Test report (a-test-report): every Rust test with its state, regressions against main, code
+# coverage and requirement coverage. One instrumented run (cargo llvm-cov + cargo-nextest) gives
+# both the test list (JUnit) and the coverage (lcov); scripts/test-report.py turns them into:
+#   - the job summary (everything, including the list of every test),
+#   - one comment on the pull request, updated in place (hidden marker; not for forks),
+#   - the artifact `test-report` (report.json = the next run's baseline; kept 90 days on main).
+# Regressions: compared with the report of the last successful run on main (its artifact).
+# The merge gate for tests stays the job `test` of rust.yml; this job fails too when a test fails,
+# but only after the report is written. Locally: `cargo test` as always; the same report with
+#   cargo llvm-cov nextest --no-report --workspace --profile ci
+#   cargo llvm-cov nextest --no-report -p musicus-server --features embed-web --test embedded_web --profile ci-embed
+#   cargo llvm-cov report --lcov --output-path target/lcov.info
+#   python3 scripts/test-report.py --junit target/nextest/ci/junit.xml --junit target/nextest/ci-embed/junit.xml \
+#     --lcov target/lcov.info --requirements docs/requirements/requirements.json
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  push:
+    branches: [main]
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+env:
+  # Same toolchain as rust.yml.
+  RUST_TOOLCHAIN: "1.97"
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      actions: read # the report artifact of main
+      pull-requests: write # the comment
+      issues: write
+    env:
+      MUSICUS_WEB_DIST: crates/musicus-server/tests/fixtures/web
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # Only the requirements (public): the requirement coverage reads requirements.json.
+      - name: Check out the requirements
+        run: git submodule update --init --depth 1 docs/requirements
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9,cargo-llvm-cov@0.9
+
+      # Every test runs even after a failure (profile `ci`, .config/nextest.toml); the state of the
+      # tests is kept for the last step, so the report is written either way.
+      - name: Run the tests with coverage
+        id: run
+        run: |
+          set +e
+          cargo llvm-cov nextest --locked --no-report --workspace --profile ci
+          workspace=$?
+          # The built-in web client (R-OPS-030), as in rust.yml.
+          cargo llvm-cov nextest --locked --no-report -p musicus-server --features embed-web \
+            --test embedded_web --profile ci-embed
+          embedded=$?
+          if [[ $workspace -ne 0 || $embedded -ne 0 ]]; then
+            echo "failed=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "failed=false" >>"$GITHUB_OUTPUT"
+          fi
+          set -e
+          cargo llvm-cov report --lcov --output-path target/lcov.info
+          cargo llvm-cov report --summary-only
+
+      - name: Report of main to compare with
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/baseline"
+          run_id="$(gh run list --repo "$REPO" --workflow tests.yml --branch main --event push \
+            --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+          if [[ -z "$run_id" ]]; then
+            echo "::notice::No successful run of Tests on main yet: nothing to compare with."
+          elif ! gh run download "$run_id" --repo "$REPO" --name test-report --dir "$RUNNER_TEMP/baseline"; then
+            echo "::notice::The report of main (run $run_id) is not available (expired?): nothing to compare with."
+          fi
+
+      - name: Test report
+        if: ${{ !cancelled() }}
+        env:
+          COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          args=()
+          for f in target/nextest/ci/junit.xml target/nextest/ci-embed/junit.xml; do
+            [[ ! -f "$f" ]] || args+=(--junit "$f")
+          done
+          [[ ${#args[@]} -gt 0 ]] || { echo "::error::No test results (the build failed?)"; exit 1; }
+          [[ ! -f target/lcov.info ]] || args+=(--lcov target/lcov.info)
+          [[ ! -f "$RUNNER_TEMP/baseline/report.json" ]] || args+=(--baseline "$RUNNER_TEMP/baseline/report.json")
+          mkdir -p report
+          python3 scripts/test-report.py "${args[@]}" --requirements docs/requirements/requirements.json \
+            --commit "$COMMIT" --json report/report.json --markdown report/report.md --full report/full.md
+          cat report/full.md >>"$GITHUB_STEP_SUMMARY"
+          for f in target/nextest/ci/junit.xml target/nextest/ci-embed/junit.xml target/lcov.info; do
+            [[ ! -f "$f" ]] || cp "$f" "report/$(echo "${f#target/}" | tr / -)"
+          done
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: test-report
+          path: report/
+          if-no-files-found: ignore
+          retention-days: ${{ github.event_name == 'push' && 90 || 14 }}
+
+      # Informational only: a failure here (e.g. a read-only token) must not fail the pull request.
+      - name: Comment on the pull request
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          [[ -f report/report.md ]] || exit 0
+          marker='<!-- musicus-test-report -->'
+          {
+            cat report/report.md
+            echo
+            echo "Every test, coverage per file: [job summary]($GITHUB_SERVER_URL/$REPO/actions/runs/$GITHUB_RUN_ID)."
+          } >"$RUNNER_TEMP/comment.md"
+          id="$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$marker\"))) | .id" | head -n 1)"
+          if [[ -z "$id" ]]; then
+            gh api "repos/$REPO/issues/$PR/comments" -F "body=@$RUNNER_TEMP/comment.md" --silent
+          else
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F "body=@$RUNNER_TEMP/comment.md" --silent
+          fi
+
+      - name: Failing tests
+        if: ${{ !cancelled() && steps.run.outputs.failed == 'true' }}
+        run: |
+          echo "::error::Tests failed; see the report in the job summary."
+          exit 1

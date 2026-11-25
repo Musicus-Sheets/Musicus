@@ -4,14 +4,21 @@
 
 ```sh
 cargo build                       # api + server (web excluded from default-members)
-cargo test                        # api unit, i18n unit + catalogue checks, server unit, API integration tests, no_prose, release scripts + program smoke test (tests/release_tools.rs; needs python3, git)
+cargo test                        # api unit, i18n unit + catalogue checks, server unit, API integration tests, no_prose, release scripts + program smoke test (tests/release_tools.rs; needs python3, git), test-report script (tests/ci_tools.rs)
 cargo test -p musicus-web         # client unit tests on the host (errors.rs: texts, pseudo-locale check); not in default-members
 cargo run --release -p musicus-server --example layout_report -- a.pdf …   # system detection per page (regressions)
 cargo clippy --all-targets        # must be warning-free
 cargo fmt --check                 # rustfmt.toml: max_width 120
 cargo clippy -p musicus-web --target wasm32-unknown-unknown
 # CI (workflow `Rust`, .github/workflows/rust.yml) runs fmt, clippy, clippy-wasm, test and test-web as
-# parallel jobs with RUSTFLAGS=-D warnings; when the Docker build's Rust version changes, change RUST_TOOLCHAIN too.
+# parallel jobs with RUSTFLAGS=-D warnings; when the Docker build's Rust version changes, change RUST_TOOLCHAIN too
+# (also in tests.yml).
+# Test report as in CI (workflow `Tests`, a-test-report; needs cargo-nextest, cargo-llvm-cov, llvm-tools; on a system
+# Rust without rustup set LLVM_COV=/usr/bin/llvm-cov LLVM_PROFDATA=/usr/bin/llvm-profdata):
+cargo llvm-cov nextest --no-report --workspace --profile ci
+MUSICUS_WEB_DIST=crates/musicus-server/tests/fixtures/web cargo llvm-cov nextest --no-report -p musicus-server --features embed-web --test embedded_web --profile ci-embed
+cargo llvm-cov report --lcov --output-path target/lcov.info
+python3 scripts/test-report.py --junit target/nextest/ci/junit.xml --junit target/nextest/ci-embed/junit.xml --lcov target/lcov.info --requirements docs/requirements/requirements.json
 ./scripts/fetch-pdfjs.sh          # once (again after changes of the script); populates crates/musicus-web/public/vendor/pdfjs (gitignored)
 dx build --platform web --package musicus-web            # debug → target/dx/musicus-web/debug/web/public
 dx bundle --platform web --package musicus-web --release # release (needs wasm-opt)
