@@ -13,6 +13,8 @@ cargo clippy -p musicus-web --target wasm32-unknown-unknown
 # CI (workflow `Rust`, .github/workflows/rust.yml) runs fmt, clippy and clippy-wasm as parallel jobs with
 # RUSTFLAGS=-D warnings; the tests run in workflow `Tests` (job `tests`, below); when the Docker build's Rust version changes, change RUST_TOOLCHAIN too
 # (also in tests.yml).
+# Status images of the README from a report (a-test-status; CI writes them to the branch `status` after every run on main):
+python3 scripts/status-card.py --report report.json --gate success --commit HEAD --out target/status
 # Test report as in CI (workflow `Tests`, a-test-report; needs cargo-nextest, cargo-llvm-cov, llvm-tools; on a system
 # Rust without rustup set LLVM_COV=/usr/bin/llvm-cov LLVM_PROFDATA=/usr/bin/llvm-profdata):
 cargo llvm-cov nextest --no-report --workspace --profile ci

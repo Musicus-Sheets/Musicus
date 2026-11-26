@@ -123,3 +123,11 @@ pull request comment.
 
 The environment and its secret exist only in `Musicus`: the job runs there and reaches the docs
 repositories through the app's installation.
+
+# Test status images (branch `status`)
+
+The workflow `Tests` replaces the single commit of the branch `status` after every run on `main` (status card and
+badges for the README, a-test-status in the agent docs). It pushes with the workflow's own token. Nothing to set up,
+unless a branch ruleset or branch protection covers **all** branches: then exclude `status` from it (ruleset →
+**Target branches** → **Exclude by pattern** `status`; the workflow's own token cannot be put on a bypass list),
+otherwise the job `status` fails (the tests themselves are not affected). Do not protect `status` against force pushes; do not push to it by hand.

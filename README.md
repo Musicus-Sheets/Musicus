@@ -1,5 +1,9 @@
 # Musicus
 
+[![Tests](https://raw.githubusercontent.com/Musicus-Sheets/Musicus/status/badge-tests.svg)](https://github.com/Musicus-Sheets/Musicus/actions/workflows/tests.yml?query=branch%3Amain)
+[![Coverage](https://raw.githubusercontent.com/Musicus-Sheets/Musicus/status/badge-coverage.svg)](https://github.com/Musicus-Sheets/Musicus/actions/workflows/tests.yml?query=branch%3Amain)
+[![Requirements](https://raw.githubusercontent.com/Musicus-Sheets/Musicus/status/badge-requirements.svg)](https://github.com/Musicus-Sheets/Musicus/actions/workflows/tests.yml?query=branch%3Amain)
+
 Musicus provides sheet music to the members of an orchestra or band. A
 librarian uploads PDF parts. Access is granted to groups (e.g. group
 "Trumpets" reads every part tagged with the instrument "Trumpet"). Every
@@ -22,6 +26,14 @@ docs/agents/       technical documentation for coding agents (see AGENTS.md)
 docs/user-guide/   user guide: installation and use (Typst → HTML + PDF, git submodule)
 scripts/           fetch-pdfjs.sh
 ```
+
+
+## Test status
+
+Tests on `main`, updated after every run of the workflow `Tests` (unit tests, browser tests, code coverage,
+requirements by goal):
+
+[![Test status of Musicus](https://raw.githubusercontent.com/Musicus-Sheets/Musicus/status/status.svg)](https://github.com/Musicus-Sheets/Musicus/actions/workflows/tests.yml?query=branch%3Amain)
 
 ## Documentation
 

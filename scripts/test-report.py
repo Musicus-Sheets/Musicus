@@ -221,7 +221,36 @@ def requirement_coverage(items: list[dict], tests: dict[str, dict]) -> dict:
     total = len(rows)
     tested = sum(1 for r in rows if r["state"] != "untested")
     passing = sum(1 for r in rows if r["state"] == "passing")
-    return {"total": total, "tested": tested, "passing": passing, "rows": rows}
+    return {"total": total, "tested": tested, "passing": passing, "rows": rows, "goals": goal_coverage(items, rows)}
+
+
+def goals_of(item: dict, by_id: dict[str, dict], seen: set[str] | None = None) -> set[str]:
+    """The goals (`G-…`) an item refines, directly or through its features."""
+    seen = set() if seen is None else seen
+    goals: set[str] = set()
+    for link in item.get("links", {}).get("refines", []):
+        target = link["target"]
+        if target in seen or target not in by_id:
+            continue
+        seen.add(target)
+        goals |= {target} if target.startswith("G-") else goals_of(by_id[target], by_id, seen)
+    return goals
+
+
+def goal_coverage(items: list[dict], rows: list[dict]) -> list[dict]:
+    """Per goal, its scored requirements (built must/should, level 3): how many there are, how many
+    passed, how many have a failing test. A requirement serving several goals counts for each. Goals
+    without a single scored requirement (nothing built yet) are left out."""
+    by_id = {i["id"]: i for i in items}
+    per: dict[str, dict] = {}
+    for row in rows:
+        for goal in goals_of(by_id[row["id"]], by_id):
+            g = per.setdefault(goal, {"id": goal, "title": by_id[goal].get("title", ""),
+                                      "total": 0, "passing": 0, "failing": 0})
+            g["total"] += 1
+            g["passing"] += row["state"] == "passing"
+            g["failing"] += row["state"] == "failing"
+    return [per[k] for k in sorted(per)]
 
 
 # ---- comparison ----------------------------------------------------------------------------------
