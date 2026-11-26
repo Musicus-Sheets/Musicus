@@ -1,0 +1,309 @@
+name: Tests
+# All tests and the test report (a-test-report, a-e2e-ci). In parallel:
+#   unit    the Rust tests, instrumented once (cargo llvm-cov + cargo-nextest): JUnit + lcov;
+#           doctests plainly (nextest skips them);
+#   build   release web client + release server for the browser tests;
+#   e2e     one job per browser test (e2e/*.mjs, scripts/run-e2e.sh as locally): JUnit from its
+#           `ok -` lines (scripts/e2e-junit.py). smoke in Firefox runs too but does not block and
+#           is not in the report.
+# Then `tests` takes every result and writes, with scripts/test-report.py:
+#   - the job summary (everything, including the list of every test),
+#   - one comment on the pull request, updated in place (hidden marker; not for forks),
+#   - the artifact `test-report` (report.json = the next run's baseline; kept 90 days on main).
+# Regressions: compared with the report of the last successful run on main (its artifact).
+# `tests` is the merge gate (make it the required status check; rust.yml has no test jobs). It fails
+# when a test failed or was flaky (failed first, passed on a retry: .config/nextest.toml sets the
+# retries), when a doctest failed, or when results are missing (a build or a job failed).
+# Locally: `cargo test` and scripts/run-e2e.sh as always; the same report: docs/agents/workflows.md.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  merge_group:
+  push:
+    branches: [main]
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+env:
+  # Same toolchain as rust.yml and the Docker build; same dx as the Dockerfile and release.yml.
+  RUST_TOOLCHAIN: "1.97"
+  DX_VERSION: 0.7.10
+  CARGO_TERM_COLOR: always
+  # The browser tests the gate requires (the matrix of `e2e` without Firefox).
+  E2E_REQUIRED: smoke german pseudo outage
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      RUSTFLAGS: -D warnings
+      MUSICUS_WEB_DIST: crates/musicus-server/tests/fixtures/web
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest@0.9,cargo-llvm-cov@0.9
+
+      # Every test runs even after a failure (profile `ci`, .config/nextest.toml); the results are
+      # uploaded either way, the job fails at its end.
+      - name: Run the tests with coverage
+        id: run
+        run: |
+          set +e
+          cargo llvm-cov nextest --locked --no-report --workspace --profile ci
+          workspace=$?
+          # The built-in web client (R-OPS-030).
+          cargo llvm-cov nextest --locked --no-report -p musicus-server --features embed-web \
+            --test embedded_web --profile ci-embed
+          embedded=$?
+          # Doctests: not run by nextest, so plainly (not instrumented; none exist today).
+          cargo test --locked --doc
+          doc=$?
+          set -e
+          mkdir -p results
+          echo "$doc" >results/doctests-status
+          for f in target/nextest/ci/junit.xml target/nextest/ci-embed/junit.xml; do
+            [[ ! -f "$f" ]] || cp "$f" "results/$(echo "${f#target/}" | tr / -)"
+          done
+          cargo llvm-cov report --lcov --output-path results/lcov.info
+          cargo llvm-cov report --summary-only
+          if [[ $workspace -ne 0 || $embedded -ne 0 || $doc -ne 0 ]]; then
+            echo "failed=true" >>"$GITHUB_OUTPUT"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: results-unit
+          path: results/
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Failing tests
+        if: ${{ steps.run.outputs.failed == 'true' }}
+        run: |
+          echo "::error::Tests failed; see the report of the job tests."
+          exit 1
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Dioxus CLI (cached)
+        id: dx-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/musicus-dx
+          key: dx-${{ env.DX_VERSION }}-${{ runner.os }}-${{ runner.arch }}-rust-${{ env.RUST_TOOLCHAIN }}
+      - name: Install the Dioxus CLI
+        if: steps.dx-cache.outputs.cache-hit != 'true'
+        run: cargo install --locked dioxus-cli --version "$DX_VERSION" --root ~/.cache/musicus-dx
+      - run: echo "$HOME/.cache/musicus-dx/bin" >>"$GITHUB_PATH"
+      - run: ./scripts/fetch-pdfjs.sh
+      # The release client, as users get it; the folder is emptied first (no files of a cached build).
+      - name: Build the web client
+        run: |
+          rm -rf target/dx/musicus-web/release
+          dx bundle --platform web --package musicus-web --release
+          test -f target/dx/musicus-web/release/web/public/index.html
+      # Release build: password hashing in a debug build is slow enough to time out browser steps.
+      - name: Build the server
+        run: cargo build --locked --release -p musicus-server
+      - name: Collect
+        run: |
+          mkdir -p e2e-build
+          cp target/release/musicus-server e2e-build/
+          cp -r target/dx/musicus-web/release/web/public e2e-build/web
+      - uses: actions/upload-artifact@v4
+        with:
+          name: e2e-build
+          path: e2e-build
+          retention-days: 3
+          if-no-files-found: error
+
+  e2e:
+    needs: build
+    name: e2e (${{ matrix.test }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        test: [smoke, german, pseudo, outage]
+        browser: [chromium]
+        blocking: [true]
+        include:
+          - test: smoke-firefox
+            browser: firefox
+            blocking: false
+    # Firefox does not block: a failure there shows as a failed job, the run stays green.
+    continue-on-error: ${{ !matrix.blocking }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: e2e-build
+          path: e2e-build
+      - run: chmod +x e2e-build/musicus-server
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+      - name: Install the test dependencies
+        working-directory: e2e
+        run: npm ci --no-audit --no-fund
+      - name: Playwright version
+        id: pw
+        working-directory: e2e
+        run: echo "version=$(node -p "require('playwright/package.json').version")" >>"$GITHUB_OUTPUT"
+      - name: Playwright browsers (cached)
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ steps.pw.outputs.version }}-${{ matrix.browser }}-${{ runner.os }}-${{ runner.arch }}
+      - name: Install the browser
+        working-directory: e2e
+        env:
+          BROWSER_NAME: ${{ matrix.browser }}
+          CACHE_HIT: ${{ steps.pw-cache.outputs.cache-hit }}
+        run: |
+          if [[ "$CACHE_HIT" == true ]]; then
+            npx playwright install-deps "$BROWSER_NAME"
+          else
+            npx playwright install --with-deps "$BROWSER_NAME"
+          fi
+      - name: Run e2e/${{ matrix.test }}
+        env:
+          MUSICUS_SERVER: e2e-build/musicus-server
+          MUSICUS_WEB: e2e-build/web
+          E2E_JUNIT: results/e2e-${{ matrix.test }}-junit.xml
+          TEST: ${{ matrix.test }}
+        run: scripts/run-e2e.sh "$TEST" e2e-out
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: results-e2e-${{ matrix.test }}
+          path: results/
+          if-no-files-found: ignore
+          retention-days: 3
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-${{ matrix.test }}-failure
+          path: e2e-out
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # The report and the gate: runs when the jobs above are done, whatever their result.
+  tests:
+    needs: [unit, e2e]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read # the report artifact of main
+      pull-requests: write # the comment
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # Only the requirements (public): the requirement coverage reads requirements.json.
+      - name: Check out the requirements
+        run: git submodule update --init --depth 1 docs/requirements
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: results-*
+          path: results
+      - name: Report of main to compare with
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/baseline"
+          run_id="$(gh run list --repo "$REPO" --workflow tests.yml --branch main --event push \
+            --status success --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+          if [[ -z "$run_id" ]]; then
+            echo "::notice::No successful run of Tests on main yet: nothing to compare with."
+          elif ! gh run download "$run_id" --repo "$REPO" --name test-report --dir "$RUNNER_TEMP/baseline"; then
+            echo "::notice::The report of main (run $run_id) is not available (expired?): nothing to compare with."
+          fi
+
+      - name: Test report
+        env:
+          COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          args=()
+          # Unit tests, then the required browser tests (Firefox is left out: it does not block).
+          files=(results/results-unit/nextest-ci-junit.xml results/results-unit/nextest-ci-embed-junit.xml)
+          for t in $E2E_REQUIRED; do files+=("results/results-e2e-$t/e2e-$t-junit.xml"); done
+          for f in "${files[@]}"; do
+            [[ ! -f "$f" ]] || args+=(--junit "$f")
+          done
+          [[ ${#args[@]} -gt 0 ]] || { echo "::error::No test results at all (did every build fail?)"; exit 1; }
+          [[ ! -f results/results-unit/lcov.info ]] || args+=(--lcov results/results-unit/lcov.info)
+          [[ ! -f "$RUNNER_TEMP/baseline/report.json" ]] || args+=(--baseline "$RUNNER_TEMP/baseline/report.json")
+          mkdir -p report
+          python3 scripts/test-report.py "${args[@]}" --requirements docs/requirements/requirements.json \
+            --commit "$COMMIT" --json report/report.json --markdown report/report.md --full report/full.md
+          cat report/full.md >>"$GITHUB_STEP_SUMMARY"
+          cp -r results report/results
+
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: test-report
+          path: report/
+          if-no-files-found: ignore
+          retention-days: ${{ github.event_name == 'push' && 90 || 14 }}
+
+      # Informational only: a failure here (e.g. a read-only token) must not fail the pull request.
+      - name: Comment on the pull request
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          [[ -f report/report.md ]] || exit 0
+          marker='<!-- musicus-test-report -->'
+          {
+            cat report/report.md
+            echo
+            echo "Every test, coverage per file: [job summary]($GITHUB_SERVER_URL/$REPO/actions/runs/$GITHUB_RUN_ID)."
+          } >"$RUNNER_TEMP/comment.md"
+          id="$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+            --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | contains(\"$marker\"))) | .id" | head -n 1)"
+          if [[ -z "$id" ]]; then
+            gh api "repos/$REPO/issues/$PR/comments" -F "body=@$RUNNER_TEMP/comment.md" --silent
+          else
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F "body=@$RUNNER_TEMP/comment.md" --silent
+          fi
+
+      # The gate, last: every expected result is there, no test failed or was flaky (a flaky test
+      # passed only on a retry, which nextest counts as passed), the doctests passed.
+      - name: Failing, flaky or missing tests
+        if: ${{ !cancelled() }}
+        run: scripts/test-gate.sh results report/report.json

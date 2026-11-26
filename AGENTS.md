@@ -48,6 +48,7 @@ cargo clippy --all-targets && cargo fmt --check
 cargo clippy -p musicus-web --target wasm32-unknown-unknown  # client only builds for wasm32
 ./scripts/fetch-pdfjs.sh && dx build --platform web --package musicus-web
 python3 scripts/check-ui-literals.py                          # no literal UI text in the client
+scripts/run-e2e.sh smoke                                     # browser tests like CI (also german, pseudo, outage; see the script)
 python3 docs/agents/check.py                                 # agent-doc consistency
 uv run docs/requirements/tools/validate.py                   # requirements consistency
 ```

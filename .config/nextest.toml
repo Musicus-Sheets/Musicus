@@ -1,0 +1,31 @@
+# cargo-nextest settings (a-test-report). `cargo test` stays the everyday command; CI's workflow
+# `Tests` runs `cargo llvm-cov nextest --profile ci` for the test list and the coverage.
+[profile.ci]
+# Run every test even after a failure, so the report lists all of them.
+fail-fast = false
+# How often a failing test is run again. A test that passes on a retry is reported as flaky, and
+# the job `tests` (.github/workflows/tests.yml) fails on flaky tests too, so a retry only shows
+# whether a failure is unstable or real; it never turns a failure into a pass. 0 = no retry.
+# Per test: an override, e.g.
+#   [[profile.ci.overrides]]
+#   filter = "test(=layout::worker::tests::slow_case)"
+#   retries = 3
+# For one run: NEXTEST_RETRIES=2 (or --retries 2) overrides this value.
+retries = 1
+
+[profile.ci.junit]
+# target/nextest/ci/junit.xml
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+
+# The tests of the built-in web client (`--features embed-web --test embedded_web`), a second run
+# with its own JUnit file: target/nextest/ci-embed/junit.xml.
+[profile.ci-embed]
+fail-fast = false
+retries = 1
+
+[profile.ci-embed.junit]
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
