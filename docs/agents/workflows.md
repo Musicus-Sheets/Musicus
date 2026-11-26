@@ -19,6 +19,13 @@ cargo llvm-cov nextest --no-report --workspace --profile ci
 MUSICUS_WEB_DIST=crates/musicus-server/tests/fixtures/web cargo llvm-cov nextest --no-report -p musicus-server --features embed-web --test embedded_web --profile ci-embed
 cargo llvm-cov report --lcov --output-path target/lcov.info
 python3 scripts/test-report.py --junit target/nextest/ci/junit.xml --junit target/nextest/ci-embed/junit.xml --lcov target/lcov.info --requirements docs/requirements/requirements.json
+# The server's coverage during the browser tests, as in CI: an instrumented release server, profiles per process,
+# merged and exported with the LLVM tools of the toolchain (system Rust: /usr/bin/llvm-profdata, /usr/bin/llvm-cov):
+RUSTFLAGS="-C instrument-coverage" cargo build --release -p musicus-server --target-dir target/cov
+LLVM_PROFILE_FILE="$PWD/target/e2e-profraw/%p-%m.profraw" MUSICUS_SERVER=target/cov/release/musicus-server E2E_JUNIT=target/e2e/german.xml scripts/run-e2e.sh german
+llvm-profdata merge -sparse -o target/e2e.profdata target/e2e-profraw/*.profraw
+llvm-cov export -format=lcov -instr-profile=target/e2e.profdata -ignore-filename-regex='/(\.cargo|\.rustup|rustc)/' target/cov/release/musicus-server >target/e2e-lcov.info
+# then add --junit target/e2e/german.xml --lcov-e2e target/e2e-lcov.info to the test-report.py line above
 ./scripts/fetch-pdfjs.sh          # once (again after changes of the script); populates crates/musicus-web/public/vendor/pdfjs (gitignored)
 dx build --platform web --package musicus-web            # debug → target/dx/musicus-web/debug/web/public
 dx bundle --platform web --package musicus-web --release # release (needs wasm-opt)
