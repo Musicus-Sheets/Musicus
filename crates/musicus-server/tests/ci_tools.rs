@@ -32,3 +32,15 @@ fn e2e_tools_unit_tests() {
     };
     assert!(out.status.success(), "{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
 }
+
+/// `scripts/test_status_card.py`: the status images of the README (`scripts/status-card.py`) and the
+/// requirements per goal of the test report (a-test-status).
+#[test]
+fn status_card_unit_tests() {
+    let script = repo().join("scripts/test_status_card.py");
+    let Some(out) = ["python3", "python"].iter().find_map(|py| Command::new(py).arg(&script).output().ok()) else {
+        eprintln!("no Python: status card not tested");
+        return;
+    };
+    assert!(out.status.success(), "{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+}

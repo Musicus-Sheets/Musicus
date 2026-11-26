@@ -2,10 +2,11 @@ name: Tests
 # All tests and the test report (a-test-report, a-e2e-ci). In parallel:
 #   unit    the Rust tests, instrumented once (cargo llvm-cov + cargo-nextest): JUnit + lcov;
 #           doctests plainly (nextest skips them);
-#   build   release web client + release server for the browser tests;
+#   build   release web client + release server for the browser tests, the server instrumented for
+#           coverage (`-C instrument-coverage`: the browser tests measure the server too);
 #   e2e     one job per browser test (e2e/*.mjs, scripts/run-e2e.sh as locally): JUnit from its
-#           `ok -` lines (scripts/e2e-junit.py). smoke in Firefox runs too but does not block and
-#           is not in the report.
+#           `ok -` lines (scripts/e2e-junit.py) and the server's coverage profiles (.profraw).
+#           smoke in Firefox runs too but does not block and is not in the report.
 # Then `tests` takes every result and writes, with scripts/test-report.py:
 #   - the job summary (everything, including the list of every test),
 #   - one comment on the pull request, updated in place (hidden marker; not for forks),
@@ -122,12 +123,17 @@ jobs:
           dx bundle --platform web --package musicus-web --release
           test -f target/dx/musicus-web/release/web/public/index.html
       # Release build: password hashing in a debug build is slow enough to time out browser steps.
-      - name: Build the server
-        run: cargo build --locked --release -p musicus-server
+      # Instrumented for coverage (own target folder, so the plain build's cache stays usable): every
+      # server process of a browser test writes a profile when it stops; the job `tests` turns them
+      # into lcov with this same binary.
+      - name: Build the server (instrumented)
+        env:
+          RUSTFLAGS: -C instrument-coverage
+        run: cargo build --locked --release -p musicus-server --target-dir target/cov
       - name: Collect
         run: |
           mkdir -p e2e-build
-          cp target/release/musicus-server e2e-build/
+          cp target/cov/release/musicus-server e2e-build/
           cp -r target/dx/musicus-web/release/web/public e2e-build/web
       - uses: actions/upload-artifact@v4
         with:
@@ -196,6 +202,8 @@ jobs:
           MUSICUS_SERVER: e2e-build/musicus-server
           MUSICUS_WEB: e2e-build/web
           E2E_JUNIT: results/e2e-${{ matrix.test }}-junit.xml
+          # One profile per server process (outage starts several), written when it stops.
+          LLVM_PROFILE_FILE: ${{ github.workspace }}/results/profraw/e2e-${{ matrix.test }}-%p-%m.profraw
           TEST: ${{ matrix.test }}
         run: scripts/run-e2e.sh "$TEST" e2e-out
       - uses: actions/upload-artifact@v4
@@ -235,6 +243,38 @@ jobs:
         with:
           pattern: results-*
           path: results
+      # The server's coverage during the browser tests (the required ones, as in the report): the
+      # profiles merged and exported to lcov against the instrumented binary of `build`, with the
+      # LLVM tools of the same toolchain. Informational: without it the report shows unit coverage.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: llvm-tools-preview
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: e2e-build
+          path: e2e-build
+      - name: Browser test coverage
+        continue-on-error: true
+        run: |
+          bin="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin"
+          profiles=()
+          for t in $E2E_REQUIRED; do
+            for f in results/results-e2e-"$t"/profraw/*.profraw; do [[ ! -f "$f" ]] || profiles+=("$f"); done
+          done
+          if [[ ${#profiles[@]} -eq 0 || ! -f e2e-build/musicus-server ]]; then
+            echo "::notice::No coverage profiles of the browser tests: the report shows unit coverage only."
+            exit 0
+          fi
+          "$bin/llvm-profdata" merge -sparse -o "$RUNNER_TEMP/e2e.profdata" "${profiles[@]}"
+          # Without the dependencies and the standard library (46 MB instead of 0.3 MB). llvm-cov
+          # warns about "mismatched data" for some functions of the optimised build (generic code
+          # instantiated several times): those are skipped, so the value can only be a little low.
+          "$bin/llvm-cov" export -format=lcov -instr-profile="$RUNNER_TEMP/e2e.profdata" \
+            -ignore-filename-regex='/(\.cargo|\.rustup|rustc)/' e2e-build/musicus-server >results/e2e-lcov.info
+          echo "${#profiles[@]} profiles of the browser tests merged."
+
       - name: Report of main to compare with
         continue-on-error: true
         env:
@@ -263,12 +303,14 @@ jobs:
           done
           [[ ${#args[@]} -gt 0 ]] || { echo "::error::No test results at all (did every build fail?)"; exit 1; }
           [[ ! -f results/results-unit/lcov.info ]] || args+=(--lcov results/results-unit/lcov.info)
+          [[ ! -f results/e2e-lcov.info ]] || args+=(--lcov-e2e results/e2e-lcov.info)
           [[ ! -f "$RUNNER_TEMP/baseline/report.json" ]] || args+=(--baseline "$RUNNER_TEMP/baseline/report.json")
           mkdir -p report
           python3 scripts/test-report.py "${args[@]}" --requirements docs/requirements/requirements.json \
             --commit "$COMMIT" --json report/report.json --markdown report/report.md --full report/full.md
           cat report/full.md >>"$GITHUB_STEP_SUMMARY"
           cp -r results report/results
+          rm -rf report/results/*/profraw # raw profiles: large, the lcov is enough
 
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
@@ -307,3 +349,45 @@ jobs:
       - name: Failing, flaky or missing tests
         if: ${{ !cancelled() }}
         run: scripts/test-gate.sh results report/report.json
+
+  # Status images for the README (a-test-status), after every run on main, green or red: the card
+  # and the badges (scripts/status-card.py) replace the single commit of the orphan branch `status`
+  # (force push with the workflow's own token: pushes with it start no workflow). The history of the
+  # last runs is kept in history.json on that branch. Never on pull requests or in the merge queue.
+  status:
+    needs: tests
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: status-update
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        continue-on-error: true # no report when the tests could not run: the card says so
+        with:
+          name: test-report
+          path: report
+      - name: Draw the status images
+        env:
+          GATE: ${{ needs.tests.result }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/old"
+          if git fetch --quiet --depth 1 origin status 2>/dev/null; then
+            git show FETCH_HEAD:history.json >"$RUNNER_TEMP/old/history.json" 2>/dev/null || true
+          fi
+          python3 scripts/status-card.py --report report/report.json --gate "$GATE" --commit "$GITHUB_SHA" \
+            --history "$RUNNER_TEMP/old/history.json" --out "$RUNNER_TEMP/status"
+      - name: Replace the branch status
+        run: |
+          export GIT_INDEX_FILE="$RUNNER_TEMP/status.index"
+          export GIT_AUTHOR_NAME="github-actions[bot]" GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+          export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME" GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+          git --work-tree="$RUNNER_TEMP/status" add --all
+          tree="$(git write-tree)"
+          commit="$(git commit-tree "$tree" -m "Test status of ${GITHUB_SHA::7}")"
+          git push --force origin "$commit:refs/heads/status"
+          echo "Status images: https://github.com/$GITHUB_REPOSITORY/tree/status" >>"$GITHUB_STEP_SUMMARY"
